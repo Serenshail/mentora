@@ -435,7 +435,7 @@ export default function CouncilPage() {
                   <button
                     key={p.id}
                     onClick={() => startWith(p.id)}
-                    className="group rounded-2xl border border-border bg-surface/70 p-4 text-left transition hover:border-accent/50 hover:bg-surface-2 cursor-pointer"
+                    className="group card-lift rounded-2xl border border-border bg-surface/70 p-4 text-left transition hover:border-accent/50 hover:bg-surface-2 cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5">
                       <div

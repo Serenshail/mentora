@@ -67,7 +67,7 @@ export default function Dashboard() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {/* 当前学习 */}
-          <Card className="md:col-span-2">
+          <Card className="card-lift md:col-span-2">
             <div className="flex items-center justify-between">
               <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
                 <GraduationCap className="size-4" /> 学习进行时
@@ -110,13 +110,13 @@ export default function Dashboard() {
 
           {/* 复习 */}
           <Card
-            className={cn("cursor-pointer transition hover:border-accent/50", due.length > 0 && "border-accent/40")}
+            className={cn("card-lift cursor-pointer transition hover:border-accent/50", due.length > 0 && "border-accent/40")}
             onClick={() => router.push("/brain")}
           >
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
               <Zap className="size-4" /> 第二大脑
             </p>
-            <p className="mt-3 text-3xl font-extrabold text-white">
+            <p className="tabular mt-3 text-3xl font-extrabold text-white">
               {knowledge.length} <span className="text-sm font-normal text-ink-dim">条知识</span>
             </p>
             {due.length > 0 ? (
@@ -129,7 +129,7 @@ export default function Dashboard() {
           </Card>
 
           {/* 读书 */}
-          <Card className="cursor-pointer transition hover:border-accent/50" onClick={() => router.push(readingBook ? `/read/${readingBook.id}` : "/read")}>
+          <Card className="card-lift cursor-pointer transition hover:border-accent/50" onClick={() => router.push(readingBook ? `/read/${readingBook.id}` : "/read")}>
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
               <BookOpen className="size-4" /> 读书伙伴
             </p>

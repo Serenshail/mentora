@@ -110,7 +110,7 @@ export default function ReadPage() {
             return (
               <Card
                 key={b.id}
-                className="group cursor-pointer transition hover:border-accent/50 hover:bg-surface-2/70"
+                className="group card-lift cursor-pointer transition hover:border-accent/50 hover:bg-surface-2/70"
                 onClick={() => router.push(`/read/${b.id}`)}
               >
                 <div className="flex items-start justify-between">

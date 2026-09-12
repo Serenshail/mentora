@@ -87,7 +87,7 @@ export default function LearnPage() {
               <Card
                 key={g.id}
                 className={cn(
-                  "group relative cursor-pointer transition-all hover:border-accent/50 hover:bg-surface-2/70"
+                  "group card-lift relative cursor-pointer transition-all hover:border-accent/50 hover:bg-surface-2/70"
                 )}
                 onClick={() =>
                   router.push(g.status === "draft" ? `/learn/new?goal=${g.id}` : `/learn/${g.id}`)

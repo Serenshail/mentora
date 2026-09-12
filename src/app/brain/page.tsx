@@ -377,7 +377,7 @@ function NoteCard({
     .filter(Boolean)
     .slice(0, 3);
   return (
-    <Card className="group cursor-pointer transition hover:border-accent/50 hover:bg-surface-2/70" onClick={onOpen}>
+    <Card className="group card-lift cursor-pointer transition hover:border-accent/50 hover:bg-surface-2/70" onClick={onOpen}>
       <div className="flex items-start justify-between gap-2">
         <p className="font-semibold text-white">{note.title}</p>
         <button
@@ -716,7 +716,7 @@ function StatCard({
         {icon}
         <p className="text-xs">{label}</p>
       </div>
-      <p className="mt-2 text-2xl font-extrabold text-white">
+      <p className="tabular mt-2 text-2xl font-extrabold text-white">
         {value} <span className="text-sm font-normal text-ink-dim">{unit}</span>
       </p>
     </Card>

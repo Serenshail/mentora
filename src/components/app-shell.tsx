@@ -40,30 +40,56 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Sparkles className="size-5 text-white" />
           </div>
           <div>
-            <p className="text-base font-extrabold tracking-tight text-white">Mentora</p>
-            <p className="text-[10px] text-ink-dim">学习 · 认知 · 伙伴</p>
+            <p className="text-[15px] font-extrabold tracking-[-0.02em] text-white">Mentora</p>
+            <p className="text-[10px] text-ink-dim/70">学习 · 认知 · 伙伴</p>
           </div>
         </div>
 
-        <nav className="flex-1 space-y-1 px-3">
-          {NAV.map(({ href, label, icon: Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13.5px] font-medium tracking-[-0.01em] transition-all duration-150",
-                isActive(href)
-                  ? "bg-gradient-to-r from-accent/20 to-accent/5 text-white border border-accent/25 shadow-[0_0_20px_-8px_rgba(124,108,255,0.6)]"
-                  : "text-ink-dim hover:bg-white/[0.04] hover:text-ink border border-transparent"
-              )}
-            >
-              <Icon className="size-[18px]" />
-              {label}
-            </Link>
-          ))}
-        </nav>
+        <div>
+          <nav className="space-y-1 px-3">
+            <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/50">
+              工作台
+            </p>
+            {NAV.slice(0, 5).map(({ href, label, icon: Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className={cn(
+                  "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13.5px] font-medium tracking-[-0.01em] transition-all duration-150",
+                  isActive(href)
+                    ? "bg-gradient-to-r from-accent/20 to-accent/5 text-white border border-accent/25 shadow-[0_0_20px_-8px_rgba(124,108,255,0.6)]"
+                    : "text-ink-dim hover:bg-white/[0.04] hover:text-ink border border-transparent"
+                )}
+              >
+                <Icon className="size-[18px]" strokeWidth={1.75} />
+                {label}
+              </Link>
+            ))}
+          </nav>
+          <nav className="mt-5 space-y-1 px-3 pt-4 border-t border-white/[0.05]">
+            <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/50">
+              系统
+            </p>
+            {NAV.slice(5).map(({ href, label, icon: Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className={cn(
+                  "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13.5px] font-medium tracking-[-0.01em] transition-all duration-150",
+                  isActive(href)
+                    ? "bg-gradient-to-r from-accent/20 to-accent/5 text-white border border-accent/25"
+                    : "text-ink-dim hover:bg-white/[0.04] hover:text-ink border border-transparent"
+                )}
+              >
+                <Icon className="size-[18px]" strokeWidth={1.75} />
+                {label}
+              </Link>
+            ))}
+          </nav>
+        </div>
 
-        <div className="px-5 py-4">
+        <div className="px-5 pb-4 pt-2">
+          <p className="text-[10px] text-ink-dim/40">Mentora v3.2 · 数据仅存本机</p>
           {provider === "demo" && (
             <Link
               href="/settings"
@@ -88,7 +114,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-7 md:px-10 md:py-10">
-          {children}
+          <div key={pathname} className="page-fade">
+            {children}
+          </div>
         </main>
 
         {/* 移动端底部导航 */}
