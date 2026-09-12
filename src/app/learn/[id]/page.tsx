@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Badge, Button, Card, Input, Modal, PageHeader, ProgressRing, StatusDot, Textarea,
 } from "@/components/ui";
@@ -12,11 +12,120 @@ import { DOMAIN_LABELS } from "@/lib/types";
 import type { DayPlan, Goal, QuizItemResult } from "@/lib/types";
 import { DAILY_LESSON, QUIZ_GRADE } from "@/lib/ai/prompts";
 import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   ArrowLeft, BookMarked, Check, ChevronRight, CircleX, ExternalLink, Sparkles, Swords,
 } from "lucide-react";
+
+/* ================= 即时答疑：学习中随时问教练 ================= */
+function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
+  const updateGoal = useAppStore((s) => s.updateGoal);
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [streamText, setStreamText] = useState("");
+  const qa = day.qa ?? [];
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput("");
+    setBusy(true);
+    setStreamText("");
+    const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
+    const newQa = [...qa, userMsg];
+    updateGoal(goal.id, {
+      plan: (() => {
+        const plan = structuredClone(goal.plan!);
+        plan.days[day.id].qa = newQa;
+        return plan;
+      })(),
+    });
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const { ASK_COACH } = await import("@/lib/ai/prompts");
+      const ctx = JSON.stringify({
+        topic: goal.topic,
+        today: day.title,
+        knowledgePoints: day.knowledgePoints.map((k) => k.text),
+        learnerProfile: goal.learnerProfile ?? [],
+      });
+      const full = await streamChat({
+        task: "coach-qa",
+        system: ASK_COACH(ctx),
+        messages: newQa.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+        onDelta: (d) => setStreamText((p) => p + d),
+      });
+      const finalQa = [...newQa, { id: uid("m"), role: "assistant" as const, content: full || streamText, at: new Date().toISOString() }];
+      updateGoal(goal.id, {
+        plan: (() => {
+          const plan = structuredClone(goal.plan!);
+          plan.days[day.id].qa = finalQa;
+          return plan;
+        })(),
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "答疑失败");
+    } finally {
+      setStreamText("");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <button className="flex w-full items-center justify-between cursor-pointer" onClick={() => setOpen(!open)}>
+        <p className="text-sm font-bold text-white">🙋 有疑问？随时问教练</p>
+        <span className="text-xs text-ink-dim">{open ? "收起 ▲" : "展开 ▼"}</span>
+      </button>
+      {open && (
+        <div className="mt-3">
+          <div ref={boxRef} className="max-h-64 space-y-2.5 overflow-y-auto">
+            {qa.length === 0 && !streamText && (
+              <p className="text-xs text-ink-dim/70">
+                看不懂某个知识点？代码报错不知道为什么？直接问，教练即时解答。
+              </p>
+            )}
+            {qa.map((m) => (
+              <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
+                {m.role === "user" ? (
+                  <div className="max-w-[85%] rounded-xl rounded-br-sm bg-accent/15 border border-accent/25 px-3 py-2 text-xs">
+                    {m.content}
+                  </div>
+                ) : (
+                  <div className="max-w-[92%] rounded-xl rounded-bl-sm bg-surface-2/70 border border-white/[0.06] px-3 py-2">
+                    <Markdown text={m.content} className="text-xs" />
+                  </div>
+                )}
+              </div>
+            ))}
+            {streamText && (
+              <div className="max-w-[92%] rounded-xl rounded-bl-sm bg-surface-2/70 border border-white/[0.06] px-3 py-2">
+                <Markdown text={streamText} className="text-xs" />
+                <span className="stream-cursor" />
+              </div>
+            )}
+          </div>
+          <div className="mt-3 flex gap-2">
+            <input
+              className="h-9 w-full rounded-xl border border-white/[0.08] bg-black/25 px-3 text-sm outline-none focus:border-accent/60"
+              placeholder="输入你的疑问…（Enter 发送）"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && send()}
+              disabled={busy}
+            />
+            <Button size="sm" onClick={send} loading={busy} className="shrink-0">
+              问
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 /* ================= 随手记：学习中直接入第二大脑 ================= */
 function QuickNotes({ goal, day }: { goal: Goal; day: DayPlan }) {
@@ -164,6 +273,7 @@ function RegeneratePlan({ goal }: { goal: Goal }) {
         motivation: goal.motivation,
         background: goal.background,
         weeklyHours: goal.weeklyHours,
+        learnerProfile: goal.learnerProfile ?? [],
         successCriteria: goal.successCriteria,
         assumptions: goal.assumptions ?? [],
       };
@@ -308,6 +418,7 @@ function DayPanel({
             direction: goal.direction,
             background: goal.background,
             domainKind: goal.domainKind,
+            learnerProfile: goal.learnerProfile ?? [],
           },
           today: {
             title: day.title,
@@ -540,6 +651,9 @@ function DayPanel({
 
           {/* 随手记：学习过程中直接记进第二大脑 */}
           <QuickNotes goal={goal} day={day} />
+
+          {/* 即时答疑：学习中随时问教练 */}
+          <AskCoach goal={goal} day={day} />
         </>
       )}
 

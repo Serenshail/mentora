@@ -129,6 +129,7 @@ function IntakeInner() {
       motivation: finalCard.motivation,
       background: finalCard.background,
       weeklyHours: finalCard.weeklyHours,
+      learnerProfile: finalCard.learnerProfile || [],
       assumptions: finalCard.assumptions || [],
       successCriteria: finalCard.successCriteria,
       status: "active",
@@ -232,6 +233,20 @@ function IntakeInner() {
               />
             </label>
 
+            <label className="text-xs text-ink-dim sm:col-span-2">
+              学习者画像（教练对你的了解，可修改）
+              <Textarea
+                className="mt-1"
+                rows={3}
+                value={(card.learnerProfile ?? []).join("\n")}
+                onChange={(e) =>
+                  setCard({
+                    ...card,
+                    learnerProfile: e.target.value.split("\n").filter(Boolean),
+                  })
+                }
+              />
+            </label>
             {(card.assumptions?.length ?? 0) > 0 && (
               <div className="rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs text-warn/90 sm:col-span-2">
                 <p className="mb-1 font-semibold">教练替你做的假设（不同意就在对话里纠正）：</p>

@@ -11,7 +11,7 @@ export type ChatTask =
   | "intake" | "plan" | "lesson" | "quiz-grade"
   | "review-ask" | "review-grade"
   | "reading-plan" | "reading-chat" | "council"
-  | "autolink" | "persona-distill";
+  | "autolink" | "persona-distill" | "coach-qa";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：
@@ -125,6 +125,7 @@ export const goalCardSchema = z.object({
   background: z.string(),
   deadline: z.string().optional().nullable(), // 已废弃日期承诺，仅兼容旧数据
   weeklyHours: z.number().min(1).max(80),
+  learnerProfile: z.array(z.string()).optional().nullable(),
   successCriteria: z.array(z.string()).min(1),
   assumptions: z.array(z.string()).optional().nullable(),
 });

@@ -58,6 +58,7 @@ export interface DayPlan {
   completedAt?: string;
   attempts: number; // 验收尝试次数
   lesson?: string; // 已生成的每日学习文档（缓存）
+  qa?: ChatMsg[]; // 本日答疑对话（学习中随问随答）
 }
 
 export interface Phase {
@@ -112,6 +113,7 @@ export interface Goal {
   weeklyHours: number;
   successCriteria: string[];
   assumptions?: string[]; // 教练替用户做的假设（无截止日期承诺）
+  learnerProfile?: string[]; // 学习者画像：时段/风格/约束/性格/材料偏好
   status: "draft" | "active" | "paused" | "done"; // draft=引导中，可中断可回档
   createdAt: string;
   plan?: Plan;

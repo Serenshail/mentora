@@ -88,6 +88,8 @@ function demoTask(
       return (async function* () {
         yield* (await import("@/lib/ai/demo")).demoPersona();
       })();
+    case "coach-qa":
+      return demoCouncil(messages);
     default: return demoCouncil(messages);
   }
 }
