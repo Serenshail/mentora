@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Input, PageHeader } from "@/components/ui";
+import { Badge, Button, Card, Input, Modal, PageHeader } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
-import { PERSONAS, ROUNDTABLE_SYSTEM, personaById } from "@/lib/ai/prompts";
+import { PERSONAS, ROUNDTABLE_SYSTEM, personaById, COUNCIL_BASE, PERSONA_DISTILL } from "@/lib/ai/prompts";
+import { extractJson, personaDistillSchema, type ChatTask } from "@/lib/ai/client";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { Compass, Plus, Trash2, Users, Zap } from "lucide-react";
+import { Compass, Plus, Sparkles, Trash2, UserPlus, Users, Zap } from "lucide-react";
 
 export default function CouncilPage() {
   const hydrated = useHydrated();
@@ -16,6 +17,19 @@ export default function CouncilPage() {
   const addSession = useAppStore((s) => s.addSession);
   const addSessionMsg = useAppStore((s) => s.addSessionMsg);
   const removeSession = useAppStore((s) => s.removeSession);
+  const customPersonas = useAppStore((s) => s.customPersonas);
+  const addCustomPersona = useAppStore((s) => s.addCustomPersona);
+  const removeCustomPersona = useAppStore((s) => s.removeCustomPersona);
+
+  // 统一解析：内置 / 自定义 / 圆桌
+  const resolvePersona = (personaId: string) => {
+    if (personaId === "roundtable") return null;
+    const builtin = personaById(personaId);
+    if (builtin) return builtin;
+    const c = useAppStore.getState().customPersonas.find((x) => x.id === personaId);
+    if (c) return { id: c.id, name: c.name, tag: c.tag, bio: c.bio, color: c.color, system: c.system };
+    return undefined;
+  };
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -24,7 +38,7 @@ export default function CouncilPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const active = sessions.find((s) => s.id === activeId) ?? null;
-  const persona = active ? personaById(active.personaId) : undefined;
+  const persona = active ? resolvePersona(active.personaId) : undefined;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -37,7 +51,7 @@ export default function CouncilPage() {
 
   const startWith = async (personaId: string) => {
     setPicking(false);
-    const p = personaById(personaId);
+    const p = resolvePersona(personaId);
     const sessionId = uid("sess");
     addSession({
       id: sessionId,
@@ -96,6 +110,67 @@ export default function CouncilPage() {
     setPicking(true);
   };
 
+  /* ---- 自定义智能体：输入名字 → AI 蒸馏 → 确认身份 ---- */
+  const [forgeOpen, setForgeOpen] = useState(false);
+  const [forgeName, setForgeName] = useState("");
+  const [forgeHint, setForgeHint] = useState("");
+  const [forging, setForging] = useState(false);
+  const [forged, setForged] = useState<null | {
+    identityNote: string; name: string; tag: string; bio: string; color: string; system: string;
+  }>(null);
+
+  const forge = async () => {
+    if (!forgeName.trim()) {
+      toast.error("先告诉我要蒸馏谁");
+      return;
+    }
+    setForging(true);
+    setForged(null);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const full = await streamChat({
+        task: "persona-distill",
+        system: PERSONA_DISTILL(forgeName.trim(), forgeHint.trim()),
+        messages: [{ role: "user", content: `蒸馏：${forgeName.trim()}` }],
+        temperature: 0.5,
+        onDelta: () => {},
+      });
+      const p = personaDistillSchema.parse(extractJson(full));
+      setForged({
+        identityNote: p.identityNote,
+        name: p.name,
+        tag: p.tag,
+        bio: p.bio,
+        color: p.color || "violet",
+        system: p.system,
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "蒸馏失败，请重试");
+    } finally {
+      setForging(false);
+    }
+  };
+
+  const saveForged = () => {
+    if (!forged) return;
+    const id = `custom:${uid("p")}`;
+    addCustomPersona({
+      id,
+      name: forged.name,
+      tag: forged.tag,
+      bio: forged.bio,
+      color: forged.color,
+      identityNote: forged.identityNote,
+      system: COUNCIL_BASE + forged.system,
+      createdAt: new Date().toISOString(),
+    });
+    toast.success(`「${forged.name}」已加入你的圆桌`);
+    setForgeOpen(false);
+    setForgeName("");
+    setForgeHint("");
+    setForged(null);
+  };
+
   if (!hydrated) return <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />;
 
   return (
@@ -122,7 +197,7 @@ export default function CouncilPage() {
           ) : (
             <div className="space-y-1">
               {sessions.map((s) => {
-                const p = personaById(s.personaId);
+                const p = resolvePersona(s.personaId);
                 return (
                   <div
                     key={s.id}
@@ -179,6 +254,47 @@ export default function CouncilPage() {
                     </div>
                   </div>
                 </button>
+                {/* 自定义智能体 */}
+                {customPersonas.map((c) => (
+                  <div key={c.id} className="group relative">
+                    <button
+                      onClick={() => startWith(c.id)}
+                      className="w-full rounded-2xl border border-[#8b83d6]/40 bg-[#8b83d6]/5 p-4 text-left transition hover:border-[#8b83d6]/70 hover:bg-surface-2 cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className={cn("flex size-9 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-black text-white", c.color)}>
+                          {c.name.slice(0, 1)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-bold text-white">{c.name}</p>
+                          <p className="text-[11px] text-ink-dim">{c.tag} · 自建</p>
+                        </div>
+                      </div>
+                      <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-ink-dim">{c.bio}</p>
+                    </button>
+                    <button
+                      onClick={() => {
+                        removeCustomPersona(c.id);
+                        toast.success(`已移除 ${c.name}`);
+                      }}
+                      className="absolute right-2 top-2 rounded-lg p-1.5 text-ink-dim/60 hover:bg-bad/10 hover:text-bad cursor-pointer"
+                      title="删除该智能体"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+
+                {/* 添加智能体 */}
+                <button
+                  onClick={() => setForgeOpen(true)}
+                  className="flex min-h-[120px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-accent/50 bg-accent/5 p-4 text-ink-dim transition hover:border-accent/80 hover:text-[#b7adff] cursor-pointer"
+                >
+                  <UserPlus className="size-6" />
+                  <span className="text-sm font-semibold">添加智能体</span>
+                  <span className="text-[11px]">说一个名字，AI 蒸馏 TA 的思想</span>
+                </button>
+
                 {PERSONAS.map((p) => (
                   <button
                     key={p.id}
@@ -295,6 +411,53 @@ export default function CouncilPage() {
           )}
         </div>
       </div>
+
+      {/* 自定义智能体锻造 */}
+      <Modal open={forgeOpen} onClose={() => { setForgeOpen(false); setForged(null); }} title="添加智能体" wide>
+        {!forged ? (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-dim">
+              输入一个真实人物的名字（如「王阳明」「贝佐斯」「Jony Ive」），AI 会先确认这是谁，再蒸馏 TA 的思维模型、招牌提问与说话风格，锻造成一个可对话的智能体。
+            </p>
+            <Input
+              placeholder="名字，如：王阳明"
+              value={forgeName}
+              onChange={(e) => setForgeName(e.target.value)}
+            />
+            <Input
+              placeholder="补充线索（可选）：领域/时代/代表作，帮助 AI 认对 person"
+              value={forgeHint}
+              onChange={(e) => setForgeHint(e.target.value)}
+            />
+            <div className="flex justify-end">
+              <Button onClick={forge} loading={forging}>
+                <Sparkles className="size-4" /> 开始蒸馏
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <Card className="border-accent/40 bg-accent/5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#b7adff]">身份确认</p>
+              <p className="mt-1.5 text-sm text-ink">{forged.identityNote}</p>
+              <p className="mt-2 text-xs text-ink-dim">不是你想的那个人？改个更具体的名字或补充线索再试。</p>
+            </Card>
+            <div className="flex items-center gap-3">
+              <div className={cn("flex size-11 items-center justify-center rounded-xl bg-gradient-to-br text-base font-black text-white", forged.color)}>
+                {forged.name.slice(0, 1)}
+              </div>
+              <div>
+                <p className="font-bold text-white">{forged.name}</p>
+                <p className="text-xs text-ink-dim">{forged.tag} · {forged.bio}</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setForged(null)}>重来</Button>
+              <Button onClick={saveForged}>就是 TA，加入圆桌</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

@@ -16,27 +16,74 @@ import { ArrowRight, Compass, Target } from "lucide-react";
 function IntakeInner() {
   const params = useSearchParams();
   const router = useRouter();
-  const topic = params.get("topic") || "Python";
+  const topicParam = params.get("topic");
+  const resumeId = params.get("goal");
   const userName = useAppStore((s) => s.settings.userName);
 
-  const { messages, pending, streaming, error, send } = useChat();
+  const { messages, setMessages, pending, streaming, error, send } = useChat();
   const [input, setInput] = useState("");
   const [card, setCard] = useState<GoalCard | null>(null);
   const [stage, setStage] = useState<"chat" | "confirm" | "planning">("chat");
   const [planStream, setPlanStream] = useState("");
+  const [topic, setTopic] = useState(topicParam || "");
   const kicked = useRef(false);
 
-  // 开场：自动发出第一条
+  // 挂载：恢复草稿 或 新建草稿后开场
   useEffect(() => {
     if (kicked.current) return;
     kicked.current = true;
+    const store = useAppStore.getState();
+
+    if (resumeId) {
+      const draft = store.goals.find((g) => g.id === resumeId && g.status === "draft");
+      if (draft) {
+        setTopic(draft.topic);
+        setMessages(
+          draft.intakeTranscript.map((t) => ({
+            id: uid("m"),
+            role: t.role,
+            content: t.content,
+            at: new Date().toISOString(),
+          }))
+        );
+        return;
+      }
+    }
+
+    const t = topicParam || "Python";
+    const goalId = uid("goal");
+    store.addGoal({
+      id: goalId,
+      topic: t,
+      direction: "",
+      domainKind: "other",
+      motivation: "",
+      background: "",
+      weeklyHours: 8,
+      successCriteria: [],
+      status: "draft",
+      createdAt: new Date().toISOString(),
+      quizLog: [],
+      intakeTranscript: [],
+    });
+    history.replaceState(null, "", `/learn/new?goal=${goalId}`);
     void send({
-      system: SOCRATIC_INTAKE(topic, userName),
-      userText: `我想学${topic}`,
+      system: SOCRATIC_INTAKE(t, userName),
+      userText: `我想学${t}`,
       task: "intake",
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 每轮对话后持久化到草稿
+  useEffect(() => {
+    const goalId =
+      resumeId || new URLSearchParams(window.location.search).get("goal");
+    if (!goalId || messages.length === 0) return;
+    useAppStore.getState().updateGoal(goalId, {
+      intakeTranscript: messages.map((m) => ({ role: m.role, content: m.content })),
+    });
+  }, [messages, resumeId]);
 
   const handleDone = (full: string) => {
     if (stage !== "chat") return;
@@ -51,7 +98,6 @@ function IntakeInner() {
     }
   };
 
-  // 发送用户消息
   const doSend = () => {
     const text = input.trim();
     if (!text || streaming) return;
@@ -59,21 +105,24 @@ function IntakeInner() {
     void send({
       system: SOCRATIC_INTAKE(topic, userName),
       userText: text,
-      onDone: handleDone,
       task: "intake",
+      onDone: handleDone,
     });
   };
 
   // 确认目标卡 → 生成计划
   const confirmCard = async () => {
     if (!card) return;
-    const goalId = uid("goal");
+    const goalId =
+      resumeId || new URLSearchParams(window.location.search).get("goal") || "";
+    if (!goalId) {
+      toast.error("草稿丢失，请回列表重新开始引导");
+      return;
+    }
     setStage("planning");
-
     const finalCard = card;
-    // 先把目标写进 store（含引导对话）
-    useAppStore.getState().addGoal({
-      id: goalId,
+
+    useAppStore.getState().updateGoal(goalId, {
       topic: finalCard.topic,
       direction: finalCard.direction,
       domainKind: finalCard.domainKind,
@@ -83,9 +132,6 @@ function IntakeInner() {
       weeklyHours: finalCard.weeklyHours,
       successCriteria: finalCard.successCriteria,
       status: "active",
-      createdAt: new Date().toISOString(),
-      quizLog: [],
-      intakeTranscript: messages.map((m) => ({ role: m.role, content: m.content })),
     });
 
     await send({
@@ -102,8 +148,9 @@ function IntakeInner() {
           router.replace(`/learn/${goalId}`);
         } catch (e) {
           console.error(e);
-          toast.error("计划 JSON 解析失败，请回退重试或换个说法描述目标。");
-          useAppStore.getState().removeGoal(goalId);
+          toast.error(
+            "计划 JSON 解析失败——目标已保存为进行中，可从学习列表进入该目标重试。"
+          );
           setStage("confirm");
         }
       },
@@ -119,10 +166,13 @@ function IntakeInner() {
         <div>
           <h1 className="text-lg font-bold text-white">方向引导：学{topic}</h1>
           <p className="text-xs text-ink-dim">
-            苏格拉底式追问，直到你的方向明确为止 —— 然后才生成计划
+            苏格拉底式追问 —— 对话自动保存，随时离开，回来接着聊
           </p>
         </div>
         {stage === "planning" && <Badge tone="accent">计划生成中…</Badge>}
+        {resumeId && stage === "chat" && messages.length > 0 && (
+          <Badge tone="ok">已恢复上次对话</Badge>
+        )}
       </div>
 
       {/* 对话区 */}

@@ -22,34 +22,41 @@ function resolveConfig(req: NextRequest): AIConfig {
   let baseUrl = header("x-mentora-baseurl");
   let model = header("x-mentora-model");
 
-  // 服务端环境变量兜底（部署者可配全局 Key）
+  const envKeys: Record<string, string> = {
+    zai: process.env.ZAI_API_KEY || "",
+    deepseek: process.env.DEEPSEEK_API_KEY || "",
+    moonshot: process.env.MOONSHOT_API_KEY || "",
+    openai: process.env.OPENAI_API_KEY || "",
+  };
+
+  // 用户选了具体 provider 但没填 Key → 服务端同名 Key 兜底
+  if (provider && !["demo", "custom"].includes(provider) && !apiKey && envKeys[provider]) {
+    apiKey = envKeys[provider];
+  }
+  if (provider === "custom" && !apiKey) {
+    apiKey = process.env.CUSTOM_API_KEY || "";
+  }
+
+  // 未选择（或选"自动"）→ 跟随服务端配置；服务端无任何 Key → 演示模式
   if (!provider || provider === "demo") {
-    const env: Record<string, string> = {
-      zai: process.env.ZAI_API_KEY || "",
-      deepseek: process.env.DEEPSEEK_API_KEY || "",
-      moonshot: process.env.MOONSHOT_API_KEY || "",
-      openai: process.env.OPENAI_API_KEY || "",
-    };
     const envProvider = process.env.AI_PROVIDER || "";
-    if (envProvider && env[envProvider]) {
+    if (envProvider === "custom" && process.env.AI_BASE_URL) {
+      provider = "custom";
+      baseUrl = baseUrl || process.env.AI_BASE_URL;
+      apiKey = process.env.CUSTOM_API_KEY || "";
+    } else if (envProvider && envKeys[envProvider]) {
       provider = envProvider;
-      apiKey = env[envProvider];
+      apiKey = envKeys[envProvider];
     } else {
-      for (const [p, k] of Object.entries(env)) {
+      for (const [p, k] of Object.entries(envKeys)) {
         if (k) { provider = p; apiKey = k; break; }
       }
     }
-    if (envProvider === "custom" && process.env.AI_BASE_URL) {
-      provider = "custom";
-      baseUrl = process.env.AI_BASE_URL;
-      apiKey = apiKey || process.env.CUSTOM_API_KEY || "";
-    }
     if (!model) model = process.env.AI_MODEL || "";
-    if (provider === "custom" && !baseUrl) baseUrl = process.env.AI_BASE_URL || "";
   }
+  if (provider === "custom" && !baseUrl) baseUrl = process.env.AI_BASE_URL || "";
 
   const info = PROVIDERS[(provider as keyof typeof PROVIDERS) in PROVIDERS ? (provider as keyof typeof PROVIDERS) : "demo"];
-  if (info.id === "custom" && !baseUrl) baseUrl = baseUrl || "";
   return {
     provider: info.id,
     baseUrl: baseUrl || info.baseUrl,
@@ -73,6 +80,14 @@ function demoTask(
     case "review-grade": return demoReviewGrade();
     case "reading-plan": return demoReadingPlan(s);
     case "reading-chat": return demoReadingChat(messages);
+    case "autolink":
+      return (async function* () {
+        yield* (await import("@/lib/ai/demo")).demoAutolink();
+      })();
+    case "persona-distill":
+      return (async function* () {
+        yield* (await import("@/lib/ai/demo")).demoPersona();
+      })();
     default: return demoCouncil(messages);
   }
 }

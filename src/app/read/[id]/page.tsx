@@ -101,13 +101,15 @@ export default function BookPage() {
         onDelta: () => {},
       });
       const parsed = insightsSchema.parse(extractJson(full));
-      parsed.insights.forEach((i) => addInsight(book.id, i.text));
+      parsed.insights.forEach((i) =>
+        addInsight(book.id, i.knowledgePoint ? `${i.title} —— ${i.knowledgePoint}` : i.title)
+      );
       addKnowledge(
-        parsed.insights.map((i) => ({ text: i.knowledgePoint, domain: book.title })),
+        parsed.insights.map((i) => ({ title: i.title, body: i.body || "", domain: book.title })),
         "read",
         `《${book.title}》`
       );
-      toast.success(`提炼出 ${parsed.insights.length} 条洞见，知识点已入第二大脑。`);
+      toast.success(`提炼出 ${parsed.insights.length} 条笔记，已入第二大脑。`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "提炼失败");
     } finally {

@@ -155,9 +155,9 @@ export default function SettingsPage() {
           </a>
         )}
         {settings.provider === "demo" && (
-          <p className="mt-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs text-warn/90">
-            演示模式：所有 AI 回复都是内置脚本（学习计划、验收、圆桌等全部流程可体验），无需任何 Key。
-            要接入真实模型，选上面任意服务商并填入 Key。
+          <p className="mt-3 rounded-xl border border-ok/30 bg-ok/10 p-3 text-xs text-ok/90">
+            「自动」模式：优先使用部署者在服务端配置的模型（当前已配置 DeepSeek）；服务端未配置 Key 时回退为演示模式。
+            想用自己的 Key？选上面任意服务商并填入，费用归你。
           </p>
         )}
       </Card>

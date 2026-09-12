@@ -7,6 +7,7 @@ import type {
   Book,
   ChatMsg,
   CouncilSession,
+  CustomPersona,
   Goal,
   KnowledgeItem,
   KnowledgeSource,
@@ -17,7 +18,7 @@ import type {
 import { nextReviewDate, todayISO, uid } from "./utils";
 
 export const DEFAULT_SETTINGS: Settings = {
-  provider: "demo",
+  provider: "demo", // "自动"：跟随服务端配置，无配置时回退演示模式
   apiKey: "",
   model: "",
   baseUrl: "",
@@ -29,6 +30,7 @@ interface AppState {
   knowledge: KnowledgeItem[];
   books: Book[];
   sessions: CouncilSession[];
+  customPersonas: CustomPersona[];
   settings: Settings;
 
   addGoal: (g: Goal) => void;
@@ -43,9 +45,16 @@ interface AppState {
   incrementAttempts: (goalId: string, dayId: string) => void;
   logQuiz: (goalId: string, result: QuizResult) => void;
 
-  addKnowledge: (items: { text: string; domain: string }[], source: KnowledgeSource, sourceTitle: string) => void;
-  recordReview: (id: string, ok: boolean) => void;
+  addKnowledge: (
+    items: { title: string; body?: string; domain: string }[],
+    source: KnowledgeSource,
+    sourceTitle: string
+  ) => void;
+  updateKnowledge: (id: string, patch: Partial<KnowledgeItem>) => void;
   removeKnowledge: (id: string) => void;
+  recordReview: (id: string, ok: boolean) => void;
+  linkNotes: (fromId: string, toId: string) => void;
+  unlinkNotes: (fromId: string, toId: string) => void;
 
   addBook: (b: Book) => void;
   updateBook: (id: string, patch: Partial<Book>) => void;
@@ -59,14 +68,11 @@ interface AppState {
   removeSession: (id: string) => void;
   addSessionMsg: (id: string, msg: ChatMsg) => void;
 
+  addCustomPersona: (p: CustomPersona) => void;
+  removeCustomPersona: (id: string) => void;
+
   setSettings: (patch: Partial<Settings>) => void;
-  importData: (data: {
-    goals?: Goal[];
-    knowledge?: KnowledgeItem[];
-    books?: Book[];
-    sessions?: CouncilSession[];
-    settings?: Settings;
-  }) => void;
+  importData: (data: Partial<AppState>) => void;
   resetAll: () => void;
 }
 
@@ -83,7 +89,6 @@ function unlockNext(goal: Goal, dayId: string) {
     const next = goal.plan.days[phase.dayIds[idx + 1]];
     if (next && next.status === "locked") next.status = "active";
   } else {
-    // 阶段最后一天：阶段完成，解锁下一阶段首天
     phase.status = "passed";
     const pIdx = goal.plan.phases.findIndex((p) => p.id === phase.id);
     const nextPhase = goal.plan.phases[pIdx + 1];
@@ -97,6 +102,16 @@ function unlockNext(goal: Goal, dayId: string) {
   }
 }
 
+/** 旧版知识条目（v1：{text}）→ v2 双链笔记 */
+function migrateKnowledge(items: unknown[]): KnowledgeItem[] {
+  return (items as Record<string, unknown>[]).map((k) => ({
+    ...k,
+    title: (k.title as string) ?? (k.text as string) ?? "未命名笔记",
+    body: (k.body as string) ?? "",
+    links: (k.links as string[]) ?? [],
+  })) as KnowledgeItem[];
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -104,6 +119,7 @@ export const useAppStore = create<AppState>()(
       knowledge: [],
       books: [],
       sessions: [],
+      customPersonas: [],
       settings: DEFAULT_SETTINGS,
 
       addGoal: (g) => set((s) => ({ goals: [g, ...s.goals] })),
@@ -126,7 +142,8 @@ export const useAppStore = create<AppState>()(
             if (!day) return g;
             day.status = status;
             day.completedAt = status === "active" ? undefined : todayISO();
-            if (status === "passed" || status === "skipped") unlockNext({ ...g, plan }, dayId);
+            if (status === "passed" || status === "skipped")
+              unlockNext({ ...g, plan }, dayId);
             return { ...g, plan };
           }),
         })),
@@ -147,23 +164,36 @@ export const useAppStore = create<AppState>()(
           ),
         })),
 
-      addKnowledge: (items, source, sourceTitle) =>
-        set((s) => {
-          const existing = new Set(s.knowledge.map((k) => k.text));
-          const fresh: KnowledgeItem[] = items
-            .filter((i) => i.text && !existing.has(i.text))
-            .map((i) => ({
-              id: uid("k"),
-              text: i.text,
-              domain: i.domain,
-              source,
-              sourceTitle,
-              masteredAt: todayISO(),
-              reviewStage: 0,
-              nextReviewAt: todayISO(), // 当天即可首刷
-            }));
-          return { knowledge: [...fresh, ...s.knowledge] };
-        }),
+      addKnowledge: (items, source, sourceTitle) => {
+        const existing = new Set(get().knowledge.map((k) => k.title));
+        const fresh: KnowledgeItem[] = items
+          .filter((i) => i.title && !existing.has(i.title))
+          .map((i) => ({
+            id: uid("k"),
+            title: i.title,
+            body: i.body ?? "",
+            domain: i.domain,
+            source,
+            sourceTitle,
+            masteredAt: todayISO(),
+            reviewStage: 0,
+            nextReviewAt: todayISO(),
+            links: [],
+          }));
+        set((s) => ({ knowledge: [...fresh, ...s.knowledge] }));
+      },
+      updateKnowledge: (id, patch) =>
+        set((s) => ({
+          knowledge: s.knowledge.map((k) =>
+            k.id === id ? { ...k, ...patch } : k
+          ),
+        })),
+      removeKnowledge: (id) =>
+        set((s) => ({
+          knowledge: s.knowledge
+            .filter((k) => k.id !== id)
+            .map((k) => ({ ...k, links: k.links.filter((l) => l !== id) })),
+        })),
       recordReview: (id, ok) =>
         set((s) => ({
           knowledge: s.knowledge.map((k) => {
@@ -178,8 +208,22 @@ export const useAppStore = create<AppState>()(
             };
           }),
         })),
-      removeKnowledge: (id) =>
-        set((s) => ({ knowledge: s.knowledge.filter((k) => k.id !== id) })),
+      linkNotes: (fromId, toId) =>
+        set((s) => ({
+          knowledge: s.knowledge.map((k) => {
+            if (k.id === fromId && !k.links.includes(toId))
+              return { ...k, links: [...k.links, toId] };
+            return k;
+          }),
+        })),
+      unlinkNotes: (fromId, toId) =>
+        set((s) => ({
+          knowledge: s.knowledge.map((k) =>
+            k.id === fromId
+              ? { ...k, links: k.links.filter((l) => l !== toId) }
+              : k
+          ),
+        })),
 
       addBook: (b) => set((s) => ({ books: [b, ...s.books] })),
       updateBook: (id, patch) =>
@@ -239,6 +283,14 @@ export const useAppStore = create<AppState>()(
           ),
         })),
 
+      addCustomPersona: (p) =>
+        set((s) => ({ customPersonas: [p, ...s.customPersonas] })),
+      removeCustomPersona: (id) =>
+        set((s) => ({
+          customPersonas: s.customPersonas.filter((p) => p.id !== id),
+          sessions: s.sessions.filter((x) => x.personaId !== id),
+        })),
+
       setSettings: (patch) =>
         set((s) => ({ settings: { ...s.settings, ...patch } })),
       importData: (data) =>
@@ -247,6 +299,7 @@ export const useAppStore = create<AppState>()(
           knowledge: data.knowledge ?? s.knowledge,
           books: data.books ?? s.books,
           sessions: data.sessions ?? s.sessions,
+          customPersonas: data.customPersonas ?? s.customPersonas,
           settings: { ...s.settings, ...(data.settings ?? {}) },
         })),
       resetAll: () =>
@@ -255,10 +308,25 @@ export const useAppStore = create<AppState>()(
           knowledge: [],
           books: [],
           sessions: [],
+          customPersonas: [],
           settings: get().settings,
         }),
     }),
-    { name: "mentora-store-v1" }
+    {
+      name: "mentora-store-v1",
+      version: 2,
+      migrate: (persisted: unknown, version: number) => {
+        const state = persisted as Partial<AppState> & { knowledge?: unknown[] };
+        if (version < 2) {
+          return {
+            ...state,
+            knowledge: migrateKnowledge(state.knowledge ?? []),
+            customPersonas: state.customPersonas ?? [],
+          } as AppState;
+        }
+        return state as AppState;
+      },
+    }
   )
 );
 

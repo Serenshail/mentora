@@ -294,7 +294,7 @@ function DayPanel({
         });
         // 知识点进入第二大脑 + 间隔复习队列
         store.getState().addKnowledge(
-          day.knowledgePoints.map((k) => ({ text: k.text, domain: goal.topic })),
+          day.knowledgePoints.map((k) => ({ title: k.text, domain: goal.topic })),
           "learn",
           `${goal.topic} · ${day.title}`
         );

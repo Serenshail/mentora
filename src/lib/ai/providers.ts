@@ -17,7 +17,7 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
     baseUrl: "",
     defaultModel: "demo",
     modelHints: [],
-    note: "无需 API Key，内置脚本化响应，用于体验完整流程",
+    note: "自动：优先用服务端配置的模型，未配置时回退演示模式",
   },
   zai: {
     id: "zai",

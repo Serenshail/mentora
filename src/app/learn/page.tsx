@@ -89,7 +89,9 @@ export default function LearnPage() {
                 className={cn(
                   "group relative cursor-pointer transition-all hover:border-accent/50 hover:bg-surface-2/70"
                 )}
-                onClick={() => router.push(`/learn/${g.id}`)}
+                onClick={() =>
+                  router.push(g.status === "draft" ? `/learn/new?goal=${g.id}` : `/learn/${g.id}`)
+                }
               >
                 <div className="flex items-center gap-5">
                   <ProgressRing
@@ -100,10 +102,13 @@ export default function LearnPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="text-base font-bold text-white">{g.topic}</h3>
                       <Badge tone={DOMAIN_TONE[g.domainKind]}>{DOMAIN_LABELS[g.domainKind]}</Badge>
+                      {g.status === "draft" && <Badge tone="warn">⚡ 引导中 · 点击继续</Badge>}
                       {g.status === "done" && <Badge tone="ok">已完成</Badge>}
                       {g.status === "paused" && <Badge tone="dim">已暂停</Badge>}
                     </div>
-                    <p className="mt-1 truncate text-sm text-ink-dim">{g.direction}</p>
+                    <p className="mt-1 truncate text-sm text-ink-dim">
+                      {g.direction || "（还在引导对话中，方向未定）"}
+                    </p>
                     <p className="mt-2 text-xs text-ink-dim/80">
                       {prog.done}/{prog.total} 天完成 · 每周 {g.weeklyHours} 小时
                       {g.deadline ? ` · 截止 ${g.deadline}` : ""}

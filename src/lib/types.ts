@@ -104,26 +104,27 @@ export interface SocraticTurn {
 export interface Goal {
   id: string;
   topic: string; // "Python"
-  direction: string; // 苏格拉底引导后明确的方向
+  direction: string; // 苏格拉底引导后明确的方向（草稿期为空）
   domainKind: DomainKind;
   motivation: string;
   background: string;
   deadline?: string;
   weeklyHours: number;
   successCriteria: string[];
-  status: "active" | "paused" | "done";
+  status: "draft" | "active" | "paused" | "done"; // draft=引导中，可中断可回档
   createdAt: string;
   plan?: Plan;
   quizLog: QuizResult[];
   intakeTranscript: SocraticTurn[];
 }
 
-/* ========= 第二大脑 ========= */
-export type KnowledgeSource = "learn" | "read" | "council";
+/* ========= 第二大脑（Obsidian 式双链笔记） ========= */
+export type KnowledgeSource = "learn" | "read" | "council" | "manual";
 
 export interface KnowledgeItem {
   id: string;
-  text: string;
+  title: string; // 笔记标题（wikilink 目标）
+  body: string; // Markdown 正文，可含 [[标题]] 双链
   domain: string;
   source: KnowledgeSource;
   sourceTitle: string; // 来自哪个目标 / 哪本书
@@ -131,13 +132,16 @@ export interface KnowledgeItem {
   reviewStage: number; // 0=未开始复习，1..4=已过第n轮
   nextReviewAt?: string; // ISO date，间隔重复 1/3/7/15
   lastReviewOk?: boolean;
+  links: string[]; // 出链：指向其他笔记的 id（用户/AI 建立）
 }
 
 /* ========= 读书伙伴 ========= */
 export interface BookChapter {
   id: string;
   title: string;
+  coreIdea?: string; // 本单元核心论点
   focusQuestion: string; // 本章带着什么问题读
+  perspectives?: string[]; // 其他思想家/作者对该观点的看法（人名+一句话）
   status: "todo" | "done";
 }
 
@@ -170,9 +174,21 @@ export interface Book {
 /* ========= 人生伙伴 ========= */
 export interface CouncilSession {
   id: string;
-  personaId: string; // persona id 或 "roundtable"
+  personaId: string; // 内置 persona id / "roundtable" / "custom:xxx"
   title: string;
   messages: ChatMsg[];
+  createdAt: string;
+}
+
+/** 用户自定义智能体（输入名字，AI 蒸馏其思想而成） */
+export interface CustomPersona {
+  id: string; // "custom:xxx"
+  name: string;
+  tag: string;
+  bio: string;
+  color: string;
+  identityNote: string; // AI 确认的身份（是谁、哪个时代/领域，供用户核对）
+  system: string; // 蒸馏后的完整系统提示词
   createdAt: string;
 }
 

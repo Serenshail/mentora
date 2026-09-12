@@ -10,7 +10,8 @@ export interface WireMsg {
 export type ChatTask =
   | "intake" | "plan" | "lesson" | "quiz-grade"
   | "review-ask" | "review-grade"
-  | "reading-plan" | "reading-chat" | "council";
+  | "reading-plan" | "reading-chat" | "council"
+  | "autolink" | "persona-distill";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：
@@ -188,7 +189,9 @@ export const readingPlanSchema = z.object({
     .array(
       z.object({
         title: z.string(),
+        coreIdea: z.string().optional().nullable(),
         focusQuestion: z.string(),
+        perspectives: z.array(z.string()).optional().nullable(),
       })
     )
     .min(3),
@@ -196,7 +199,34 @@ export const readingPlanSchema = z.object({
 export type ReadingPlan = z.infer<typeof readingPlanSchema>;
 
 export const insightsSchema = z.object({
-  insights: z.array(z.object({ text: z.string(), knowledgePoint: z.string() })).min(1),
+  insights: z
+    .array(
+      z.object({
+        title: z.string(),
+        body: z.string().optional().nullable(),
+        knowledgePoint: z.string().optional().nullable(),
+      })
+    )
+    .min(1),
+});
+
+export const autolinkSchema = z.object({
+  links: z
+    .array(z.object({ targetId: z.string(), reason: z.string() }))
+    .max(5),
+});
+
+export const personaDistillSchema = z.object({
+  identityNote: z.string(),
+  name: z.string(),
+  tag: z.string(),
+  bio: z.string(),
+  coreIdeas: z.array(z.string()).optional().nullable(),
+  signatureQuestions: z.array(z.string()).optional().nullable(),
+  style: z.string().optional().nullable(),
+  quotes: z.array(z.string()).optional().nullable(),
+  color: z.string().optional().nullable(),
+  system: z.string(),
 });
 
 export const reviewGradeSchema = z.object({

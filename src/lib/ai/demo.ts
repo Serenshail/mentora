@@ -252,7 +252,7 @@ export async function* demoReadingChat(messages: Msg[]) {
 /* ---------- 复习（演示） ---------- */
 export async function* demoReview(system: string) {
   const kp =
-    system.match(/"text":\s*"([^"]{2,40})"/)?.[1] ?? "这个知识点";
+    system.match(/"title":\s*"([^"]{2,40})"/)?.[1] ?? "这个知识点";
   yield* chunked(
     `（演示）回忆检验：用 30 秒讲清「${kp}」——它是什么、在什么场景用它、最容易犯的错是什么。不要看笔记。`
   );
@@ -264,6 +264,38 @@ export async function* demoReviewGrade() {
       JSON.stringify({
         verdict: "pass",
         feedback: "（演示）核心机制说对了，记忆稳固，下轮复习顺延。",
+      }) +
+      "\n```"
+  );
+}
+
+/* ---------- AI 建联（演示） ---------- */
+export async function* demoAutolink() {
+  yield* chunked(
+    "```json\n" +
+      JSON.stringify({
+        links: [],
+      }) +
+      "\n```"
+  );
+}
+
+/* ---------- 自定义智能体蒸馏（演示：给一个通用智者） ---------- */
+export async function* demoPersona() {
+  yield* chunked(
+    "```json\n" +
+      JSON.stringify({
+        identityNote: "（演示模式）真实模型下会先确认这个人是谁并写出身份依据；当前为通用学者演示档案。",
+        name: "自定义智者",
+        tag: "通识 · 思想实验",
+        bio: "一位由你命名的思想伙伴（演示档案，接真实模型后按其真实思想蒸馏）",
+        coreIdeas: ["先给判断再给理由", "主动呈现最强反方", "把情绪翻译成问题"],
+        signatureQuestions: ["这个判断在什么条件下是错的？", "你愿意为这个观点下注吗？"],
+        style: "直接、具体、有立场",
+        quotes: ["判断先于安慰。"],
+        color: "violet",
+        system:
+          "你是 Mentora 人生伙伴中的一个自定义智能体（演示档案）。第一句必须是明确判断；挑战坏问题的框架；主动给出最强反方；诚实标注无知；不给情绪安慰，给可执行判断；每次回答附下一步动作与一个用户没问但应该问的问题。",
       }) +
       "\n```"
   );
