@@ -18,6 +18,51 @@ import {
   ArrowLeft, BookMarked, Check, ChevronRight, CircleX, ExternalLink, Sparkles, Swords,
 } from "lucide-react";
 
+/* ================= 随手记：学习中直接入第二大脑 ================= */
+function QuickNotes({ goal, day }: { goal: Goal; day: DayPlan }) {
+  const knowledge = useAppStore((s) => s.knowledge);
+  const addKnowledge = useAppStore((s) => s.addKnowledge);
+  const [text, setText] = useState("");
+  const notes = knowledge.filter(
+    (k) => k.domain === goal.topic && k.sourceTitle.includes(day.title)
+  );
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-bold text-white">📝 随手记</p>
+        <span className="text-[11px] text-ink-dim">灵感来了直接记，自动进第二大脑</span>
+      </div>
+      <div className="mt-3">
+        <input
+          className="h-9 w-full rounded-xl border border-border bg-surface-2/80 px-3 text-sm outline-none focus:border-accent/70"
+          placeholder="记一条：今天踩的坑 / 顿悟 / 想追问的问题…（Enter 保存）"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || !text.trim()) return;
+            addKnowledge(
+              [{ title: text.trim().slice(0, 40), body: text.trim(), domain: goal.topic }],
+              "manual",
+              `${goal.topic} · ${day.title} · 随手记`
+            );
+            setText("");
+            toast.success("已记入第二大脑");
+          }}
+        />
+      </div>
+      {notes.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {notes.map((n) => (
+            <p key={n.id} className="truncate rounded-lg bg-surface-2/60 px-2.5 py-1.5 text-xs text-ink-dim">
+              📝 {n.title}
+            </p>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /* ================= 页面 ================= */
 export default function GoalDetailPage() {
   const hydrated = useHydrated();
@@ -95,7 +140,58 @@ export default function GoalDetailPage() {
           🎉 全部阶段完成！去「第二大脑」看看你积累了什么。
         </Card>
       )}
+      {!goal.plan && (
+        <RegeneratePlan goal={goal} />
+      )}
     </div>
+  );
+}
+
+/* ================= 计划缺失：重新生成 ================= */
+function RegeneratePlan({ goal }: { goal: Goal }) {
+  const [busy, setBusy] = useState(false);
+  const generate = async () => {
+    setBusy(true);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const { PLANNER } = await import("@/lib/ai/prompts");
+      const { planSchema } = await import("@/lib/ai/client");
+      const { draftToPlan } = await import("@/lib/plan");
+      const card = {
+        topic: goal.topic,
+        direction: goal.direction || `系统学习${goal.topic}并完成实战`,
+        domainKind: goal.domainKind,
+        motivation: goal.motivation,
+        background: goal.background,
+        weeklyHours: goal.weeklyHours,
+        successCriteria: goal.successCriteria,
+        assumptions: goal.assumptions ?? [],
+      };
+      const full = await streamChat({
+        task: "plan",
+        system: PLANNER(JSON.stringify(card, null, 2)),
+        messages: [{ role: "user", content: "请生成学习计划（只要 JSON）。" }],
+        onDelta: () => {},
+      });
+      const draft = planSchema.parse(extractJson(full));
+      useAppStore.getState().setPlan(goal.id, draftToPlan(draft, { ...card, deadline: null }));
+      toast.success("计划已生成，开始第一天！");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "生成失败，请重试（模型偶发超时）");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card className="flex flex-col items-center justify-center border-accent/40 py-14 text-center">
+      <p className="text-lg font-bold text-white">计划还没有生成</p>
+      <p className="mt-2 max-w-md text-sm text-ink-dim">
+        可能是上次生成超时或解析失败（目标已保存）。点下面重新生成——计划不设日历日期，按你的节奏推进。
+      </p>
+      <Button className="mt-5" onClick={generate} loading={busy}>
+        🏗️ 生成学习计划
+      </Button>
+    </Card>
   );
 }
 
@@ -441,6 +537,9 @@ function DayPanel({
               )}
             </Card>
           )}
+
+          {/* 随手记：学习过程中直接记进第二大脑 */}
+          <QuickNotes goal={goal} day={day} />
         </>
       )}
 

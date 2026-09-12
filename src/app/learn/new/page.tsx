@@ -128,8 +128,8 @@ function IntakeInner() {
       domainKind: finalCard.domainKind,
       motivation: finalCard.motivation,
       background: finalCard.background,
-      deadline: finalCard.deadline || undefined,
       weeklyHours: finalCard.weeklyHours,
+      assumptions: finalCard.assumptions || [],
       successCriteria: finalCard.successCriteria,
       status: "active",
     });
@@ -166,7 +166,7 @@ function IntakeInner() {
         <div>
           <h1 className="text-lg font-bold text-white">方向引导：学{topic}</h1>
           <p className="text-xs text-ink-dim">
-            苏格拉底式追问 —— 对话自动保存，随时离开，回来接着聊
+            最多问两轮就开工 —— 对话自动保存，随时离开，随时点「直接生成」
           </p>
         </div>
         {stage === "planning" && <Badge tone="accent">计划生成中…</Badge>}
@@ -231,15 +231,15 @@ function IntakeInner() {
                 }
               />
             </label>
-            <label className="text-xs text-ink-dim">
-              期望完成日期（可选）
-              <Input
-                className="mt-1"
-                type="date"
-                value={card.deadline ?? ""}
-                onChange={(e) => setCard({ ...card, deadline: e.target.value || undefined })}
-              />
-            </label>
+
+            {(card.assumptions?.length ?? 0) > 0 && (
+              <div className="rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs text-warn/90 sm:col-span-2">
+                <p className="mb-1 font-semibold">教练替你做的假设（不同意就在对话里纠正）：</p>
+                <ul className="list-disc pl-4 space-y-0.5">
+                  {card.assumptions!.map((a, i) => <li key={i}>{a}</li>)}
+                </ul>
+              </div>
+            )}
             <label className="text-xs text-ink-dim sm:col-span-2">
               成功标准（每行一条）
               <Textarea
@@ -293,6 +293,21 @@ function IntakeInner() {
               发送
             </Button>
           </div>
+          <button
+            onClick={() => {
+              if (streaming) return;
+              void send({
+                system: SOCRATIC_INTAKE(topic, userName),
+                userText: "（不想再答了，按已有信息直接给目标卡，缺的写进 assumptions。）",
+                task: "intake",
+                onDone: handleDone,
+              });
+            }}
+            disabled={streaming}
+            className="mt-2 w-full cursor-pointer rounded-xl border border-dashed border-accent/40 py-2 text-xs text-ink-dim transition hover:border-accent/70 hover:text-[#b7adff] disabled:opacity-50"
+          >
+            ⏭️ 不想再答了 —— 让教练按现有信息直接生成目标与计划
+          </button>
         </div>
       )}
     </div>

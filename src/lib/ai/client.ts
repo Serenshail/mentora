@@ -123,9 +123,10 @@ export const goalCardSchema = z.object({
   domainKind: z.enum(["coding", "language", "humanities", "exam", "career", "other"]),
   motivation: z.string(),
   background: z.string(),
-  deadline: z.string().optional().nullable(),
+  deadline: z.string().optional().nullable(), // 已废弃日期承诺，仅兼容旧数据
   weeklyHours: z.number().min(1).max(80),
   successCriteria: z.array(z.string()).min(1),
+  assumptions: z.array(z.string()).optional().nullable(),
 });
 export type GoalCard = z.infer<typeof goalCardSchema>;
 
@@ -183,7 +184,15 @@ export const quizGradeSchema = z.object({
 });
 export type QuizGrade = z.infer<typeof quizGradeSchema>;
 
+export const bookProfileSchema = z.object({
+  positioning: z.string(),
+  author: z.string(),
+  lineage: z.string(),
+  controversies: z.string(),
+});
+
 export const readingPlanSchema = z.object({
+  bookProfile: bookProfileSchema.optional().nullable(),
   planSummary: z.string(),
   chapters: z
     .array(
@@ -192,6 +201,7 @@ export const readingPlanSchema = z.object({
         coreIdea: z.string().optional().nullable(),
         focusQuestion: z.string(),
         perspectives: z.array(z.string()).optional().nullable(),
+        capture: z.array(z.string()).optional().nullable(),
       })
     )
     .min(3),

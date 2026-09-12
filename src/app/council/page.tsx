@@ -5,11 +5,17 @@ import { Badge, Button, Card, Input, Modal, PageHeader } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
-import { PERSONAS, ROUNDTABLE_SYSTEM, personaById, COUNCIL_BASE, PERSONA_DISTILL } from "@/lib/ai/prompts";
-import { extractJson, personaDistillSchema, type ChatTask } from "@/lib/ai/client";
+import {
+  PERSONAS, ROUNDTABLE_TAKE, ROUNDTABLE_HOST, personaById, COUNCIL_BASE, PERSONA_DISTILL,
+} from "@/lib/ai/prompts";
+import { extractJson, personaDistillSchema, streamChat } from "@/lib/ai/client";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { Compass, Plus, Sparkles, Trash2, UserPlus, Users, Zap } from "lucide-react";
+import type { Persona as BuiltinPersona } from "@/lib/ai/prompts";
+import type { CustomPersona } from "@/lib/types";
+
+type ResolvedPersona = BuiltinPersona | (CustomPersona & { id: string });
 
 export default function CouncilPage() {
   const hydrated = useHydrated();
@@ -21,50 +27,66 @@ export default function CouncilPage() {
   const addCustomPersona = useAppStore((s) => s.addCustomPersona);
   const removeCustomPersona = useAppStore((s) => s.removeCustomPersona);
 
-  // 统一解析：内置 / 自定义 / 圆桌
-  const resolvePersona = (personaId: string) => {
-    if (personaId === "roundtable") return null;
-    const builtin = personaById(personaId);
-    if (builtin) return builtin;
-    const c = useAppStore.getState().customPersonas.find((x) => x.id === personaId);
-    if (c) return { id: c.id, name: c.name, tag: c.tag, bio: c.bio, color: c.color, system: c.system };
-    return undefined;
-  };
-
   const [activeId, setActiveId] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const { messages, setMessages, pending, streaming, send } = useChat();
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // 圆桌状态
+  const [rtParticipants, setRtParticipants] = useState<string[]>([]);
+  const [rtTakes, setRtTakes] = useState<Record<string, string>>({});
+  const [rtHost, setRtHost] = useState("");
+
   const active = sessions.find((s) => s.id === activeId) ?? null;
+  const isRoundtable = active?.personaId === "roundtable";
+
+  const resolvePersona = (personaId: string): ResolvedPersona | null | undefined => {
+    if (personaId === "roundtable") return null;
+    const builtin = personaById(personaId);
+    if (builtin) return builtin;
+    const c = customPersonas.find((x) => x.id === personaId);
+    if (c) return { ...c, system: c.system };
+    return undefined;
+  };
   const persona = active ? resolvePersona(active.personaId) : undefined;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, pending]);
+  }, [messages.length, pending, rtTakes, rtHost]);
 
   useEffect(() => {
     if (active) setMessages(active.messages);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
+  const allPersonaOptions = [
+    ...PERSONAS.map((p) => ({ id: p.id, name: p.name, color: p.color, custom: false })),
+    ...customPersonas.map((c) => ({ id: c.id, name: c.name, color: c.color, custom: true })),
+  ];
+
   const startWith = async (personaId: string) => {
     setPicking(false);
-    const p = resolvePersona(personaId);
     const sessionId = uid("sess");
+    if (personaId === "roundtable") {
+      // 先选与会者（默认全选），选完创建
+      setRtParticipants(allPersonaOptions.map((p) => p.id));
+      setPicking(false);
+      setForgeRoundtableOpen(true);
+      return;
+    }
+    const p = resolvePersona(personaId);
     addSession({
       id: sessionId,
       personaId,
-      title: p ? p.name : "圆桌会议",
+      title: p ? p.name : "对话",
       messages: [],
       createdAt: new Date().toISOString(),
     });
     setActiveId(sessionId);
     setMessages([]);
-    // 开场白由模型生成一句符合 persona 风格的自我立场
     await send({
-      system: p ? p.system : ROUNDTABLE_SYSTEM(PERSONAS.map((x) => x.name).join("、")),
+      system: p?.system ?? "",
       userText: "（请用你的风格开场：你是谁、你处理什么问题、以及你会先反问用户什么。50字内，不要列清单。）",
       task: "council",
       onDone: (full) => {
@@ -79,15 +101,46 @@ export default function CouncilPage() {
     });
   };
 
+  /* 圆桌会话创建（选完与会者） */
+  const [forgeRoundtableOpen, setForgeRoundtableOpen] = useState(false);
+  const createRoundtable = () => {
+    if (rtParticipants.length < 2) {
+      toast.error("圆桌至少 2 位与会者");
+      return;
+    }
+    const sessionId = uid("sess");
+    const names = rtParticipants
+      .map((id) => allPersonaOptions.find((p) => p.id === id)?.name ?? id)
+      .join(" · ");
+    addSession({
+      id: sessionId,
+      personaId: "roundtable",
+      participants: [...rtParticipants],
+      title: `圆桌(${rtParticipants.length}人)：${names.slice(0, 24)}…`,
+      messages: [],
+      createdAt: new Date().toISOString(),
+    });
+    setActiveId(sessionId);
+    setMessages([]);
+    setForgeRoundtableOpen(false);
+    toast.success("圆桌已就位——把问题扔进来，每位与会者都会独立发言，最后有主持人纪要。");
+  };
+
+  /* 单人对话发送 */
   const doSend = () => {
     const text = input.trim();
     if (!text || streaming || !active) return;
+    if (isRoundtable) {
+      void roundtableSend(text);
+      setInput("");
+      return;
+    }
     setInput("");
-    const base = active.messages; // 不含本条
+    const base = active.messages;
     const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
     addSessionMsg(active.id, userMsg);
     void send({
-      system: persona ? persona.system : ROUNDTABLE_SYSTEM(PERSONAS.map((x) => x.name).join("、")),
+      system: persona?.system ?? "",
       userText: text,
       task: "council",
       history: base,
@@ -104,13 +157,89 @@ export default function CouncilPage() {
     });
   };
 
+  /* 圆桌发送：全员并行独立发言 → 主持人纪要 */
+  const [rtBusy, setRtBusy] = useState(false);
+  const roundtableSend = async (text: string) => {
+    if (!active) return;
+    setRtBusy(true);
+    setRtTakes({});
+    setRtHost("");
+    const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
+    addSessionMsg(active.id, userMsg);
+    setInput("");
+
+    const participants = (active.participants ?? []).map((id) => resolvePersona(id)).filter(Boolean) as ResolvedPersona[];
+    const takesMap: Record<string, string> = {};
+
+    // 并行独立发言
+    await Promise.all(
+      participants.map(async (p) => {
+        let take = "";
+        try {
+          const full = await streamChat({
+            task: "council",
+            system: p.system + "\n\n" + ROUNDTABLE_TAKE(p.name),
+            messages: [{ role: "user", content: text }],
+            temperature: 0.8,
+            onDelta: (d) => {
+              take += d;
+              setRtTakes((prev) => ({ ...prev, [p.id]: take }));
+            },
+          });
+          takesMap[p.id] = full || take;
+          addSessionMsg(active.id, {
+            id: uid("m"),
+            role: "assistant",
+            content: `**【${p.name}】**\n\n${takesMap[p.id]}`,
+            at: new Date().toISOString(),
+          });
+        } catch {
+          takesMap[p.id] = take || "（发言失败）";
+          addSessionMsg(active.id, {
+            id: uid("m"),
+            role: "assistant",
+            content: `**【${p.name}】**（发言失败）`,
+            at: new Date().toISOString(),
+          });
+        }
+      })
+    );
+
+    // 主持人纪要
+    try {
+      const names = participants.map((p) => p.name).join("、");
+      const takes = participants
+        .map((p) => `【${p.name}】${takesMap[p.id] ?? ""}`)
+        .join("\n\n");
+      const full = await streamChat({
+        task: "council",
+        system: ROUNDTABLE_HOST(names) + "\n\n## 各位与会者的发言全文\n" + takes,
+        messages: [{ role: "user", content: "请写圆桌纪要。" }],
+        temperature: 0.4,
+        onDelta: (d) => setRtHost((p) => p + d),
+      });
+      addSessionMsg(active.id, {
+        id: uid("m"),
+        role: "assistant",
+        content: `## 🪑 圆桌纪要\n\n${full}`,
+        at: new Date().toISOString(),
+      });
+    } catch {
+      toast.error("主持人纪要生成失败");
+    }
+    setRtBusy(false);
+  };
+
+  // 圆桌发言的实时引用（供主持人使用）
+  void rtTakes;
+
   const newChat = () => {
     setActiveId(null);
     setMessages([]);
     setPicking(true);
   };
 
-  /* ---- 自定义智能体：输入名字 → AI 蒸馏 → 确认身份 ---- */
+  /* ---- 自定义智能体锻造 ---- */
   const [forgeOpen, setForgeOpen] = useState(false);
   const [forgeName, setForgeName] = useState("");
   const [forgeHint, setForgeHint] = useState("");
@@ -127,7 +256,6 @@ export default function CouncilPage() {
     setForging(true);
     setForged(null);
     try {
-      const { streamChat } = await import("@/lib/ai/client");
       const full = await streamChat({
         task: "persona-distill",
         system: PERSONA_DISTILL(forgeName.trim(), forgeHint.trim()),
@@ -178,7 +306,7 @@ export default function CouncilPage() {
       <PageHeader
         icon={<Compass className="size-5" />}
         title="人生伙伴"
-        desc="高认知的思想伙伴：不迎合、不安慰式敷衍。12 位智者的思维方式 + 圆桌模式，给你自己的判断。"
+        desc="高认知的思想伙伴：不迎合、不安慰式敷衍。12 位深度蒸馏的智者 + 自建智能体 + 全员圆桌研讨会。"
         right={
           <Button variant="outline" onClick={newChat}>
             <Plus className="size-4" /> 新对话
@@ -214,7 +342,7 @@ export default function CouncilPage() {
                     )}
                     <span className="truncate">{s.title}</span>
                     <button
-                      className="ml-auto opacity-0 transition group-hover:opacity-100 hover:text-bad cursor-pointer"
+                      className="ml-auto opacity-60 transition hover:text-bad cursor-pointer"
                       onClick={(e) => {
                         e.stopPropagation();
                         removeSession(s.id);
@@ -235,7 +363,7 @@ export default function CouncilPage() {
 
         {/* 主区 */}
         <div className="min-w-0">
-          {picking || (!active && !pending) ? (
+          {picking || (!active && !pending && !rtBusy) ? (
             <div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <button
@@ -247,19 +375,30 @@ export default function CouncilPage() {
                       <Users className="size-5 text-white" />
                     </div>
                     <div>
-                      <p className="font-bold text-white">圆桌会议</p>
+                      <p className="font-bold text-white">圆桌研讨会</p>
                       <p className="text-xs text-ink-dim">
-                        把问题同时扔给多位导师：共同判断 + 分歧现场 + 合成建议
+                        你选的每位与会者都独立发言，最后主持人给出纪要：共识 / 真分歧 / 被遗漏的视角 / 下一步
                       </p>
                     </div>
                   </div>
                 </button>
+
+                {/* 添加智能体 */}
+                <button
+                  onClick={() => setForgeOpen(true)}
+                  className="flex min-h-[108px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-accent/50 bg-accent/5 p-4 text-ink-dim transition hover:border-accent/80 hover:text-[#b7adff] cursor-pointer"
+                >
+                  <UserPlus className="size-6" />
+                  <span className="text-sm font-semibold">添加智能体</span>
+                  <span className="text-[11px]">说一个名字，蒸馏到本人降临</span>
+                </button>
+
                 {/* 自定义智能体 */}
                 {customPersonas.map((c) => (
-                  <div key={c.id} className="group relative">
+                  <div key={c.id} className="relative">
                     <button
                       onClick={() => startWith(c.id)}
-                      className="w-full rounded-2xl border border-[#8b83d6]/40 bg-[#8b83d6]/5 p-4 text-left transition hover:border-[#8b83d6]/70 hover:bg-surface-2 cursor-pointer"
+                      className="w-full rounded-2xl border border-[#8b83d6]/40 bg-[#8b83d6]/5 p-4 text-left transition hover:border-[#8b83d6]/70 hover:bg-surface-2 cursor-pointer h-full"
                     >
                       <div className="flex items-center gap-2.5">
                         <div className={cn("flex size-9 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-black text-white", c.color)}>
@@ -285,16 +424,6 @@ export default function CouncilPage() {
                   </div>
                 ))}
 
-                {/* 添加智能体 */}
-                <button
-                  onClick={() => setForgeOpen(true)}
-                  className="flex min-h-[120px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-accent/50 bg-accent/5 p-4 text-ink-dim transition hover:border-accent/80 hover:text-[#b7adff] cursor-pointer"
-                >
-                  <UserPlus className="size-6" />
-                  <span className="text-sm font-semibold">添加智能体</span>
-                  <span className="text-[11px]">说一个名字，AI 蒸馏 TA 的思想</span>
-                </button>
-
                 {PERSONAS.map((p) => (
                   <button
                     key={p.id}
@@ -315,9 +444,7 @@ export default function CouncilPage() {
                         <p className="text-[11px] text-ink-dim">{p.tag}</p>
                       </div>
                     </div>
-                    <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-ink-dim">
-                      {p.bio}
-                    </p>
+                    <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-ink-dim">{p.bio}</p>
                   </button>
                 ))}
               </div>
@@ -335,29 +462,31 @@ export default function CouncilPage() {
           ) : (
             <>
               <Card className="mb-4 flex items-center gap-3">
-                {persona ? (
-                  <>
-                    <div
-                      className={cn(
-                        "flex size-10 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-black text-white",
-                        persona.color
-                      )}
-                    >
-                      {persona.name.slice(0, 1)}
-                    </div>
-                    <div>
-                      <p className="font-bold text-white">{persona.name}</p>
-                      <p className="text-xs text-ink-dim">{persona.tag} · {persona.bio}</p>
-                    </div>
-                  </>
-                ) : (
+                {isRoundtable ? (
                   <>
                     <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#7c6cff] to-[#22d3ee]">
                       <Users className="size-5 text-white" />
                     </div>
                     <div>
-                      <p className="font-bold text-white">圆桌会议</p>
-                      <p className="text-xs text-ink-dim">多位导师共同审视你的问题</p>
+                      <p className="font-bold text-white">圆桌研讨会</p>
+                      <p className="text-xs text-ink-dim">
+                        {(active?.participants ?? []).length} 位与会者全员独立发言 + 主持人纪要
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div
+                      className={cn(
+                        "flex size-10 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-black text-white",
+                        persona?.color
+                      )}
+                    >
+                      {persona?.name.slice(0, 1)}
+                    </div>
+                    <div>
+                      <p className="font-bold text-white">{persona?.name}</p>
+                      <p className="text-xs text-ink-dim">{persona?.tag} · {persona?.bio}</p>
                     </div>
                   </>
                 )}
@@ -371,17 +500,53 @@ export default function CouncilPage() {
                         {m.content}
                       </div>
                     ) : (
-                      <Card className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
+                      <Card
+                        className={cn(
+                          "max-w-[92%] rounded-2xl rounded-bl-md py-4",
+                          m.content.startsWith("## 🪑") && "border-accent/50 bg-accent/5"
+                        )}
+                      >
                         <Markdown text={m.content} />
                       </Card>
                     )}
                   </div>
                 ))}
-                {pending && (
+                {pending && !isRoundtable && (
                   <Card className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
                     <Markdown text={pending} />
                     <span className="stream-cursor" />
                   </Card>
+                )}
+
+                {/* 圆桌并行发言（流式中） */}
+                {isRoundtable && rtBusy && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {(active?.participants ?? []).map((pid) => {
+                      const p = resolvePersona(pid);
+                      if (!p) return null;
+                      const text = rtTakes[pid];
+                      return (
+                        <Card key={pid} className="py-3.5">
+                          <p className="mb-1.5 text-xs font-bold text-[#b7adff]">{p.name}</p>
+                          {text ? (
+                            <div className="text-sm text-ink-dim">
+                              <Markdown text={text} />
+                              <span className="stream-cursor" />
+                            </div>
+                          ) : (
+                            <p className="text-xs text-ink-dim/60">思考中…</p>
+                          )}
+                        </Card>
+                      );
+                    })}
+                    {rtHost && (
+                      <Card className="border-accent/50 bg-accent/5 py-3.5 sm:col-span-2">
+                        <p className="mb-1.5 text-xs font-bold text-[#b7adff]">🪑 主持人纪要（生成中）</p>
+                        <Markdown text={rtHost} />
+                        <span className="stream-cursor" />
+                      </Card>
+                    )}
+                  </div>
                 )}
                 <div ref={bottomRef} />
               </div>
@@ -393,13 +558,15 @@ export default function CouncilPage() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && doSend()}
                     placeholder={
-                      persona
-                        ? `向 ${persona.name} 抛出你的困惑、决策或焦虑…`
-                        : "把你的问题扔到圆桌上…"
+                      isRoundtable
+                        ? "把问题扔到圆桌上…"
+                        : persona
+                          ? `向 ${persona.name} 抛出你的困惑、决策或焦虑…`
+                          : "输入…"
                     }
-                    disabled={streaming}
+                    disabled={streaming || rtBusy}
                   />
-                  <Button onClick={doSend} loading={streaming} className="shrink-0">
+                  <Button onClick={doSend} loading={streaming || rtBusy} className="shrink-0">
                     发送
                   </Button>
                 </div>
@@ -412,12 +579,49 @@ export default function CouncilPage() {
         </div>
       </div>
 
+      {/* 圆桌与会者选择 */}
+      <Modal open={forgeRoundtableOpen} onClose={() => setForgeRoundtableOpen(false)} title="圆桌研讨会 · 选择与会者" wide>
+        <p className="mb-3 text-sm text-ink-dim">默认全员参加。每位与会者独立发言，最后由主持人综合出纪要（发言人数越多耗时越久）。</p>
+        <div className="grid max-h-72 gap-2 overflow-y-auto sm:grid-cols-3">
+          {allPersonaOptions.map((p) => {
+            const checked = rtParticipants.includes(p.id);
+            return (
+              <button
+                key={p.id}
+                onClick={() =>
+                  setRtParticipants((prev) =>
+                    checked ? prev.filter((x) => x !== p.id) : [...prev, p.id]
+                  )
+                }
+                className={cn(
+                  "flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-xs transition cursor-pointer",
+                  checked ? "border-accent/60 bg-accent/15 text-white" : "border-border text-ink-dim hover:text-ink"
+                )}
+              >
+                <span className={cn("flex size-6 items-center justify-center rounded-lg bg-gradient-to-br text-[10px] font-black text-white", p.color)}>
+                  {p.name.slice(0, 1)}
+                </span>
+                <span className="truncate">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-4 flex justify-between">
+          <Button variant="ghost" onClick={() => setRtParticipants(allPersonaOptions.map((p) => p.id))}>
+            全选
+          </Button>
+          <Button onClick={createRoundtable}>
+            <Users className="size-4" /> 开始圆桌（{rtParticipants.length} 人）
+          </Button>
+        </div>
+      </Modal>
+
       {/* 自定义智能体锻造 */}
       <Modal open={forgeOpen} onClose={() => { setForgeOpen(false); setForged(null); }} title="添加智能体" wide>
         {!forged ? (
           <div className="space-y-3">
             <p className="text-sm text-ink-dim">
-              输入一个真实人物的名字（如「王阳明」「贝佐斯」「Jony Ive」），AI 会先确认这是谁，再蒸馏 TA 的思维模型、招牌提问与说话风格，锻造成一个可对话的智能体。
+              输入一个真实人物的名字（如「王阳明」「贝佐斯」「Jony Ive」），AI 会先确认这是谁，再深度蒸馏：思想体系、真实原话、语言指纹、论敌立场——直到仿佛本人降临。
             </p>
             <Input
               placeholder="名字，如：王阳明"
@@ -425,13 +629,13 @@ export default function CouncilPage() {
               onChange={(e) => setForgeName(e.target.value)}
             />
             <Input
-              placeholder="补充线索（可选）：领域/时代/代表作，帮助 AI 认对 person"
+              placeholder="补充线索（可选）：领域/时代/代表作，帮助 AI 认对人"
               value={forgeHint}
               onChange={(e) => setForgeHint(e.target.value)}
             />
             <div className="flex justify-end">
               <Button onClick={forge} loading={forging}>
-                <Sparkles className="size-4" /> 开始蒸馏
+                <Sparkles className="size-4" /> 开始深度蒸馏
               </Button>
             </div>
           </div>

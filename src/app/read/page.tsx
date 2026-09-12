@@ -50,11 +50,13 @@ export default function ReadPage() {
         author: author.trim() || undefined,
         pastedText: pasted.trim() || undefined,
         status: "reading",
+        profile: plan.bookProfile || undefined,
         planSummary: plan.planSummary,
         chapters: plan.chapters.map((c) => ({
           ...c,
           coreIdea: c.coreIdea || undefined,
           perspectives: c.perspectives || undefined,
+          capture: c.capture || undefined,
           id: uid("ch"),
           status: "todo" as const,
         })),

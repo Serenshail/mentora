@@ -111,6 +111,7 @@ export interface Goal {
   deadline?: string;
   weeklyHours: number;
   successCriteria: string[];
+  assumptions?: string[]; // 教练替用户做的假设（无截止日期承诺）
   status: "draft" | "active" | "paused" | "done"; // draft=引导中，可中断可回档
   createdAt: string;
   plan?: Plan;
@@ -142,6 +143,7 @@ export interface BookChapter {
   coreIdea?: string; // 本单元核心论点
   focusQuestion: string; // 本章带着什么问题读
   perspectives?: string[]; // 其他思想家/作者对该观点的看法（人名+一句话）
+  capture?: string[]; // 值得随手记进第二大脑的笔记标题建议
   status: "todo" | "done";
 }
 
@@ -158,10 +160,18 @@ export interface ChatMsg {
   at: string;
 }
 
+export interface BookProfile {
+  positioning: string;
+  author: string;
+  lineage: string;
+  controversies: string;
+}
+
 export interface Book {
   id: string;
   title: string;
   author?: string;
+  profile?: BookProfile; // 深度解剖档案
   pastedText?: string; // 用户粘贴的原文/笔记
   status: "want" | "reading" | "done";
   planSummary?: string;
@@ -175,6 +185,7 @@ export interface Book {
 export interface CouncilSession {
   id: string;
   personaId: string; // 内置 persona id / "roundtable" / "custom:xxx"
+  participants?: string[]; // 圆桌与会者（personaId 列表，含 custom）
   title: string;
   messages: ChatMsg[];
   createdAt: string;

@@ -136,9 +136,20 @@ export default function BookPage() {
         }
       />
 
+      {book.profile && (
+        <Card className="mb-4 border-accent/30 bg-accent/5">
+          <p className="mb-2 text-xs font-bold uppercase tracking-wider text-[#b7adff]">📖 深度解剖档案</p>
+          <div className="space-y-2 text-sm leading-relaxed">
+            <p><b className="text-white">定位：</b><span className="text-ink-dim">{book.profile.positioning}</span></p>
+            <p><b className="text-white">作者：</b><span className="text-ink-dim">{book.profile.author}</span></p>
+            <p><b className="text-white">思想谱系：</b><span className="text-ink-dim">{book.profile.lineage}</span></p>
+            <p><b className="text-white">争议：</b><span className="text-ink-dim">{book.profile.controversies}</span></p>
+          </div>
+        </Card>
+      )}
       {book.planSummary && (
-        <Card className="mb-6 border-accent/30 bg-accent/5 text-sm text-[#c9c2ff]">
-          {book.planSummary}
+        <Card className="mb-6 border-border bg-surface-2/50 text-sm text-ink-dim">
+          <b className="text-ink">拆解路线：</b>{book.planSummary}
         </Card>
       )}
 
@@ -168,6 +179,23 @@ export default function BookPage() {
                   {c.status === "done" && <Check className="ml-auto size-3.5 text-ok" />}
                 </div>
                 <p className="mt-1.5 text-ink-dim">❓ {c.focusQuestion}</p>
+                {c.coreIdea && (
+                  <p className="mt-1.5 rounded-lg bg-black/20 px-2 py-1.5 text-[11px] leading-relaxed text-ink-dim">
+                    💡 核心论点：{c.coreIdea}
+                  </p>
+                )}
+                {c.perspectives && c.perspectives.length > 0 && (
+                  <div className="mt-1.5 space-y-1">
+                    {c.perspectives.map((pv, j) => (
+                      <p key={j} className="text-[11px] leading-relaxed text-[#8b9dc6]">
+                        ⟡ {pv}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {c.capture && c.capture.length > 0 && (
+                  <p className="mt-1.5 text-[11px] text-ink-dim/70">📝 值得记：{c.capture.join(" / ")}</p>
+                )}
               </button>
             ))}
           </div>
