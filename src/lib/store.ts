@@ -37,6 +37,7 @@ interface AppState {
   updateGoal: (id: string, patch: Partial<Goal>) => void;
   removeGoal: (id: string) => void;
   setPlan: (goalId: string, plan: Plan) => void;
+  setPhasePlan: (goalId: string, phaseId: string, boundary: string, days: Plan["days"]) => void;
   setDayStatus: (
     goalId: string,
     dayId: string,
@@ -132,6 +133,27 @@ export const useAppStore = create<AppState>()(
       setPlan: (goalId, plan) =>
         set((s) => ({
           goals: s.goals.map((g) => (g.id === goalId ? { ...g, plan } : g)),
+        })),
+      setPhasePlan: (goalId, phaseId, boundary, days) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const plan = structuredClone(g.plan);
+            const phase = plan.phases.find((ph) => ph.id === phaseId);
+            if (!phase) return g;
+            const dayIds: string[] = [];
+            for (const d of Object.values(days)) {
+              plan.days[d.id] = d;
+              dayIds.push(d.id);
+            }
+            phase.dayIds = dayIds;
+            phase.boundary = boundary;
+            phase.planned = true;
+            if (phase.status === "locked") phase.status = "active";
+            const first = plan.days[dayIds[0]];
+            if (first && first.status === "locked") first.status = "active";
+            return { ...g, plan };
+          }),
         })),
       setDayStatus: (goalId, dayId, status) =>
         set((s) => ({

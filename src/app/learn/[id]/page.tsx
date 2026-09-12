@@ -201,6 +201,7 @@ export default function GoalDetailPage() {
 
   const activeDay =
     Object.values(goal.plan?.days ?? {}).find((d) => d.status === "active") ?? null;
+  const activePhase = goal.plan?.phases.find((p) => p.status === "active") ?? null;
   const viewDay = (viewDayId ? goal.plan?.days[viewDayId] : null) ?? activeDay;
 
   return (
@@ -244,7 +245,10 @@ export default function GoalDetailPage() {
           <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={viewDay.id !== activeDay?.id} />
         </div>
       )}
-      {goal.plan && !viewDay && (
+      {goal.plan && !viewDay && activePhase && !activePhase.planned && activePhase.dayIds.length === 0 && (
+        <PhasePlanPanel goal={goal} phase={activePhase} />
+      )}
+      {goal.plan && !viewDay && !activePhase && (
         <Card className="flex items-center justify-center py-16 text-ink-dim">
           🎉 全部阶段完成！去「第二大脑」看看你积累了什么。
         </Card>
@@ -256,6 +260,131 @@ export default function GoalDetailPage() {
   );
 }
 
+/* ================= 阶段天级计划面板（两级计划的第二级） ================= */
+function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["plan"]>["phases"][number] }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const generate = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { streamChat, phasePlanSchema } = await import("@/lib/ai/client");
+      const { PLANNER_PHASE } = await import("@/lib/ai/prompts");
+      const { phaseDraftToDays } = await import("@/lib/plan");
+      const plan = goal.plan!;
+      // 已掌握：所有已通过/跳过天的知识点
+      const mastered = Object.values(plan.days)
+        .filter((d) => d.status === "passed" || d.status === "skipped")
+        .flatMap((d) => d.knowledgePoints.map((k) => k.text));
+      // 薄弱点：最近未通过的验收
+      const weakPoints = goal.quizLog
+        .filter((q) => !q.passed)
+        .slice(0, 5)
+        .flatMap((q) => {
+          const day = plan.days[q.dayId];
+          return day ? [`${day.title}（${q.items.filter((i) => i.verdict === "fail").length} 题未过）`] : [];
+        });
+      const ctx = JSON.stringify(
+        {
+          goal: {
+            topic: goal.topic,
+            direction: goal.direction,
+            background: goal.background,
+            domainKind: goal.domainKind,
+            weeklyHours: goal.weeklyHours,
+            learnerProfile: goal.learnerProfile ?? [],
+          },
+          masterSummary: plan.summary,
+          phase: {
+            title: phase.title,
+            outcome: phase.outcome,
+            outline: phase.outline ?? [],
+            boundary: phase.boundary ?? "",
+            estDays: phase.estDays ?? null,
+          },
+          mastered,
+          weakPoints,
+        },
+        null,
+        1
+      );
+      const full = await streamChat({
+        task: "plan",
+        system: PLANNER_PHASE(ctx),
+        messages: [{ role: "user", content: "生成本阶段的天级计划（只要 JSON）。" }],
+        onDelta: () => {},
+      });
+      const draft = phasePlanSchema.parse(extractJson(full));
+      const days = phaseDraftToDays(draft, phase.id);
+      useAppStore.getState().setPhasePlan(goal.id, phase.id, draft.boundary ?? "", days);
+      // 阶段计划入第二大脑关系链
+      const masterNote = `${goal.topic} 学习计划 · 学习总纲要`;
+      const daysOverview = Object.values(days)
+        .map((d, i) => `Day ${i + 1}：${d.title} — ${d.knowledgePoints.map((k) => k.text).join("、")}`)
+        .join("\n");
+      useAppStore.getState().addKnowledge(
+        [{
+          title: `${goal.topic} 学习计划 · ${phase.title}`,
+          body: `**阶段目标：**${phase.outcome}\n\n**边界：**${draft.boundary ?? phase.boundary ?? "—"}\n\n${daysOverview}\n\n关联：[[${masterNote}]]`,
+          domain: goal.topic,
+        }],
+        "learn",
+        `${goal.topic} · 阶段计划`
+      );
+      toast.success("本阶段的天级计划已生成，从 Day 1 开始！");
+    } catch (e) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : "生成失败，请重试");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="border-accent/40">
+      <Badge tone="accent">下一程</Badge>
+      <h2 className="mt-3 text-xl font-bold text-white">{phase.title}</h2>
+      <p className="mt-1.5 text-sm text-[#c9c2ff]">🏁 {phase.outcome}</p>
+      {phase.estDays && (
+        <p className="mt-1 text-xs text-ink-dim">预估 {phase.estDays} 天（按你的实际节奏走）</p>
+      )}
+
+      {phase.outline && phase.outline.length > 0 && (
+        <div className="mt-5">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
+            本阶段要学的（总纲要）
+          </p>
+          <ul className="space-y-1.5">
+            {phase.outline.map((o, i) => (
+              <li key={i} className="flex gap-2 text-sm text-ink-dim">
+                <span className="text-[#8b83d6]">{String(i + 1).padStart(2, "0")}</span>
+                {o}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {phase.boundary && (
+        <p className="mt-4 rounded-xl border border-white/[0.06] bg-black/20 p-3 text-xs leading-relaxed text-ink-dim">
+          <b className="text-ink">边界：</b>{phase.boundary}
+        </p>
+      )}
+
+      <p className="mt-4 text-xs leading-relaxed text-ink-dim/80">
+        天级计划现在才生成——因为它会结合你在前面阶段的真实表现（已掌握什么、哪里薄弱）和学习画像，
+        比一开始就排死整个计划精准得多。
+      </p>
+
+      {error && <p className="mt-3 text-sm text-bad">{error}</p>}
+      <Button className="mt-5 w-full" onClick={generate} loading={busy}>
+        🏗️ 生成「{phase.title}」的天级计划
+      </Button>
+    </Card>
+  );
+}
+
 /* ================= 计划缺失：重新生成 ================= */
 function RegeneratePlan({ goal }: { goal: Goal }) {
   const [busy, setBusy] = useState(false);
@@ -263,9 +392,9 @@ function RegeneratePlan({ goal }: { goal: Goal }) {
     setBusy(true);
     try {
       const { streamChat } = await import("@/lib/ai/client");
-      const { PLANNER } = await import("@/lib/ai/prompts");
-      const { planSchema } = await import("@/lib/ai/client");
-      const { draftToPlan } = await import("@/lib/plan");
+      const { PLANNER_MASTER } = await import("@/lib/ai/prompts");
+      const { masterPlanSchema } = await import("@/lib/ai/client");
+      const { masterDraftToPlan } = await import("@/lib/plan");
       const card = {
         topic: goal.topic,
         direction: goal.direction || `系统学习${goal.topic}并完成实战`,
@@ -279,12 +408,12 @@ function RegeneratePlan({ goal }: { goal: Goal }) {
       };
       const full = await streamChat({
         task: "plan",
-        system: PLANNER(JSON.stringify(card, null, 2)),
-        messages: [{ role: "user", content: "请生成学习计划（只要 JSON）。" }],
+        system: PLANNER_MASTER(JSON.stringify(card, null, 2)),
+        messages: [{ role: "user", content: "请生成总学习纲要（只要 JSON）。" }],
         onDelta: () => {},
       });
-      const draft = planSchema.parse(extractJson(full));
-      useAppStore.getState().setPlan(goal.id, draftToPlan(draft, { ...card, deadline: null }));
+      const draft = masterPlanSchema.parse(extractJson(full));
+      useAppStore.getState().setPlan(goal.id, masterDraftToPlan(draft, { ...card, deadline: null }));
       toast.success("计划已生成，开始第一天！");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "生成失败，请重试（模型偶发超时）");
@@ -339,6 +468,19 @@ function PlanTimeline({
               {phase.status === "locked" && <Badge tone="dim">🔒 未解锁</Badge>}
             </div>
             <p className="mb-2 mt-1 pl-4 text-xs text-ink-dim">🏁 {phase.outcome}</p>
+            {phase.planned === false && phase.dayIds.length === 0 && phase.outline && (
+              <ul className="mb-2 ml-1 space-y-1 border-l border-border pl-3">
+                {phase.outline.slice(0, 6).map((o, i) => (
+                  <li key={i} className="flex gap-1.5 text-[11px] leading-relaxed text-ink-dim/80">
+                    <span className="text-[#8b83d6]/70">{i + 1}.</span>
+                    {o}
+                  </li>
+                ))}
+                {phase.outline.length > 6 && (
+                  <li className="pl-5 text-[11px] text-ink-dim/50">…共 {phase.outline.length} 项</li>
+                )}
+              </ul>
+            )}
             <div className="ml-1 space-y-1 border-l border-border pl-3">
               {phase.dayIds.map((dayId) => {
                 const day = plan.days[dayId];
@@ -411,6 +553,10 @@ function DayPanel({
     setLessonLoading(true);
     try {
       const { streamChat } = await import("@/lib/ai/client");
+      const mastered = Object.values(goal.plan?.days ?? {})
+        .filter((d) => (d.status === "passed" || d.status === "skipped") && d.id !== day.id)
+        .flatMap((d) => d.knowledgePoints.map((k) => k.text));
+      const phase = goal.plan?.phases.find((ph) => ph.id === day.phaseId);
       const ctx = JSON.stringify(
         {
           goal: {
@@ -420,6 +566,8 @@ function DayPanel({
             domainKind: goal.domainKind,
             learnerProfile: goal.learnerProfile ?? [],
           },
+          mastered,
+          phaseBoundary: phase?.boundary ?? "",
           today: {
             title: day.title,
             knowledgePoints: day.knowledgePoints.map((k) => k.text),

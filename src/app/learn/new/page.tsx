@@ -5,10 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Badge, Button, Card, Input, Textarea } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
 import { useChat } from "@/lib/use-chat";
-import { SOCRATIC_INTAKE, PLANNER } from "@/lib/ai/prompts";
+import { SOCRATIC_INTAKE, PLANNER_MASTER } from "@/lib/ai/prompts";
 import { extractJson, goalCardSchema, planSchema, type GoalCard } from "@/lib/ai/client";
 import { useAppStore } from "@/lib/store";
-import { draftToPlan } from "@/lib/plan";
+import { masterDraftToPlan } from "@/lib/plan";
+
+function planTitle(topic: string) {
+  return `${topic} 学习计划`;
+}
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { ArrowRight, Compass, Target } from "lucide-react";
@@ -136,22 +140,38 @@ function IntakeInner() {
     });
 
     await send({
-      system: PLANNER(JSON.stringify(finalCard, null, 2)),
-      userText: "目标卡已确认，请生成学习计划（只要 JSON）。",
+      system: PLANNER_MASTER(JSON.stringify(finalCard, null, 2)),
+      userText: "目标卡已确认，请生成总学习纲要（只要 JSON）。",
       task: "plan",
       onDone: async (full) => {
         setPlanStream(full);
         try {
-          const draft = planSchema.parse(extractJson(full));
-          const plan = draftToPlan(draft, finalCard);
+          const { masterPlanSchema } = await import("@/lib/ai/client");
+          const draft = masterPlanSchema.parse(extractJson(full));
+          const plan = masterDraftToPlan(draft, finalCard);
           useAppStore.getState().setPlan(goalId, plan);
-          toast.success("计划生成完毕，开始第一天！");
+          // 总计划入第二大脑关系链
+          const store = useAppStore.getState();
+          const outlineMd = plan.phases
+            .map((p, i) => {
+              const noteTitle = `${planTitle(finalCard.topic)} · 阶段${i + 1}：${p.title.replace(/^阶段\d+ · /, "")}`;
+              return `${i + 1}. [[${noteTitle}]] — ${p.outcome}`;
+            })
+            .join("\n");
+          store.addKnowledge(
+            [{
+              title: `${planTitle(finalCard.topic)} · 学习总纲要`,
+              body: `**方向：**${finalCard.direction}\n\n${plan.summary}\n\n${outlineMd}`,
+              domain: finalCard.topic,
+            }],
+            "learn",
+            `${finalCard.topic} · 总纲要`
+          );
+          toast.success("总纲要已生成。第一阶段的天级计划在目标页一键生成。");
           router.replace(`/learn/${goalId}`);
         } catch (e) {
           console.error(e);
-          toast.error(
-            "计划 JSON 解析失败——目标已保存为进行中，可从学习列表进入该目标重试。"
-          );
+          toast.error("纲要生成失败——目标已保存，可从列表进入该目标重试。");
           setStage("confirm");
         }
       },
@@ -275,7 +295,7 @@ function IntakeInner() {
               继续补充
             </Button>
             <Button onClick={confirmCard}>
-              确认，生成学习计划 <ArrowRight className="size-4" />
+              确认，生成总纲要 <ArrowRight className="size-4" />
             </Button>
           </div>
         </Card>
@@ -285,7 +305,7 @@ function IntakeInner() {
       {stage === "planning" && (
         <Card className="mt-6 animate-rise border-accent/40">
           <p className="mb-2 text-sm font-semibold text-white">
-            🏗️ 首席学习架构师正在设计「{card?.topic}」的阶段计划…
+            🏗️ 正在设计「{card?.topic}」的总学习纲要…
           </p>
           <pre className="max-h-40 overflow-hidden whitespace-pre-wrap text-xs text-ink-dim">
             {planStream.slice(0, 400) || "…"}

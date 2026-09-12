@@ -64,9 +64,13 @@ export interface DayPlan {
 export interface Phase {
   id: string;
   title: string;
-  outcome: string; // 本阶段结束时你能做什么
-  dayIds: string[];
+  outcome: string; // 本阶段结束时你能做什么（目标能力）
+  dayIds: string[]; // 天级计划生成后才有值
   status: NodeStatus;
+  outline?: string[]; // 总计划：本阶段要学什么的详尽清单
+  boundary?: string; // 总计划：范围与不学说明
+  estDays?: number; // 总计划：预估天数（灵活）
+  planned?: boolean; // 天级计划是否已生成
 }
 
 export interface Plan {

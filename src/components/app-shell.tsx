@@ -13,6 +13,7 @@ import {
   Settings2,
   Sparkles,
 } from "lucide-react";
+import { FeedbackWidget } from "@/components/feedback-widget";
 import type { ReactNode } from "react";
 
 const NAV = [
@@ -87,8 +88,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </nav>
         </div>
 
-        <div className="px-5 pb-4 pt-2">
-          <p className="text-[10px] text-ink-dim/40">数据只在你这台电脑上</p>
+        <div className="px-3 pb-4 pt-2">
+          <FeedbackWidget />
+          <p className="px-2.5 pt-2 text-[10px] text-ink-dim/40">数据只在你这台电脑上</p>
           {provider === "demo" && (
             <Link
               href="/settings"

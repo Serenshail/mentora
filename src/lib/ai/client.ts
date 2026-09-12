@@ -131,6 +131,57 @@ export const goalCardSchema = z.object({
 });
 export type GoalCard = z.infer<typeof goalCardSchema>;
 
+export const masterPlanSchema = z.object({
+  summary: z.string(),
+  totalDaysEstimate: z.number().optional().nullable(),
+  phases: z
+    .array(
+      z.object({
+        title: z.string(),
+        outcome: z.string(),
+        estDays: z.number().optional().nullable(),
+        outline: z.array(z.string()).min(1),
+        boundary: z.string().optional().nullable(),
+      })
+    )
+    .min(1),
+});
+export type MasterPlanDraft = z.infer<typeof masterPlanSchema>;
+
+export const phasePlanSchema = z.object({
+  boundary: z.string().optional().nullable(),
+  days: z
+    .array(
+      z.object({
+        title: z.string(),
+        knowledgePoints: z.array(z.string()).min(1),
+        resources: z.array(
+          z.object({ title: z.string(), url: z.string().optional().nullable(), why: z.string() })
+        ),
+        method: z.string(),
+        example: z
+          .object({
+            title: z.string(),
+            description: z.string(),
+            code: z.string().optional().nullable(),
+          })
+          .optional()
+          .nullable(),
+        acceptance: z
+          .array(
+            z.object({
+              kind: z.enum(["explain", "apply", "oral", "essay", "build"]),
+              question: z.string(),
+              hint: z.string().optional().nullable(),
+            })
+          )
+          .min(2),
+      })
+    )
+    .min(1),
+});
+export type PhasePlanDraft = z.infer<typeof phasePlanSchema>;
+
 export const planSchema = z.object({
   summary: z.string(),
   totalDays: z.number(),
