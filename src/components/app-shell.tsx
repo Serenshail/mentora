@@ -15,7 +15,7 @@ import {
 import { FeedbackWidget } from "@/components/feedback-widget";
 import { useAuth, useAutoPush } from "@/lib/auth-client";
 import { useRouter } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 const NAV = [
   { href: "/", label: "总览", icon: LayoutDashboard },
@@ -30,11 +30,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const provider = useAppStore((s) => s.settings.provider);
   const router = useRouter();
-  const { user, logout } = useAuth();
+  const { user, logout, checking } = useAuth();
   useAutoPush(!!user);
+
+  const isPublicPath = pathname === "/" || pathname === "/login";
+  useEffect(() => {
+    if (!checking && !user && !isPublicPath) {
+      router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+    }
+  }, [checking, user, isPublicPath, pathname, router]);
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
+
+  if (!user) {
+    return (
+      <div className="min-h-screen">
+        {children}
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen w-full">
@@ -128,7 +143,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      {/* 主区 */}
+      {/* 主区（未登录时全屏渲染：落地页/登录页自带结构） */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 移动端顶栏 */}
         <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-white/85 px-4 py-3 backdrop-blur-xl md:hidden">

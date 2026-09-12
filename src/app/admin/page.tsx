@@ -4,7 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Button, Card, Input } from "@/components/ui";
 import { cn, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
-import { ArrowDownUp, RefreshCcw, Search } from "lucide-react";
+import { ArrowDownUp, MoreHorizontal, RefreshCcw, Search, Trash2 } from "lucide-react";
 
 interface UserRow {
   email: string;
@@ -47,6 +47,32 @@ export default function AdminPage() {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const deleteUser = async (email: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: password || sessionStorage.getItem("mentora-admin-pwd"), email }),
+      });
+      const j = await res.json();
+      if (!res.ok) {
+        toast.error(j.error || "删除失败");
+        return;
+      }
+      setRows((prev) => (prev ?? []).filter((x) => x.email !== email));
+      toast.success(`已删除 ${email}（含云端数据）`);
+    } catch {
+      toast.error("删除失败");
+    } finally {
+      setBusy(false);
+      setConfirmDelete(null);
+      setMenuFor(null);
+    }
+  };
 
   const load = async (pwd?: string) => {
     const p = pwd ?? password;
@@ -225,7 +251,52 @@ export default function AdminPage() {
                     <td className="tabular px-3 py-3 text-ink-dim">
                       {r.booksCount} / {r.sessionsCount}
                     </td>
-                    <td className="px-3 py-3 text-right text-[12px] text-ink-dim">{relTime(r.updatedAt)}</td>
+                    <td className="relative px-3 py-3 text-right">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMenuFor(menuFor === key ? null : key);
+                        }}
+                        className="rounded-lg p-1.5 text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer"
+                      >
+                        <MoreHorizontal className="size-4" />
+                      </button>
+                      {menuFor === key && (
+                        <div
+                          className="absolute right-3 top-9 z-20 w-40 overflow-hidden rounded-xl border border-border bg-white shadow-lg"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            onClick={() => {
+                              setExpanded(open ? null : key);
+                              setMenuFor(null);
+                            }}
+                            className="w-full px-3.5 py-2.5 text-left text-xs text-ink hover:bg-black/[0.04] cursor-pointer"
+                          >
+                            展开详情
+                          </button>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard?.writeText(r.email);
+                              setMenuFor(null);
+                              toast.success("邮箱已复制");
+                            }}
+                            className="w-full px-3.5 py-2.5 text-left text-xs text-ink hover:bg-black/[0.04] cursor-pointer"
+                          >
+                            复制邮箱
+                          </button>
+                          <button
+                            onClick={() => {
+                              setConfirmDelete(r.email);
+                              setMenuFor(null);
+                            }}
+                            className="w-full px-3.5 py-2.5 text-left text-xs text-bad hover:bg-bad/[0.06] cursor-pointer"
+                          >
+                            删除用户…
+                          </button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                   {open && (
                     <tr className="border-b border-white/[0.05] bg-black/20">
@@ -268,6 +339,23 @@ export default function AdminPage() {
       <p className="mt-3 text-[11px] text-ink-dim/60">
         点击行展开详情 · 点列头排序 · 数据来自加密数据库，明文仅此页可见
       </p>
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setConfirmDelete(null)}>
+          <Card className="max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <p className="text-sm font-bold text-ink">删除 {confirmDelete}？</p>
+            <p className="mt-2 text-xs leading-relaxed text-ink-dim">
+              其账号与云端全部数据（学习目标、笔记、对话）将被永久移除，不可恢复。
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmDelete(null)}>取消</Button>
+              <Button variant="danger" size="sm" onClick={() => deleteUser(confirmDelete)} loading={busy}>
+                确认删除
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

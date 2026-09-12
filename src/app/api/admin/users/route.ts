@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import crypto from "node:crypto";
-import { dbGet, dbList } from "@/lib/server/db";
+import { dbGet, dbList, dbDelete, emailHash } from "@/lib/server/db";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -18,6 +18,26 @@ interface UserRecord {
   email: string;
   name: string;
   createdAt: string;
+}
+
+/** 删除用户：连同其云端数据一并移除 */
+export async function DELETE(req: NextRequest) {
+  const body = await req.json().catch(() => ({}));
+  if (!checkPassword(String(body.password ?? ""))) {
+    return Response.json({ error: "管理密码不对" }, { status: 401 });
+  }
+  const email = String(body.email ?? "").trim().toLowerCase();
+  if (!email) return Response.json({ error: "缺少 email" }, { status: 400 });
+
+  const rec = await dbGet<{ userId: string }>(`users/${emailHash(email)}.json`, { encrypted: true });
+  if (!rec) return Response.json({ error: "用户不存在" }, { status: 404 });
+
+  await dbDelete(`users/${emailHash(email)}.json`, rec._sha ?? null);
+  try {
+    const dataFile = await dbGet(`data/${rec.userId}.json`, { encrypted: true });
+    if (dataFile) await dbDelete(`data/${rec.userId}.json`, dataFile._sha ?? null);
+  } catch { /* 数据文件删除失败不阻断 */ }
+  return Response.json({ ok: true });
 }
 
 export async function POST(req: NextRequest) {

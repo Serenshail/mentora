@@ -102,6 +102,18 @@ export async function dbList(dir: string): Promise<{ name: string; sha: string }
     .map((f) => ({ name: f.name, sha: f.sha }));
 }
 
+/** 删文件（404 视为成功） */
+export async function dbDelete(path: string, sha: string | null): Promise<void> {
+  let res = await ghApi(path, "DELETE", sha ? { sha } : undefined);
+  if (res.status === 404) return;
+  if (res.status === 422) {
+    const cur = await ghApi(path, "GET");
+    const fresh = (cur.json as { sha?: string })?.sha;
+    res = await ghApi(path, "DELETE", fresh ? { sha: fresh } : undefined);
+  }
+  if (res.status >= 300) throw new Error(`DB 删除失败（${res.status}）`);
+}
+
 export function emailHash(email: string): string {
   return crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 24);
 }

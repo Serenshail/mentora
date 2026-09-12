@@ -5,12 +5,21 @@ import { useRouter } from "next/navigation";
 import { Badge, Button, Card, PageHeader, ProgressRing, StatusDot } from "@/components/ui";
 import { useAppStore, useDueReviews } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
+import { useAuth } from "@/lib/auth-client";
+import Landing from "@/components/landing";
 import { cn, streakFrom } from "@/lib/utils";
 import {
   ArrowRight, BookOpen, Brain, Compass, Flame, GraduationCap, Zap,
 } from "lucide-react";
 
-export default function Dashboard() {
+export default function Home() {
+  const { user, checking } = useAuth();
+  if (checking) return <div className="min-h-screen" />;
+  if (!user) return <Landing />;
+  return <Dashboard />;
+}
+
+function Dashboard() {
   const hydrated = useHydrated();
   const router = useRouter();
   const userName = useAppStore((s) => s.settings.userName);

@@ -1,0 +1,92 @@
+/* ============================================================
+ * PopText — 手写体文字特效样式 v4
+ * 效果:逐字母打字弹入;打完后完全静止;
+ *       鼠标划过任意字母:该字母跳起并变成一个 3D 甜品图标
+ *       (Fluent 3D emoji,形状与字母呼应者优先,其余随机),
+ *       悬浮呼吸摇摆后缩回,恢复原字母。图标资源在 ./emoji/。
+ *       打字落位时也会来一次更短的变形。
+ * ============================================================ */
+
+.pop-text{
+  /* 手写体:按需替换或叠加自定义字体 */
+  font-family:'Great Vibes','Segoe Script','Brush Script MT',cursive;
+}
+
+/* 单个字母(容器) */
+.pop-text .pt-ch{
+  display:inline-block;
+  white-space:pre;
+  line-height:1;
+  position:relative;           /* 气球图层的定位基准 */
+  padding:.08em .1em;          /* 给气球留出膨胀空间,负 margin 抵消 */
+  margin:-.08em -.1em;
+  opacity:0;
+  transform:translateX(.7em) translateY(.18em) scale(.3) rotate(8deg);
+  filter:blur(5px);
+  will-change:transform,filter,opacity;
+  cursor:default;
+  -webkit-user-select:none;user-select:none;
+}
+
+/* 原字形图层(JS 控制其透明度实现"被气球取代/恢复") */
+.pop-text .pt-glyph{
+  display:inline-block;
+  position:relative;
+}
+
+/* 入场完成后的稳定态 */
+.pop-text .pt-ch.pt-settled{
+  opacity:1;
+  transform:none;
+  filter:none;
+}
+
+/* 打字入场:右侧滑入 + 弹性落位 */
+.pop-text .pt-ch.pt-in{
+  animation:ptIn .55s cubic-bezier(.2,1.9,.4,1) forwards;
+}
+@keyframes ptIn{
+  to{opacity:1;transform:none;filter:blur(0)}
+}
+
+/* 3D 图标图层(JS 注入 <img>,尺寸随字号缩放) */
+.pop-text .pt-bb{
+  position:absolute;
+  left:50%;top:50%;
+  width:.96em;height:.96em;   /* 光学尺寸≈字母大写高度,不压过排版 */
+  transform:translate(-50%,-50%) scale(.55);
+  opacity:0;
+  pointer-events:none;
+  user-select:none;
+  filter:drop-shadow(0 .05em .07em rgba(0,0,0,.28));
+}
+
+/* 交换瞬间的小光点(一次 5 颗,细微的惊喜感) */
+.pop-text .pt-spark{
+  position:absolute;left:50%;top:50%;
+  width:.055em;height:.055em;border-radius:50%;
+  pointer-events:none;user-select:none;
+  animation:ptSpark .46s cubic-bezier(.2,.7,.3,1) forwards;
+}
+@keyframes ptSpark{
+  from{transform:translate(-50%,-50%) scale(1);opacity:.95}
+  to{transform:translate(calc(-50% + var(--dx,10px)),calc(-50% + var(--dy,-10px))) scale(.15);opacity:0}
+}
+
+/* 打字光标 */
+.pop-text .pt-cursor{
+  display:inline-block;
+  width:2px;height:.85em;
+  background:currentColor;
+  margin-left:.03em;vertical-align:-.08em;
+  border-radius:2px;
+  animation:ptBlink 1s step-end infinite;
+}
+.pop-text .pt-cursor.pt-done{display:none}
+@keyframes ptBlink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* 尊重系统减弱动态偏好:直接显示最终文字,不做任何变形 */
+@media (prefers-reduced-motion: reduce){
+  .pop-text .pt-ch{opacity:1;transform:none;filter:none;animation:none !important}
+  .pop-text .pt-cursor{display:none}
+}
