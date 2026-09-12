@@ -1,0 +1,258 @@
+"use client";
+
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Badge, Button, Card, Input, Textarea } from "@/components/ui";
+import { Markdown } from "@/components/markdown";
+import { useChat } from "@/lib/use-chat";
+import { SOCRATIC_INTAKE, PLANNER } from "@/lib/ai/prompts";
+import { extractJson, goalCardSchema, planSchema, type GoalCard } from "@/lib/ai/client";
+import { useAppStore } from "@/lib/store";
+import { draftToPlan } from "@/lib/plan";
+import { uid } from "@/lib/utils";
+import { toast } from "sonner";
+import { ArrowRight, Compass, Target } from "lucide-react";
+
+function IntakeInner() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const topic = params.get("topic") || "Python";
+  const userName = useAppStore((s) => s.settings.userName);
+
+  const { messages, pending, streaming, error, send } = useChat();
+  const [input, setInput] = useState("");
+  const [card, setCard] = useState<GoalCard | null>(null);
+  const [stage, setStage] = useState<"chat" | "confirm" | "planning">("chat");
+  const [planStream, setPlanStream] = useState("");
+  const kicked = useRef(false);
+
+  // 开场：自动发出第一条
+  useEffect(() => {
+    if (kicked.current) return;
+    kicked.current = true;
+    void send({
+      system: SOCRATIC_INTAKE(topic, userName),
+      userText: `我想学${topic}`,
+      task: "intake",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleDone = (full: string) => {
+    if (stage !== "chat") return;
+    if (!full.includes("<!--GOAL_READY-->")) return;
+    try {
+      const jsonText = full.split("<!--GOAL_READY-->")[1] ?? "";
+      const parsed = goalCardSchema.parse(extractJson(jsonText));
+      setCard({ ...parsed, deadline: parsed.deadline || undefined });
+      setStage("confirm");
+    } catch {
+      toast.error("目标卡解析失败，请再补充一句，让教练重新总结。");
+    }
+  };
+
+  // 发送用户消息
+  const doSend = () => {
+    const text = input.trim();
+    if (!text || streaming) return;
+    setInput("");
+    void send({
+      system: SOCRATIC_INTAKE(topic, userName),
+      userText: text,
+      onDone: handleDone,
+      task: "intake",
+    });
+  };
+
+  // 确认目标卡 → 生成计划
+  const confirmCard = async () => {
+    if (!card) return;
+    const goalId = uid("goal");
+    setStage("planning");
+
+    const finalCard = card;
+    // 先把目标写进 store（含引导对话）
+    useAppStore.getState().addGoal({
+      id: goalId,
+      topic: finalCard.topic,
+      direction: finalCard.direction,
+      domainKind: finalCard.domainKind,
+      motivation: finalCard.motivation,
+      background: finalCard.background,
+      deadline: finalCard.deadline || undefined,
+      weeklyHours: finalCard.weeklyHours,
+      successCriteria: finalCard.successCriteria,
+      status: "active",
+      createdAt: new Date().toISOString(),
+      quizLog: [],
+      intakeTranscript: messages.map((m) => ({ role: m.role, content: m.content })),
+    });
+
+    await send({
+      system: PLANNER(JSON.stringify(finalCard, null, 2)),
+      userText: "目标卡已确认，请生成学习计划（只要 JSON）。",
+      task: "plan",
+      onDone: async (full) => {
+        setPlanStream(full);
+        try {
+          const draft = planSchema.parse(extractJson(full));
+          const plan = draftToPlan(draft, finalCard);
+          useAppStore.getState().setPlan(goalId, plan);
+          toast.success("计划生成完毕，开始第一天！");
+          router.replace(`/learn/${goalId}`);
+        } catch (e) {
+          console.error(e);
+          toast.error("计划 JSON 解析失败，请回退重试或换个说法描述目标。");
+          useAppStore.getState().removeGoal(goalId);
+          setStage("confirm");
+        }
+      },
+    });
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl">
+      <div className="mb-5 flex items-center gap-3">
+        <div className="flex size-10 items-center justify-center rounded-xl bg-accent/15 text-[#b7adff] border border-accent/25">
+          <Compass className="size-5" />
+        </div>
+        <div>
+          <h1 className="text-lg font-bold text-white">方向引导：学{topic}</h1>
+          <p className="text-xs text-ink-dim">
+            苏格拉底式追问，直到你的方向明确为止 —— 然后才生成计划
+          </p>
+        </div>
+        {stage === "planning" && <Badge tone="accent">计划生成中…</Badge>}
+      </div>
+
+      {/* 对话区 */}
+      <div className="space-y-4">
+        {messages.map((m) => (
+          <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
+            {m.role === "user" ? (
+              <div className="max-w-[80%] rounded-2xl rounded-br-md bg-accent/20 border border-accent/30 px-4 py-2.5 text-sm">
+                {m.content}
+              </div>
+            ) : (
+              <Card className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
+                <Markdown text={m.content.split("<!--GOAL_READY-->")[0]} />
+              </Card>
+            )}
+          </div>
+        ))}
+        {pending && (
+          <Card className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
+            <Markdown text={pending.split("<!--GOAL_READY-->")[0]} />
+            <span className="stream-cursor" />
+          </Card>
+        )}
+        {error && (
+          <p className="text-sm text-bad">{error} —— 可在设置页检查 Key / 网络。</p>
+        )}
+      </div>
+
+      {/* 目标卡确认 */}
+      {stage === "confirm" && card && (
+        <Card className="mt-6 animate-rise border-accent/40">
+          <div className="mb-4 flex items-center gap-2">
+            <Target className="size-5 text-[#b7adff]" />
+            <h3 className="font-bold text-white">目标卡确认</h3>
+            <Badge tone="accent">可修改</Badge>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs text-ink-dim sm:col-span-2">
+              一句话方向（学完后能做成什么）
+              <Input
+                className="mt-1"
+                value={card.direction}
+                onChange={(e) => setCard({ ...card, direction: e.target.value })}
+              />
+            </label>
+            <label className="text-xs text-ink-dim">
+              每周可投入（小时）
+              <Input
+                className="mt-1"
+                type="number"
+                min={1}
+                max={80}
+                value={card.weeklyHours}
+                onChange={(e) =>
+                  setCard({ ...card, weeklyHours: Number(e.target.value) || 8 })
+                }
+              />
+            </label>
+            <label className="text-xs text-ink-dim">
+              期望完成日期（可选）
+              <Input
+                className="mt-1"
+                type="date"
+                value={card.deadline ?? ""}
+                onChange={(e) => setCard({ ...card, deadline: e.target.value || undefined })}
+              />
+            </label>
+            <label className="text-xs text-ink-dim sm:col-span-2">
+              成功标准（每行一条）
+              <Textarea
+                className="mt-1"
+                rows={3}
+                value={card.successCriteria.join("\n")}
+                onChange={(e) =>
+                  setCard({
+                    ...card,
+                    successCriteria: e.target.value.split("\n").filter(Boolean),
+                  })
+                }
+              />
+            </label>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setStage("chat")}>
+              继续补充
+            </Button>
+            <Button onClick={confirmCard}>
+              确认，生成学习计划 <ArrowRight className="size-4" />
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* 计划生成中 */}
+      {stage === "planning" && (
+        <Card className="mt-6 animate-rise border-accent/40">
+          <p className="mb-2 text-sm font-semibold text-white">
+            🏗️ 首席学习架构师正在设计「{card?.topic}」的阶段计划…
+          </p>
+          <pre className="max-h-40 overflow-hidden whitespace-pre-wrap text-xs text-ink-dim">
+            {planStream.slice(0, 400) || "…"}
+          </pre>
+        </Card>
+      )}
+
+      {/* 输入框 */}
+      {stage === "chat" && (
+        <div className="sticky bottom-20 mt-6 md:bottom-4">
+          <div className="flex gap-2">
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && doSend()}
+              placeholder="回答教练的问题…（Enter 发送）"
+              disabled={streaming}
+            />
+            <Button onClick={doSend} loading={streaming} className="shrink-0">
+              发送
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function LearnNewPage() {
+  return (
+    <Suspense fallback={<div className="py-20 text-center text-ink-dim">加载中…</div>}>
+      <IntakeInner />
+    </Suspense>
+  );
+}

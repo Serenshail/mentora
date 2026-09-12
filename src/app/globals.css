@@ -1,26 +1,164 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: #0b0d12;
+  --color-surface: #12151d;
+  --color-surface-2: #181c27;
+  --color-border: #232838;
+  --color-ink: #e7eaf2;
+  --color-ink-dim: #9aa3b8;
+  --color-accent: #7c6cff;
+  --color-accent-2: #22d3ee;
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-bad: #f87171;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(124, 108, 255, 0.14), transparent 60%),
+    radial-gradient(900px 500px at -10% 20%, rgba(34, 211, 238, 0.08), transparent 55%),
+    var(--color-bg);
+  color: var(--color-ink);
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(124, 108, 255, 0.35);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2a3042;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---- markdown 内容排版 ---- */
+.prose-mentora {
+  line-height: 1.75;
+  font-size: 0.925rem;
+  word-break: break-word;
+}
+.prose-mentora h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 1.4em 0 0.6em;
+  color: #fff;
+}
+.prose-mentora h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 1.2em 0 0.5em;
+}
+.prose-mentora p {
+  margin: 0.6em 0;
+}
+.prose-mentora ul,
+.prose-mentora ol {
+  margin: 0.6em 0;
+  padding-left: 1.4em;
+}
+.prose-mentora ul {
+  list-style: disc;
+}
+.prose-mentora ol {
+  list-style: decimal;
+}
+.prose-mentora li {
+  margin: 0.3em 0;
+}
+.prose-mentora code {
+  background: rgba(124, 108, 255, 0.12);
+  color: #c4b5fd;
+  border-radius: 5px;
+  padding: 0.1em 0.4em;
+  font-size: 0.85em;
+  font-family: var(--font-mono);
+}
+.prose-mentora pre {
+  background: #0d1017;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 0.9em 0;
+}
+.prose-mentora pre code {
+  background: none;
+  padding: 0;
+  color: #d8e0f0;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.prose-mentora blockquote {
+  border-left: 3px solid var(--color-accent);
+  padding-left: 12px;
+  color: var(--color-ink-dim);
+  margin: 0.8em 0;
+}
+.prose-mentora a {
+  color: var(--color-accent-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prose-mentora strong {
+  color: #fff;
+}
+.prose-mentora table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  width: 100%;
+}
+.prose-mentora th,
+.prose-mentora td {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  text-align: left;
+}
+.prose-mentora hr {
+  border-color: var(--color-border);
+  margin: 1.2em 0;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-rise {
+  animation: rise 0.35s ease both;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+.stream-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 1.05em;
+  vertical-align: text-bottom;
+  background: var(--color-accent);
+  border-radius: 2px;
+  margin-left: 2px;
+  animation: blink 0.9s infinite;
 }
