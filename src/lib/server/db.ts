@@ -92,6 +92,16 @@ export async function dbPut<T>(
   return { sha: (res.json as { content?: { sha?: string } })?.content?.sha ?? "" };
 }
 
+/** 列目录（GitHub Contents API），返回 [{name, sha}] */
+export async function dbList(dir: string): Promise<{ name: string; sha: string }[]> {
+  const { status, json } = await ghApi(dir, "GET");
+  if (status === 404) return [];
+  if (status !== 200) throw new Error(`DB 列目录失败（${status}）`);
+  return (json as { name: string; sha: string }[])
+    .filter((f) => f.name.endsWith(".json"))
+    .map((f) => ({ name: f.name, sha: f.sha }));
+}
+
 export function emailHash(email: string): string {
   return crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 24);
 }
