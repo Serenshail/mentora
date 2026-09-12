@@ -11,11 +11,59 @@ import {
 import { extractJson, personaDistillSchema, streamChat } from "@/lib/ai/client";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { Compass, Plus, Sparkles, Trash2, UserPlus, Users, Zap } from "lucide-react";
+import { Compass, FlaskConical, Plus, Trash2, UserPlus, Users, Zap } from "lucide-react";
 import type { Persona as BuiltinPersona } from "@/lib/ai/prompts";
 import type { CustomPersona } from "@/lib/types";
 
 type ResolvedPersona = BuiltinPersona | (CustomPersona & { id: string });
+
+/* 内置 12 席的 hedcut 点刻肖像（public/personas/）；自建人物回落到墨色首字母 */
+const PORTRAITS: Record<string, string> = {
+  naval: "/personas/naval.jpg",
+  jobs: "/personas/jobs.jpg",
+  munger: "/personas/munger.jpg",
+  feynman: "/personas/feynman.jpg",
+  taleb: "/personas/taleb.jpg",
+  graham: "/personas/graham.jpg",
+  karpathy: "/personas/karpathy.jpg",
+  musk: "/personas/musk.jpg",
+  zhangxuefeng: "/personas/zhangxuefeng.jpg",
+  zhangyiming: "/personas/zhangyiming.jpg",
+  mrbeast: "/personas/mrbeast.jpg",
+  sutskever: "/personas/sutskever.jpg",
+};
+
+function PersonaAvatar({
+  id,
+  name,
+  className,
+}: {
+  id: string;
+  name: string;
+  className?: string; // 尺寸由调用方给，如 size-9 / size-10
+}) {
+  const src = PORTRAITS[id];
+  if (src) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt={name}
+        className={cn("shrink-0 rounded-xl border border-border bg-surface-2 object-cover", className)}
+      />
+    );
+  }
+  return (
+    <div
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-xl bg-[#1a1a1a] font-black text-white",
+        className
+      )}
+    >
+      {name.slice(0, 1)}
+    </div>
+  );
+}
 
 export default function CouncilPage() {
   const hydrated = useHydrated();
@@ -223,7 +271,7 @@ export default function CouncilPage() {
       addSessionMsg(active.id, {
         id: uid("m"),
         role: "assistant",
-        content: `## 🪑 圆桌纪要\n\n${full}`,
+        content: `## 圆桌纪要\n\n${full}`,
         at: new Date().toISOString(),
       });
     } catch {
@@ -338,14 +386,14 @@ export default function CouncilPage() {
                     key={s.id}
                     className={cn(
                       "group flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition cursor-pointer",
-                      activeId === s.id ? "bg-accent/15 text-white" : "text-ink-dim hover:bg-white/5"
+                      activeId === s.id ? "bg-accent/[0.08] font-medium text-accent" : "text-ink-dim hover:bg-black/[0.04]"
                     )}
                     onClick={() => setActiveId(s.id)}
                   >
                     {s.personaId === "roundtable" ? (
                       <Users className="size-3.5 shrink-0" />
                     ) : (
-                      <span className={cn("size-2 shrink-0 rounded-full bg-gradient-to-br", p?.color)} />
+                      <span className={cn("size-2 shrink-0 rounded-full", activeId === s.id ? "bg-accent" : "bg-black/20")} />
                     )}
                     <span className="truncate">{s.title}</span>
                     <button
@@ -375,14 +423,14 @@ export default function CouncilPage() {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <button
                   onClick={() => startWith("roundtable")}
-                  className="group rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 to-cyan-500/10 p-5 text-left transition hover:border-accent/70 cursor-pointer sm:col-span-2 lg:col-span-3"
+                  className="group rounded-2xl border border-accent/25 bg-accent/[0.04] p-5 text-left transition hover:border-accent/45 cursor-pointer sm:col-span-2 lg:col-span-3"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="flex size-11 items-center justify-center rounded-xl bg-gradient-to-br from-[#7c6cff] to-[#22d3ee]">
+                    <div className="flex size-11 items-center justify-center rounded-xl bg-[#1a1a1a]">
                       <Users className="size-5 text-white" />
                     </div>
                     <div>
-                      <p className="font-bold text-white">圆桌研讨会</p>
+                      <p className="font-bold text-ink">圆桌研讨会</p>
                       <p className="text-xs text-ink-dim">
                         每人独立发言，主持人收拢成纪要。
                       </p>
@@ -393,10 +441,10 @@ export default function CouncilPage() {
                 {/* 添加智能体 */}
                 <button
                   onClick={() => setForgeOpen(true)}
-                  className="flex min-h-[108px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-accent/50 bg-accent/5 p-4 text-ink-dim transition hover:border-accent/80 hover:text-[#b7adff] cursor-pointer"
+                  className="flex min-h-[108px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-accent/35 bg-accent/[0.03] p-4 text-ink-dim transition hover:border-accent/60 hover:text-accent cursor-pointer"
                 >
                   <UserPlus className="size-6" />
-                  <span className="text-sm font-semibold">添加智能体</span>
+                  <span className="text-sm font-semibold">添加人物</span>
                   <span className="text-[11px]">说一个名字，蒸馏到本人降临</span>
                 </button>
 
@@ -405,14 +453,12 @@ export default function CouncilPage() {
                   <div key={c.id} className="relative">
                     <button
                       onClick={() => startWith(c.id)}
-                      className="w-full rounded-2xl border border-[#8b83d6]/40 bg-[#8b83d6]/5 p-4 text-left transition hover:border-[#8b83d6]/70 hover:bg-surface-2 cursor-pointer h-full"
+                      className="w-full rounded-2xl border border-accent/25 bg-accent/[0.03] p-4 text-left transition hover:border-accent/45 hover:bg-accent/[0.05] cursor-pointer h-full"
                     >
                       <div className="flex items-center gap-2.5">
-                        <div className={cn("flex size-9 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-black text-white", c.color)}>
-                          {c.name.slice(0, 1)}
-                        </div>
+                        <PersonaAvatar id={c.id} name={c.name} className="size-9 text-sm" />
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-bold text-white">{c.name}</p>
+                          <p className="truncate text-sm font-bold text-ink">{c.name}</p>
                           <p className="text-[11px] text-ink-dim">{c.tag} · 自建</p>
                         </div>
                       </div>
@@ -424,7 +470,7 @@ export default function CouncilPage() {
                         toast.success(`已移除 ${c.name}`);
                       }}
                       className="absolute right-2 top-2 rounded-lg p-1.5 text-ink-dim/60 hover:bg-bad/10 hover:text-bad cursor-pointer"
-                      title="删除该智能体"
+                      title="删除该人物"
                     >
                       <Trash2 className="size-3.5" />
                     </button>
@@ -435,19 +481,12 @@ export default function CouncilPage() {
                   <button
                     key={p.id}
                     onClick={() => startWith(p.id)}
-                    className="group card-lift rounded-2xl border border-border bg-surface/70 p-4 text-left transition hover:border-accent/50 hover:bg-surface-2 cursor-pointer"
+                    className="group card-lift rounded-2xl border border-border bg-white p-4 text-left transition hover:border-accent/40 cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5">
-                      <div
-                        className={cn(
-                          "flex size-9 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-black text-white",
-                          p.color
-                        )}
-                      >
-                        {p.name.slice(0, 1)}
-                      </div>
+                      <PersonaAvatar id={p.id} name={p.name} className="size-9 text-sm" />
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-bold text-white">{p.name}</p>
+                        <p className="truncate text-sm font-bold text-ink">{p.name}</p>
                         <p className="text-[11px] text-ink-dim">{p.tag}</p>
                       </div>
                     </div>
@@ -456,7 +495,7 @@ export default function CouncilPage() {
                 ))}
               </div>
 
-              <Card className="mt-6 border-warn/30 bg-warn/5">
+              <Card className="mt-6 border-warn/25 bg-warn/[0.05]">
                 <p className="flex items-center gap-2 text-sm font-bold text-warn">
                   <Zap className="size-4" /> 规矩只有一条
                 </p>
@@ -470,11 +509,11 @@ export default function CouncilPage() {
               <Card className="mb-4 flex items-center gap-3">
                 {isRoundtable ? (
                   <>
-                    <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#7c6cff] to-[#22d3ee]">
+                    <div className="flex size-10 items-center justify-center rounded-xl bg-[#1a1a1a]">
                       <Users className="size-5 text-white" />
                     </div>
                     <div>
-                      <p className="font-bold text-white">圆桌研讨会</p>
+                      <p className="font-bold text-ink">圆桌研讨会</p>
                       <p className="text-xs text-ink-dim">
                         {(active?.participants ?? []).length} 位与会者全员独立发言 + 主持人纪要
                       </p>
@@ -482,16 +521,9 @@ export default function CouncilPage() {
                   </>
                 ) : (
                   <>
-                    <div
-                      className={cn(
-                        "flex size-10 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-black text-white",
-                        persona?.color
-                      )}
-                    >
-                      {persona?.name.slice(0, 1)}
-                    </div>
+                    <PersonaAvatar id={persona?.id ?? ""} name={persona?.name ?? "?"} className="size-10 text-sm" />
                     <div>
-                      <p className="font-bold text-white">{persona?.name}</p>
+                      <p className="font-bold text-ink">{persona?.name}</p>
                       <p className="text-xs text-ink-dim">{persona?.tag} · {persona?.bio}</p>
                     </div>
                   </>
@@ -502,14 +534,14 @@ export default function CouncilPage() {
                 {messages.map((m) => (
                   <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                     {m.role === "user" ? (
-                      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-accent/20 border border-accent/30 px-4 py-2.5 text-sm">
+                      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1a1a1a] px-4 py-2.5 text-sm text-white">
                         {m.content}
                       </div>
                     ) : (
                       <Card
                         className={cn(
                           "max-w-[92%] rounded-2xl rounded-bl-md py-4",
-                          m.content.startsWith("## 🪑") && "border-accent/50 bg-accent/5"
+                          m.content.startsWith("## 圆桌纪要") && "border-accent/25 bg-accent/[0.04]"
                         )}
                       >
                         <Markdown text={m.content} />
@@ -533,7 +565,7 @@ export default function CouncilPage() {
                       const text = rtTakes[pid];
                       return (
                         <Card key={pid} className="py-3.5">
-                          <p className="mb-1.5 text-xs font-bold text-[#b7adff]">{p.name}</p>
+                          <p className="mb-1.5 text-xs font-bold text-accent">{p.name}</p>
                           {text ? (
                             <div className="text-sm text-ink-dim">
                               <Markdown text={text} />
@@ -546,8 +578,8 @@ export default function CouncilPage() {
                       );
                     })}
                     {rtHost && (
-                      <Card className="border-accent/50 bg-accent/5 py-3.5 sm:col-span-2">
-                        <p className="mb-1.5 text-xs font-bold text-[#b7adff]">🪑 主持人纪要（生成中）</p>
+                      <Card className="border-accent/25 bg-accent/[0.04] py-3.5 sm:col-span-2">
+                        <p className="mb-1.5 text-xs font-bold text-accent">主持人纪要（生成中）</p>
                         <Markdown text={rtHost} />
                         <span className="stream-cursor" />
                       </Card>
@@ -601,12 +633,10 @@ export default function CouncilPage() {
                 }
                 className={cn(
                   "flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-xs transition cursor-pointer",
-                  checked ? "border-accent/60 bg-accent/15 text-white" : "border-border text-ink-dim hover:text-ink"
+                  checked ? "border-accent/30 bg-accent/[0.08] font-medium text-accent" : "border-border bg-white text-ink-dim hover:text-ink"
                 )}
               >
-                <span className={cn("flex size-6 items-center justify-center rounded-lg bg-gradient-to-br text-[10px] font-black text-white", p.color)}>
-                  {p.name.slice(0, 1)}
-                </span>
+                <PersonaAvatar id={p.id} name={p.name} className="size-6 rounded-lg text-[10px]" />
                 <span className="truncate">{p.name}</span>
               </button>
             );
@@ -623,11 +653,11 @@ export default function CouncilPage() {
       </Modal>
 
       {/* 自定义智能体锻造 */}
-      <Modal open={forgeOpen} onClose={() => { setForgeOpen(false); setForged(null); }} title="添加智能体" wide>
+      <Modal open={forgeOpen} onClose={() => { setForgeOpen(false); setForged(null); }} title="添加人物" wide>
         {!forged ? (
           <div className="space-y-3">
             <p className="text-sm text-ink-dim">
-              输入一个真实人物的名字（如「王阳明」「贝佐斯」「Jony Ive」），AI 会先确认这是谁，再深度蒸馏：思想体系、真实原话、语言指纹、论敌立场——直到仿佛本人降临。
+              输入一个真实人物的名字（如「王阳明」「贝佐斯」「Jony Ive」），会先确认这是谁，再深度蒸馏：思想体系、真实原话、语言指纹、论敌立场——直到仿佛本人降临。
             </p>
             <Input
               placeholder="名字，如：王阳明"
@@ -635,29 +665,27 @@ export default function CouncilPage() {
               onChange={(e) => setForgeName(e.target.value)}
             />
             <Input
-              placeholder="补充线索（可选）：领域/时代/代表作，帮助 AI 认对人"
+              placeholder="补充线索（可选）：领域/时代/代表作，帮助认对人"
               value={forgeHint}
               onChange={(e) => setForgeHint(e.target.value)}
             />
             <div className="flex justify-end">
               <Button onClick={forge} loading={forging}>
-                <Sparkles className="size-4" /> 开始深度蒸馏
+                <FlaskConical className="size-4" /> 开始深度蒸馏
               </Button>
             </div>
           </div>
         ) : (
           <div className="space-y-4">
-            <Card className="border-accent/40 bg-accent/5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-[#b7adff]">身份确认</p>
+            <Card className="border-accent/25 bg-accent/[0.04]">
+              <p className="text-xs font-semibold uppercase tracking-wider text-accent">身份确认</p>
               <p className="mt-1.5 text-sm text-ink">{forged.identityNote}</p>
               <p className="mt-2 text-xs text-ink-dim">不是你想的那个人？改个更具体的名字或补充线索再试。</p>
             </Card>
             <div className="flex items-center gap-3">
-              <div className={cn("flex size-11 items-center justify-center rounded-xl bg-gradient-to-br text-base font-black text-white", forged.color)}>
-                {forged.name.slice(0, 1)}
-              </div>
+              <PersonaAvatar id={forged.name} name={forged.name} className="size-11 text-base" />
               <div>
-                <p className="font-bold text-white">{forged.name}</p>
+                <p className="font-bold text-ink">{forged.name}</p>
                 <p className="text-xs text-ink-dim">{forged.tag} · {forged.bio}</p>
               </div>
             </div>

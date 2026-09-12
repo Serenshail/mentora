@@ -37,7 +37,7 @@ export function WikiMarkdown({
           return (
             <span
               key={i}
-              className="mx-0.5 inline-flex items-center rounded-md border border-dashed border-accent/50 bg-accent/10 px-1.5 py-0.5 text-[0.85em] text-[#b7adff]"
+              className="mx-0.5 inline-flex items-center rounded-md border border-dashed border-accent/35 bg-accent/[0.05] px-1.5 py-0.5 text-[0.85em] text-accent"
               title="该笔记还不存在"
             >
               {title} ⋯
@@ -56,14 +56,14 @@ export function WikiMarkdown({
                   return (
                     <button
                       onClick={() => onOpen(id)}
-                      className="mx-0.5 inline-flex items-center rounded-md border border-accent/40 bg-accent/15 px-1.5 py-0.5 text-[0.85em] font-medium text-[#b7adff] hover:bg-accent/25 cursor-pointer"
+                      className="mx-0.5 inline-flex items-center rounded-md border border-accent/25 bg-accent/[0.06] px-1.5 py-0.5 text-[0.85em] font-medium text-accent hover:bg-accent/[0.12] cursor-pointer"
                     >
-                      🔗 {children}
+                      {children}
                     </button>
                   );
                 }
                 return (
-                  <a href={href} target="_blank" rel="noreferrer" className="text-[#22d3ee] underline">
+                  <a href={href} target="_blank" rel="noreferrer" className="text-accent underline">
                     {children}
                   </a>
                 );

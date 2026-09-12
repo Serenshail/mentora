@@ -1,37 +1,57 @@
 @import "tailwindcss";
 
+/* 品牌字标：Great Vibes 手写体（本地自托管，OFL 许可） */
+@font-face {
+  font-family: "Great Vibes";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/great-vibes.woff2") format("woff2");
+}
+.font-brand {
+  font-family: "Great Vibes", "Segoe Script", cursive;
+  letter-spacing: 0.01em;
+}
+
+/* ============================================================
+ * Mentora 设计令牌 —— 明亮 · 白底办公级
+ * 参考：Vercel Geist / Linear / Notion / Things
+ * 原则：纸面纯白、发丝边框、墨色主按钮、单一靛蓝强调色、
+ *       无渐变泛光、无 AI 感装饰——质感来自克制与精确。
+ * ============================================================ */
 @theme inline {
-  --color-bg: #08090d;
-  --color-surface: #0f1218;
-  --color-surface-2: #161a23;
-  --color-border: #1e2330;
-  --color-ink: #eceff6;
-  --color-ink-dim: #98a1b6;
-  --color-accent: #7c6cff;
-  --color-accent-2: #22d3ee;
-  --color-ok: #34d399;
-  --color-warn: #fbbf24;
-  --color-bad: #f87171;
+  /* 底色：微灰纸面，浮起纯白卡片 */
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-2: #f4f4f5;
+  --color-border: #e8e8e6;
+  /* 墨色：近黑而非纯黑（Apple HIG） */
+  --color-ink: #1a1a1a;
+  --color-ink-dim: #6e6e73;
+  /* 强调：Linear 式靛蓝，只用于聚焦、激活、链接 */
+  --color-accent: #5b54e6;
+  --color-accent-2: #0e7490;
+  /* 语义色：白底可读版本 */
+  --color-ok: #047857;
+  --color-warn: #b45309;
+  --color-bad: #dc2626;
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, "PingFang SC",
     "Microsoft YaHei", sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
   font-size: 15.5px;
 }
 
 body {
-  background:
-    radial-gradient(1400px 700px at 85% -15%, rgba(124, 108, 255, 0.11), transparent 55%),
-    radial-gradient(1000px 550px at -15% 15%, rgba(34, 211, 238, 0.06), transparent 50%),
-    var(--color-bg);
+  background: var(--color-bg);
   color: var(--color-ink);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.005em;
 }
 
 h1, h2, h3 {
@@ -39,35 +59,37 @@ h1, h2, h3 {
 }
 
 ::selection {
-  background: rgba(124, 108, 255, 0.32);
+  background: rgba(91, 84, 230, 0.14);
 }
 
+/* 滚动条：浅灰发丝 */
 *::-webkit-scrollbar {
   width: 7px;
   height: 7px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #262c3d;
+  background: #d7d7d9;
   border-radius: 8px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #333a50;
+  background: #c0c0c4;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* ---- markdown 内容排版 ---- */
+/* ---- markdown 内容排版（白底阅读优化） ---- */
 .prose-mentora {
   line-height: 1.8;
   font-size: 0.92rem;
   word-break: break-word;
+  color: #3f3f46;
 }
 .prose-mentora h1 {
   font-size: 1.15rem;
   font-weight: 700;
   margin: 1.5em 0 0.6em;
-  color: #fff;
+  color: var(--color-ink);
   letter-spacing: -0.02em;
 }
 .prose-mentora h2 {
@@ -76,18 +98,17 @@ h1, h2, h3 {
   margin: 1.6em 0 0.6em;
   padding-bottom: 0.35em;
   border-bottom: 1px solid var(--color-border);
-  color: #fff;
+  color: var(--color-ink);
   letter-spacing: -0.01em;
 }
 .prose-mentora h3 {
   font-size: 0.98rem;
   font-weight: 600;
   margin: 1.25em 0 0.5em;
-  color: #dfe4f0;
+  color: var(--color-ink);
 }
 .prose-mentora p {
   margin: 0.65em 0;
-  color: #c9cfdd;
 }
 .prose-mentora ul,
 .prose-mentora ol {
@@ -102,27 +123,28 @@ h1, h2, h3 {
 }
 .prose-mentora li {
   margin: 0.35em 0;
-  color: #c9cfdd;
 }
 .prose-mentora li::marker {
-  color: #5a6379;
+  color: #a1a1aa;
 }
 .prose-mentora strong {
-  color: #fff;
+  color: var(--color-ink);
   font-weight: 600;
 }
 .prose-mentora code {
-  background: rgba(124, 108, 255, 0.1);
-  color: #c4b5fd;
+  background: rgba(91, 84, 230, 0.07);
+  color: #4c43c4;
+  border: 1px solid rgba(91, 84, 230, 0.12);
   border-radius: 5px;
   padding: 0.12em 0.4em;
   font-size: 0.85em;
   font-family: var(--font-mono);
 }
+/* 代码块保持深底——白界面上的墨块是专业文档的惯例（Vercel/Stripe） */
 .prose-mentora pre {
-  background: #0a0d13;
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
+  background: #18181b;
+  border: 1px solid #26262b;
+  border-radius: 12px;
   padding: 16px 18px;
   overflow-x: auto;
   margin: 1em 0;
@@ -130,8 +152,9 @@ h1, h2, h3 {
 }
 .prose-mentora pre code {
   background: none;
+  border: none;
   padding: 0;
-  color: #d8e0f0;
+  color: #d4d4d8;
   font-size: 0.8rem;
 }
 .prose-mentora blockquote {
@@ -139,17 +162,17 @@ h1, h2, h3 {
   padding: 0.2em 0 0.2em 14px;
   color: var(--color-ink-dim);
   margin: 0.9em 0;
-  background: rgba(124, 108, 255, 0.04);
+  background: rgba(91, 84, 230, 0.035);
   border-radius: 0 8px 8px 0;
 }
 .prose-mentora a {
-  color: var(--color-accent-2);
+  color: var(--color-accent);
   text-decoration: none;
-  border-bottom: 1px solid rgba(34, 211, 238, 0.3);
+  border-bottom: 1px solid rgba(91, 84, 230, 0.3);
   transition: border-color 0.15s;
 }
 .prose-mentora a:hover {
-  border-bottom-color: var(--color-accent-2);
+  border-bottom-color: var(--color-accent);
 }
 .prose-mentora table {
   border-collapse: collapse;
@@ -157,9 +180,9 @@ h1, h2, h3 {
   width: 100%;
 }
 .prose-mentora th {
-  color: #fff;
+  color: var(--color-ink);
   font-weight: 600;
-  background: rgba(255, 255, 255, 0.03);
+  background: #fafafa;
 }
 .prose-mentora th,
 .prose-mentora td {
@@ -203,13 +226,37 @@ h1, h2, h3 {
   animation: blink 0.9s infinite;
 }
 
-/* ---- Apple/Google 级细节 ---- */
+/* ---- 页面切换 ---- */
 @keyframes pageRise {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
 }
 .page-fade {
-  animation: pageRise 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: pageRise 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* 级联入场：区块依次浮现（Linear/Things 级精致感），仅前 5 个，避免长页拖沓 */
+.page-fade > * {
+  animation: pageRise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.page-fade > *:nth-child(2) { animation-delay: 45ms; }
+.page-fade > *:nth-child(3) { animation-delay: 90ms; }
+.page-fade > *:nth-child(4) { animation-delay: 135ms; }
+.page-fade > *:nth-child(5) { animation-delay: 180ms; }
+
+/* 无障碍：尊重系统减弱动态设置 */
+@media (prefers-reduced-motion: reduce) {
+  .page-fade,
+  .page-fade > *,
+  .animate-rise,
+  .stream-cursor {
+    animation: none;
+  }
+  .card-lift,
+  .card-lift:hover {
+    transition: none;
+    transform: none;
+  }
 }
 
 .tabular {
@@ -218,15 +265,17 @@ h1, h2, h3 {
 }
 
 :focus-visible {
-  outline: 2px solid rgba(124, 108, 255, 0.6);
+  outline: 2px solid rgba(91, 84, 230, 0.55);
   outline-offset: 2px;
   border-radius: 6px;
 }
 
+/* 卡片浮起：位移收敛、投影为浅灰而非黑雾 */
 .card-lift {
   transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.18s, box-shadow 0.18s;
 }
 .card-lift:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.65);
+  transform: translateY(-1px);
+  border-color: #d8d8dc;
+  box-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.1), 0 2px 6px -2px rgba(0, 0, 0, 0.05);
 }

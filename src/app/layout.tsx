@@ -28,7 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <AppShell>{children}</AppShell>
-        <Toaster theme="dark" position="top-center" richColors />
+        <Toaster theme="light" position="top-center" richColors />
       </body>
     </html>
   );

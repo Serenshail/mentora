@@ -115,7 +115,7 @@ export default function ReadPage() {
               >
                 <div className="flex items-start justify-between">
                   <div className="min-w-0">
-                    <h3 className="truncate font-bold text-white">《{b.title}》</h3>
+                    <h3 className="truncate font-bold text-ink">《{b.title}》</h3>
                     {b.author && <p className="mt-0.5 text-xs text-ink-dim">{b.author}</p>}
                   </div>
                   <div className="flex items-center gap-1.5">

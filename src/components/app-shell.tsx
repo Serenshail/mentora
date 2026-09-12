@@ -11,9 +11,10 @@ import {
   LayoutDashboard,
   GraduationCap,
   Settings2,
-  Sparkles,
 } from "lucide-react";
 import { FeedbackWidget } from "@/components/feedback-widget";
+import { useAuth, useAutoPush } from "@/lib/auth-client";
+import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
 const NAV = [
@@ -28,6 +29,9 @@ const NAV = [
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const provider = useAppStore((s) => s.settings.provider);
+  const router = useRouter();
+  const { user, logout } = useAuth();
+  useAutoPush(!!user);
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -35,19 +39,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen w-full">
       {/* 侧边栏 */}
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/[0.06] bg-surface/30 backdrop-blur-xl md:flex">
-        <div className="flex items-center gap-2.5 px-5 py-6">
-          <div className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#7c6cff] to-[#22d3ee] shadow-[0_4px_16px_-2px_rgba(124,108,255,0.6)]">
-            <Sparkles className="size-5 text-white" />
-          </div>
-          <div>
-            <p className="text-[15px] font-extrabold tracking-[-0.02em] text-white">Mentora</p>
-          </div>
-        </div>
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-white/80 backdrop-blur-xl md:flex">
+        <Link href="/" className="flex items-baseline px-5 pb-5 pt-6">
+          <span className="font-brand text-[30px] leading-none text-ink">Mentora</span>
+        </Link>
 
         <div>
-          <nav className="space-y-1 px-3">
-            <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/50">
+          <nav className="space-y-0.5 px-3">
+            <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/60">
               工作台
             </p>
             {NAV.slice(0, 5).map(({ href, label, icon: Icon }) => (
@@ -55,10 +54,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                 key={href}
                 href={href}
                 className={cn(
-                  "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13.5px] font-medium tracking-[-0.01em] transition-all duration-150",
+                  "flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-[13.5px] tracking-[-0.01em] transition-all duration-150",
                   isActive(href)
-                    ? "bg-gradient-to-r from-accent/20 to-accent/5 text-white border border-accent/25 shadow-[0_0_20px_-8px_rgba(124,108,255,0.6)]"
-                    : "text-ink-dim hover:bg-white/[0.04] hover:text-ink border border-transparent"
+                    ? "bg-black/[0.05] font-semibold text-ink"
+                    : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
                 )}
               >
                 <Icon className="size-[18px]" strokeWidth={1.75} />
@@ -66,8 +65,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Link>
             ))}
           </nav>
-          <nav className="mt-5 space-y-1 px-3 pt-4 border-t border-white/[0.05]">
-            <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/50">
+          <nav className="mx-3 mt-4 space-y-0.5 border-t border-border pt-4">
+            <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/60">
               系统
             </p>
             {NAV.slice(5).map(({ href, label, icon: Icon }) => (
@@ -75,10 +74,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                 key={href}
                 href={href}
                 className={cn(
-                  "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13.5px] font-medium tracking-[-0.01em] transition-all duration-150",
+                  "flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-[13.5px] tracking-[-0.01em] transition-all duration-150",
                   isActive(href)
-                    ? "bg-gradient-to-r from-accent/20 to-accent/5 text-white border border-accent/25"
-                    : "text-ink-dim hover:bg-white/[0.04] hover:text-ink border border-transparent"
+                    ? "bg-black/[0.05] font-semibold text-ink"
+                    : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
                 )}
               >
                 <Icon className="size-[18px]" strokeWidth={1.75} />
@@ -88,13 +87,40 @@ export function AppShell({ children }: { children: ReactNode }) {
           </nav>
         </div>
 
-        <div className="px-3 pb-4 pt-2">
+        <div className="mt-auto px-3 pb-4 pt-2">
           <FeedbackWidget />
-          <p className="px-2.5 pt-2 text-[10px] text-ink-dim/40">数据只在你这台电脑上</p>
+          {user ? (
+            <div className="mt-1 flex items-center gap-2 rounded-xl px-2.5 py-2">
+              <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[#7c6cff] to-[#22d3ee] text-[11px] font-bold text-white">
+                {(user.name || user.email).slice(0, 1).toUpperCase()}
+              </div>
+              <span className="truncate text-xs text-ink">{user.name || user.email}</span>
+              <button
+                onClick={async () => {
+                  await logout();
+                  router.push("/");
+                }}
+                className="ml-auto text-[11px] text-ink-dim hover:text-ink cursor-pointer"
+                title="退出登录"
+              >
+                退出
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => router.push("/login")}
+              className="mt-1 w-full cursor-pointer rounded-xl border border-accent/35 bg-accent/10 px-3 py-2 text-xs font-medium text-[#b7adff] transition hover:bg-accent/20"
+            >
+              登录 · 数据跟设备走
+            </button>
+          )}
+          <p className="px-2.5 pt-2 text-[10px] text-ink-dim/50">
+            {user ? "已登录 · 数据自动同步" : "数据只在你这台电脑上"}
+          </p>
           {provider === "demo" && (
             <Link
               href="/settings"
-              className="block rounded-xl border border-warn/30 bg-warn/10 px-3.5 py-2.5 text-xs text-warn/90 hover:bg-warn/15 transition"
+              className="mt-1 block rounded-lg border border-warn/25 bg-warn/[0.07] px-3.5 py-2.5 text-xs text-warn hover:bg-warn/[0.12] transition"
             >
               正在用演示数据 · 点此接上真模型
             </Link>
@@ -105,12 +131,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* 主区 */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 移动端顶栏 */}
-        <header className="sticky top-0 z-40 flex items-center justify-between border-b border-white/[0.06] bg-bg/80 px-4 py-3 backdrop-blur-xl md:hidden">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-[#7c6cff] to-[#22d3ee]">
-              <Sparkles className="size-4 text-white" />
-            </div>
-            <span className="font-bold text-white">Mentora</span>
+        <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-white/85 px-4 py-3 backdrop-blur-xl md:hidden">
+          <Link href="/" className="flex items-baseline">
+            <span className="font-brand text-[22px] leading-none text-ink">Mentora</span>
           </Link>
         </header>
 
@@ -121,14 +144,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         </main>
 
         {/* 移动端底部导航 */}
-        <nav className="sticky bottom-0 z-40 grid grid-cols-6 border-t border-border bg-bg/90 backdrop-blur md:hidden">
+        <nav className="sticky bottom-0 z-40 grid grid-cols-6 border-t border-border bg-white/90 backdrop-blur md:hidden">
           {NAV.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
               className={cn(
                 "flex flex-col items-center gap-1 py-2.5 text-[10px]",
-                isActive(href) ? "text-[#b7adff]" : "text-ink-dim"
+                isActive(href) ? "font-semibold text-accent" : "text-ink-dim"
               )}
             >
               <Icon className="size-5" />

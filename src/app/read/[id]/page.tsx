@@ -10,7 +10,7 @@ import { INSIGHT_EXTRACT, READING_CHAT } from "@/lib/ai/prompts";
 import { extractJson, insightsSchema } from "@/lib/ai/client";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Sparkles } from "lucide-react";
+import { ArrowLeft, Check, Lightbulb } from "lucide-react";
 
 export default function BookPage() {
   const hydrated = useHydrated();
@@ -132,7 +132,7 @@ export default function BookPage() {
         desc={book.author}
         right={
           <Button variant="outline" onClick={extract} loading={extracting}>
-            <Sparkles className="size-4" /> 提炼洞见
+            <Lightbulb className="size-4" /> 提炼洞见
           </Button>
         }
       />
@@ -145,7 +145,7 @@ export default function BookPage() {
             ["争议", book.profile.controversies],
           ] as [string, string][]).map(([label, text]) => (
             <Card key={label} className="p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b83d6]">{label}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-accent/80">{label}</p>
               <p className="mt-1.5 text-[13px] leading-relaxed text-ink-dim">{text}</p>
             </Card>
           ))}
@@ -164,7 +164,7 @@ export default function BookPage() {
           <p className="mb-4 text-xs font-semibold uppercase tracking-wider text-ink-dim">
             阅读路线 · 点击单元展开导读
           </p>
-          <div className="relative ml-2 space-y-1 border-l border-white/[0.08] pl-5">
+          <div className="relative ml-2 space-y-1 border-l border-border pl-5">
             {book.chapters.map((c, i) => {
               const expanded = expandedId === c.id || chapter?.id === c.id;
               return (
@@ -173,10 +173,10 @@ export default function BookPage() {
                     className={cn(
                       "absolute -left-[27px] top-3 flex size-3.5 items-center justify-center rounded-full border text-[8px] font-bold",
                       c.status === "done"
-                        ? "border-ok/60 bg-ok/20 text-ok"
+                        ? "border-ok/40 bg-ok/[0.12] text-ok"
                         : chapter?.id === c.id
-                          ? "border-accent/70 bg-accent/25 text-white"
-                          : "border-white/15 bg-surface-2 text-ink-dim"
+                          ? "border-accent/50 bg-accent text-white"
+                          : "border-border bg-white text-ink-dim"
                     )}
                   >
                     {i + 1}
@@ -188,35 +188,35 @@ export default function BookPage() {
                     }}
                     className={cn(
                       "w-full rounded-xl px-3 py-2.5 text-left transition cursor-pointer",
-                      chapter?.id === c.id ? "bg-accent/10" : "hover:bg-white/[0.04]"
+                      chapter?.id === c.id ? "bg-accent/[0.07]" : "hover:bg-black/[0.035]"
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <span className={cn("text-[13px] font-semibold", chapter?.id === c.id ? "text-white" : "text-ink")}>
+                      <span className={cn("text-[13px] font-semibold", chapter?.id === c.id ? "text-accent" : "text-ink")}>
                         {c.title}
                       </span>
                       {c.status === "done" && <Check className="ml-auto size-3.5 shrink-0 text-ok" />}
                     </div>
-                    <p className="mt-0.5 line-clamp-1 text-[11.5px] text-ink-dim">❓ {c.focusQuestion}</p>
+                    <p className="mt-0.5 line-clamp-1 text-[11.5px] text-ink-dim">{c.focusQuestion}</p>
                   </button>
                   {expanded && (
-                    <div className="mb-2 space-y-2 rounded-xl border border-white/[0.06] bg-black/20 p-3">
+                    <div className="mb-2 space-y-2 rounded-xl border border-border bg-surface-2 p-3">
                       {c.coreIdea && (
                         <p className="text-[11.5px] leading-relaxed text-ink-dim">
-                          <b className="text-ink">💡 核心论点：</b>{c.coreIdea}
+                          <b className="text-ink">核心论点：</b>{c.coreIdea}
                         </p>
                       )}
                       {c.perspectives && c.perspectives.length > 0 && (
                         <div className="space-y-1.5">
-                          <p className="text-[10.5px] font-semibold uppercase tracking-wider text-[#8b83d6]">交叉视角</p>
+                          <p className="text-[10.5px] font-semibold uppercase tracking-wider text-accent/80">交叉视角</p>
                           {c.perspectives.map((pv, j) => (
-                            <p key={j} className="text-[11.5px] leading-relaxed text-[#8b9dc6]">⟡ {pv}</p>
+                            <p key={j} className="text-[11.5px] leading-relaxed text-ink-dim">⟡ {pv}</p>
                           ))}
                         </div>
                       )}
                       {c.capture && c.capture.length > 0 && (
                         <p className="text-[11px] leading-relaxed text-ink-dim/80">
-                          📝 值得记：{c.capture.join(" / ")}
+                          值得记：{c.capture.join(" / ")}
                         </p>
                       )}
                       <Button
@@ -236,11 +236,11 @@ export default function BookPage() {
           {book.insights.length > 0 && (
             <div className="mt-6">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
-                💎 洞见（已入第二大脑）
+                洞见（已入第二大脑）
               </p>
               <div className="space-y-2">
                 {book.insights.map((i) => (
-                  <p key={i.id} className="rounded-lg bg-surface-2/70 p-2.5 text-xs leading-relaxed text-ink-dim">
+                  <p key={i.id} className="rounded-lg bg-surface-2 p-2.5 text-xs leading-relaxed text-ink-dim">
                     {i.text}
                   </p>
                 ))}
@@ -252,7 +252,7 @@ export default function BookPage() {
         {/* 对话区 */}
         <div className="min-w-0">
           {chapter && (
-            <Card className="mb-4 border-accent/30">
+            <Card className="mb-4 border-accent/25">
               <Badge tone="accent">当前章节：{chapter.title}</Badge>
               <p className="mt-2 text-sm text-ink-dim">
                 本章带着这个问题读：<b className="text-ink">{chapter.focusQuestion}</b>
@@ -272,7 +272,7 @@ export default function BookPage() {
             {messages.map((m) => (
               <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                 {m.role === "user" ? (
-                  <div className="max-w-[80%] rounded-2xl rounded-br-md bg-accent/20 border border-accent/30 px-4 py-2.5 text-sm">
+                  <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1a1a1a] px-4 py-2.5 text-sm text-white">
                     {m.content}
                   </div>
                 ) : (

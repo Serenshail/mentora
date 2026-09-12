@@ -15,7 +15,8 @@ import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
 import { cn, formatDate, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  ArrowLeft, BookMarked, Check, ChevronRight, CircleX, ExternalLink, Sparkles, Swords,
+  ArrowLeft, BookMarked, Check, ChevronRight, CircleX, ExternalLink, Flag,
+  NotebookPen, Puzzle, Swords, Trophy,
 } from "lucide-react";
 
 /* ================= 即时答疑：学习中随时问教练 ================= */
@@ -77,7 +78,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
   return (
     <Card>
       <button className="flex w-full items-center justify-between cursor-pointer" onClick={() => setOpen(!open)}>
-        <p className="text-sm font-bold text-white">看不懂？问教练</p>
+        <p className="text-sm font-bold text-ink">看不懂？问教练</p>
         <span className="text-xs text-ink-dim">{open ? "收起 ▲" : "展开 ▼"}</span>
       </button>
       {open && (
@@ -91,18 +92,18 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
             {qa.map((m) => (
               <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                 {m.role === "user" ? (
-                  <div className="max-w-[85%] rounded-xl rounded-br-sm bg-accent/15 border border-accent/25 px-3 py-2 text-xs">
+                  <div className="max-w-[85%] rounded-xl rounded-br-sm bg-[#1a1a1a] px-3 py-2 text-xs text-white">
                     {m.content}
                   </div>
                 ) : (
-                  <div className="max-w-[92%] rounded-xl rounded-bl-sm bg-surface-2/70 border border-white/[0.06] px-3 py-2">
+                  <div className="max-w-[92%] rounded-xl rounded-bl-sm bg-surface-2 border border-border px-3 py-2">
                     <Markdown text={m.content} className="text-xs" />
                   </div>
                 )}
               </div>
             ))}
             {streamText && (
-              <div className="max-w-[92%] rounded-xl rounded-bl-sm bg-surface-2/70 border border-white/[0.06] px-3 py-2">
+              <div className="max-w-[92%] rounded-xl rounded-bl-sm bg-surface-2 border border-border px-3 py-2">
                 <Markdown text={streamText} className="text-xs" />
                 <span className="stream-cursor" />
               </div>
@@ -110,7 +111,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
           </div>
           <div className="mt-3 flex gap-2">
             <input
-              className="h-9 w-full rounded-xl border border-white/[0.08] bg-black/25 px-3 text-sm outline-none focus:border-accent/60"
+              className="h-9 w-full rounded-[10px] border border-border bg-white px-3 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]"
               placeholder="输入你的疑问…（Enter 发送）"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -138,12 +139,12 @@ function QuickNotes({ goal, day }: { goal: Goal; day: DayPlan }) {
   return (
     <Card>
       <div className="flex items-center justify-between">
-        <p className="text-sm font-bold text-white">📝 随手记</p>
+        <p className="text-sm font-bold text-ink">随手记</p>
         <span className="text-[11px] text-ink-dim">想到就记，直接进知识库</span>
       </div>
       <div className="mt-3">
         <input
-          className="h-9 w-full rounded-xl border border-border bg-surface-2/80 px-3 text-sm outline-none focus:border-accent/70"
+          className="h-9 w-full rounded-[10px] border border-border bg-white px-3 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]"
           placeholder="记一条：今天踩的坑 / 顿悟 / 想追问的问题…（Enter 保存）"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -162,8 +163,9 @@ function QuickNotes({ goal, day }: { goal: Goal; day: DayPlan }) {
       {notes.length > 0 && (
         <div className="mt-3 space-y-1.5">
           {notes.map((n) => (
-            <p key={n.id} className="truncate rounded-lg bg-surface-2/60 px-2.5 py-1.5 text-xs text-ink-dim">
-              📝 {n.title}
+            <p key={n.id} className="flex items-center gap-1.5 truncate rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs text-ink-dim">
+              <NotebookPen className="size-3 shrink-0" />
+              <span className="truncate">{n.title}</span>
             </p>
           ))}
         </div>
@@ -214,7 +216,6 @@ export default function GoalDetailPage() {
       </button>
 
       <PageHeader
-        icon={<Sparkles className="size-5" />}
         title={goal.topic}
         desc={goal.direction}
         right={
@@ -249,8 +250,9 @@ export default function GoalDetailPage() {
         <PhasePlanPanel goal={goal} phase={activePhase} />
       )}
       {goal.plan && !viewDay && !activePhase && (
-        <Card className="flex items-center justify-center py-16 text-ink-dim">
-          🎉 全部阶段完成！去「第二大脑」看看你积累了什么。
+        <Card className="flex items-center justify-center gap-2 py-16 text-ink-dim">
+          <Trophy className="size-4 text-accent" />
+          全部阶段完成！去「第二大脑」看看你积累了什么。
         </Card>
       )}
       {!goal.plan && (
@@ -342,10 +344,13 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
   };
 
   return (
-    <Card className="border-accent/40">
+    <Card className="border-accent/25">
       <Badge tone="accent">下一程</Badge>
-      <h2 className="mt-3 text-xl font-bold text-white">{phase.title}</h2>
-      <p className="mt-1.5 text-sm text-[#c9c2ff]">🏁 {phase.outcome}</p>
+      <h2 className="mt-3 text-xl font-bold text-ink">{phase.title}</h2>
+      <p className="mt-1.5 flex items-center gap-1.5 text-sm text-accent">
+        <Flag className="size-3.5 shrink-0" />
+        {phase.outcome}
+      </p>
       {phase.estDays && (
         <p className="mt-1 text-xs text-ink-dim">预估 {phase.estDays} 天（按你的实际节奏走）</p>
       )}
@@ -358,7 +363,7 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
           <ul className="space-y-1.5">
             {phase.outline.map((o, i) => (
               <li key={i} className="flex gap-2 text-sm text-ink-dim">
-                <span className="text-[#8b83d6]">{String(i + 1).padStart(2, "0")}</span>
+                <span className="tabular text-accent/70">{String(i + 1).padStart(2, "0")}</span>
                 {o}
               </li>
             ))}
@@ -367,7 +372,7 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
       )}
 
       {phase.boundary && (
-        <p className="mt-4 rounded-xl border border-white/[0.06] bg-black/20 p-3 text-xs leading-relaxed text-ink-dim">
+        <p className="mt-4 rounded-xl border border-border bg-surface-2 p-3 text-xs leading-relaxed text-ink-dim">
           <b className="text-ink">边界：</b>{phase.boundary}
         </p>
       )}
@@ -379,7 +384,7 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
 
       {error && <p className="mt-3 text-sm text-bad">{error}</p>}
       <Button className="mt-5 w-full" onClick={generate} loading={busy}>
-        🏗️ 生成「{phase.title}」的天级计划
+        生成「{phase.title}」的天级计划
       </Button>
     </Card>
   );
@@ -422,13 +427,13 @@ function RegeneratePlan({ goal }: { goal: Goal }) {
     }
   };
   return (
-    <Card className="flex flex-col items-center justify-center border-accent/40 py-14 text-center">
-      <p className="text-lg font-bold text-white">计划还没有生成</p>
+    <Card className="flex flex-col items-center justify-center border-accent/25 py-14 text-center">
+      <p className="text-lg font-bold text-ink">计划还没有生成</p>
       <p className="mt-2 max-w-md text-sm text-ink-dim">
         可能是上次生成超时或解析失败（目标已保存）。点下面重新生成——计划不设日历日期，按你的节奏推进。
       </p>
       <Button className="mt-5" onClick={generate} loading={busy}>
-        🏗️ 生成学习计划
+        生成学习计划
       </Button>
     </Card>
   );
@@ -461,7 +466,7 @@ function PlanTimeline({
           <div key={phase.id}>
             <div className="flex items-center gap-2">
               <StatusDot status={phase.status} />
-              <p className="text-sm font-bold text-white">
+              <p className="text-sm font-bold text-ink">
                 阶段{pi + 1} · {phase.title}
               </p>
               {phase.status === "passed" && <Badge tone="ok">已通过</Badge>}
@@ -472,7 +477,7 @@ function PlanTimeline({
               <ul className="mb-2 ml-1 space-y-1 border-l border-border pl-3">
                 {phase.outline.slice(0, 6).map((o, i) => (
                   <li key={i} className="flex gap-1.5 text-[11px] leading-relaxed text-ink-dim/80">
-                    <span className="text-[#8b83d6]/70">{i + 1}.</span>
+                    <span className="text-accent/60">{i + 1}.</span>
                     {o}
                   </li>
                 ))}
@@ -494,8 +499,8 @@ function PlanTimeline({
                       "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition",
                       locked
                         ? "cursor-not-allowed text-ink-dim/40"
-                        : "cursor-pointer hover:bg-white/5",
-                      viewDayId === dayId && "bg-accent/15 text-white",
+                        : "cursor-pointer hover:bg-black/[0.04]",
+                      viewDayId === dayId && "bg-accent/[0.09] font-medium text-accent",
                       day.status === "passed" && "text-ink-dim",
                       day.status === "skipped" && "text-warn/80"
                     )}
@@ -515,7 +520,7 @@ function PlanTimeline({
       {selectedDayId && selectedDayId !== activeDayId && (
         <button
           onClick={() => onSelect(null)}
-          className="mt-4 w-full cursor-pointer rounded-lg border border-border py-2 text-xs text-ink-dim hover:bg-white/5"
+          className="mt-4 w-full cursor-pointer rounded-lg border border-border py-2 text-xs text-ink-dim hover:bg-black/[0.04]"
         >
           回到当前任务
         </button>
@@ -683,7 +688,7 @@ function DayPanel({
   return (
     <div className="min-w-0 space-y-5">
       {/* 今日头部 */}
-      <Card className={readOnly ? "" : "border-accent/30"}>
+      <Card className={readOnly ? "" : "border-accent/25"}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
@@ -696,7 +701,7 @@ function DayPanel({
               {day.status === "passed" && <Badge tone="ok">已通过</Badge>}
               {day.attempts > 0 && <Badge tone="dim">验收 {day.attempts} 次</Badge>}
             </div>
-            <h2 className="mt-2 text-lg font-bold text-white">{day.title}</h2>
+            <h2 className="mt-2 text-lg font-bold text-ink">{day.title}</h2>
             <p className="mt-1 text-xs text-ink-dim">{day.method}</p>
           </div>
           {!done && !readOnly && mode === "learn" && (
@@ -717,7 +722,7 @@ function DayPanel({
 
         {/* 资源 */}
         <div className="mt-4 space-y-2">
-          <p className="text-xs font-semibold text-ink-dim">📚 学习资源（选一个顺手的）</p>
+          <p className="text-xs font-semibold text-ink-dim">学习资源（选一个顺手的）</p>
           {day.resources.map((r, i) => (
             <div key={i} className="flex items-center gap-2 text-sm">
               {r.url ? (
@@ -725,7 +730,7 @@ function DayPanel({
                   href={r.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-[#22d3ee] hover:underline"
+                  className="inline-flex items-center gap-1 text-accent hover:underline"
                 >
                   {r.title} <ExternalLink className="size-3.5" />
                 </a>
@@ -743,8 +748,8 @@ function DayPanel({
         <>
           <Card>
             <div className="flex items-center justify-between">
-              <p className="flex items-center gap-2 text-sm font-bold text-white">
-                <BookMarked className="size-4 text-[#b7adff]" /> 学习文档
+              <p className="flex items-center gap-2 text-sm font-bold text-ink">
+                <BookMarked className="size-4 text-accent" /> 学习文档
               </p>
               {!lesson && (
                 <Button size="sm" onClick={genLesson} loading={lessonLoading}>
@@ -787,10 +792,10 @@ function DayPanel({
           {/* 项目例子 */}
           {day.example && (
             <Card>
-              <p className="text-sm font-bold text-white">🧩 {day.example.title}</p>
+              <p className="text-sm font-bold text-ink">🧩 {day.example.title}</p>
               <p className="mt-1 text-xs text-ink-dim">{day.example.description}</p>
               {day.example.code && (
-                <pre className="mt-3 overflow-x-auto rounded-xl border border-border bg-[#0d1017] p-4 text-xs leading-relaxed text-[#d8e0f0]">
+                <pre className="mt-3 overflow-x-auto rounded-xl border border-[#26262b] bg-[#18181b] p-4 text-xs leading-relaxed text-[#d4d4d8]">
                   <code>{day.example.code}</code>
                 </pre>
               )}
@@ -807,8 +812,8 @@ function DayPanel({
 
       {/* ===== 验收模式 ===== */}
       {mode === "quiz" && !readOnly && (
-        <Card className="border-warn/40">
-          <p className="text-sm font-bold text-white">
+        <Card className="border-warn/30">
+          <p className="text-sm font-bold text-ink">
             ⚔️ 验收关卡 —— 逐条通过才能解锁下一阶段
           </p>
           <p className="mt-1 text-xs text-ink-dim">
@@ -850,7 +855,7 @@ function DayPanel({
         <Card
           className={cn(
             "animate-rise",
-            grade.overall === "pass" ? "border-ok/50" : "border-bad/50"
+            grade.overall === "pass" ? "border-ok/30" : "border-bad/30"
           )}
         >
           <div className="flex items-center gap-2">
@@ -859,14 +864,14 @@ function DayPanel({
             ) : (
               <Badge tone="bad">未通过</Badge>
             )}
-            <p className="text-sm font-bold text-white">{grade.summary}</p>
+            <p className="text-sm font-bold text-ink">{grade.summary}</p>
           </div>
           <div className="mt-4 space-y-3">
             {day.acceptance.map((a, i) => {
               const r = grade.items.find((it) => it.itemId === a.id);
               if (!r) return null;
               return (
-                <div key={a.id} className="rounded-xl border border-border bg-surface-2/60 p-3.5">
+                <div key={a.id} className="rounded-xl border border-border bg-surface-2/70 p-3.5">
                   <div className="flex items-start justify-between gap-3">
                     <p className="text-sm text-ink">
                       <span className="mr-2 text-ink-dim">第{i + 1}题</span>
@@ -879,7 +884,7 @@ function DayPanel({
                     )}
                   </div>
                   {answers[a.id] && (
-                    <p className="mt-2 whitespace-pre-wrap rounded-lg bg-black/20 p-2.5 text-xs text-ink-dim">
+                    <p className="mt-2 whitespace-pre-wrap rounded-lg border border-border bg-white p-2.5 text-xs text-ink-dim">
                       你的回答：{answers[a.id]}
                     </p>
                   )}
@@ -893,7 +898,7 @@ function DayPanel({
               );
             })}
           </div>
-          <div className="mt-4 rounded-xl border border-accent/30 bg-accent/10 p-3.5 text-sm text-[#c9c2ff]">
+          <div className="mt-4 rounded-xl border border-accent/20 bg-accent/[0.05] p-3.5 text-sm text-accent">
             {grade.reviewAdvice}
           </div>
           {grade.overall === "pass" ? (
@@ -923,12 +928,12 @@ function DayPanel({
       {/* 回看：历史验收记录 */}
       {readOnly && day.status === "passed" && goal.quizLog.filter((q) => q.dayId === day.id).length > 0 && (
         <Card>
-          <p className="mb-3 text-sm font-bold text-white">验收记录</p>
+          <p className="mb-3 text-sm font-bold text-ink">验收记录</p>
           <div className="space-y-3">
             {goal.quizLog
               .filter((q) => q.dayId === day.id)
               .map((q, i) => (
-                <div key={i} className="rounded-xl border border-border bg-surface-2/60 p-3 text-xs text-ink-dim">
+                <div key={i} className="rounded-xl border border-border bg-surface-2/70 p-3 text-xs text-ink-dim">
                   <div className="flex items-center gap-2">
                     {q.passed ? <Badge tone="ok">通过</Badge> : <Badge tone="bad">未通过</Badge>}
                     {q.forced && <Badge tone="warn">强制跳过</Badge>}
@@ -947,7 +952,7 @@ function DayPanel({
       {mode === "learn" && !done && !readOnly && (
         <button
           onClick={() => setSkipConfirm(true)}
-          className="w-full cursor-pointer rounded-xl border border-dashed border-warn/30 py-2.5 text-xs text-warn/70 hover:bg-warn/5"
+          className="w-full cursor-pointer rounded-xl border border-dashed border-warn/30 py-2.5 text-xs text-warn/80 hover:bg-warn/[0.05]"
         >
           学不会也要跳过这个阶段？（强硬跳过会被记录）
         </button>

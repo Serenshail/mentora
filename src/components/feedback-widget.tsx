@@ -102,13 +102,13 @@ export function FeedbackWidget() {
       <button
         onClick={() => setOpen(true)}
         className={cn(
-          "flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-[13px] font-medium text-ink-dim transition-all hover:bg-white/[0.04] hover:text-ink cursor-pointer"
+          "flex w-full items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-[13px] font-medium text-ink-dim transition-all hover:bg-black/[0.035] hover:text-ink cursor-pointer"
         )}
       >
         <MessageSquarePlus className="size-[18px]" strokeWidth={1.75} />
         反馈
         {queued > 0 && (
-          <span className="ml-auto rounded-full bg-warn/20 px-1.5 text-[10px] text-warn">
+          <span className="ml-auto rounded-full bg-warn/[0.12] px-1.5 text-[10px] text-warn">
             {queued}
           </span>
         )}
@@ -125,10 +125,10 @@ export function FeedbackWidget() {
                 key={t}
                 onClick={() => setType(t)}
                 className={cn(
-                  "rounded-xl border px-3.5 py-2 text-xs transition cursor-pointer",
+                  "rounded-[10px] border px-3.5 py-2 text-xs transition cursor-pointer",
                   type === t
-                    ? "border-accent/60 bg-accent/15 text-white"
-                    : "border-border text-ink-dim hover:text-ink"
+                    ? "border-accent/30 bg-accent/[0.08] font-medium text-accent"
+                    : "border-border bg-white text-ink-dim hover:text-ink"
                 )}
               >
                 {t}
@@ -142,7 +142,7 @@ export function FeedbackWidget() {
             onChange={(e) => setContent(e.target.value)}
           />
           <input
-            className="h-10 w-full rounded-xl border border-white/[0.08] bg-black/25 px-3.5 text-sm outline-none focus:border-accent/60"
+            className="h-10 w-full rounded-[10px] border border-border bg-white px-3.5 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]"
             placeholder="联系方式（可选）：邮箱 / 微信 / GitHub，方便回复你"
             value={contact}
             onChange={(e) => setContact(e.target.value)}
@@ -153,7 +153,7 @@ export function FeedbackWidget() {
             </Button>
           </div>
           {queued > 0 && (
-            <Card className="border-warn/30 bg-warn/5 p-3 text-xs text-warn/90">
+            <Card className="border-warn/25 bg-warn/[0.05] p-3 text-xs text-warn">
               有 {queued} 条反馈存在本地待重发（网络恢复后自动送达）。
             </Card>
           )}

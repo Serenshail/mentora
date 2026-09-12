@@ -49,7 +49,7 @@ export default function LearnPage() {
 
       {/* 新目标入口 */}
       <Card className="mb-8">
-        <p className="mb-3 text-sm font-semibold text-white">想学点什么？</p>
+        <p className="mb-3 text-sm font-semibold text-ink">想学点什么？</p>
         <div className="flex gap-2">
           <Input
             value={topic}
@@ -100,9 +100,9 @@ export default function LearnPage() {
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-base font-bold text-white">{g.topic}</h3>
+                      <h3 className="text-base font-bold text-ink">{g.topic}</h3>
                       <Badge tone={DOMAIN_TONE[g.domainKind]}>{DOMAIN_LABELS[g.domainKind]}</Badge>
-                      {g.status === "draft" && <Badge tone="warn">⚡ 引导中 · 点击继续</Badge>}
+                      {g.status === "draft" && <Badge tone="warn">引导中 · 点击继续</Badge>}
                       {g.status === "done" && <Badge tone="ok">已完成</Badge>}
                       {g.status === "paused" && <Badge tone="dim">已暂停</Badge>}
                     </div>
@@ -139,9 +139,9 @@ export default function LearnPage() {
       )}
 
       {confirmId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setConfirmId(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px] p-4" onClick={() => setConfirmId(null)}>
           <Card className="max-w-sm animate-rise" onClick={(e) => e.stopPropagation()}>
-            <p className="font-bold text-white">删除这个学习目标？</p>
+            <p className="font-bold text-ink">删除这个学习目标？</p>
             <p className="mt-2 text-sm text-ink-dim">
               计划与验收记录会一并删除（已入第二大脑的知识点保留）。
             </p>

@@ -15,10 +15,28 @@ import { cn, formatDate, REVIEW_INTERVALS, streakFrom, todayISO } from "@/lib/ut
 import type { KnowledgeItem } from "@/lib/types";
 import { toast } from "sonner";
 import {
-  Brain, Flame, GitBranch, Link2, Pencil, Plus, RefreshCcw, Search, Sparkles, Trash2, Zap,
+  BookOpen, Brain, Compass, Flame, GitBranch, GraduationCap, Link2, PenLine,
+  Pencil, Plus, RefreshCcw, Search, Trash2, Zap,
 } from "lucide-react";
 
 type Tab = "notes" | "graph";
+
+/* 笔记来源：线性图标替代 emoji（去 AI 感） */
+const SOURCE_META = {
+  learn: { Icon: GraduationCap, label: "学习" },
+  read: { Icon: BookOpen, label: "阅读" },
+  manual: { Icon: PenLine, label: "手动" },
+  council: { Icon: Compass, label: "伙伴" },
+} as const;
+
+function SourceTag({ source }: { source: string }) {
+  const meta = SOURCE_META[source as keyof typeof SOURCE_META] ?? SOURCE_META.council;
+  return (
+    <span className="inline-flex items-center gap-1">
+      <meta.Icon className="size-3" strokeWidth={2} /> {meta.label}
+    </span>
+  );
+}
 
 export default function BrainPage() {
   const hydrated = useHydrated();
@@ -170,13 +188,13 @@ export default function BrainPage() {
           unit="条"
         />
         <button onClick={startReview} disabled={due.length === 0} className="text-left cursor-pointer disabled:cursor-default">
-          <Card className={cn("transition", due.length > 0 && "border-accent/50 hover:bg-surface-2")}>
+          <Card className={cn("transition", due.length > 0 && "border-accent/40 hover:bg-surface-2")}>
             <div className="flex items-center justify-between">
               <div>
                 <p className="flex items-center gap-1 text-xs text-ink-dim">
                   <Flame className="size-3.5" /> 连续 {streak} 天 · 待复习
                 </p>
-                <p className={cn("mt-1 text-2xl font-extrabold", due.length > 0 ? "text-[#b7adff]" : "text-ink-dim")}>
+                <p className={cn("mt-1 text-2xl font-extrabold", due.length > 0 ? "text-accent" : "text-ink-dim")}>
                   {due.length} <span className="text-sm font-normal">条</span>
                 </p>
               </div>
@@ -188,9 +206,9 @@ export default function BrainPage() {
 
       {/* 复习提醒 */}
       {due.length > 0 && (
-        <Card className="mb-6 flex items-center justify-between border-accent/40 bg-accent/5">
+        <Card className="mb-6 flex items-center justify-between border-accent/25 bg-accent/[0.04]">
           <div>
-            <p className="font-bold text-white">{due.length} 个知识点快忘了</p>
+            <p className="font-bold text-ink">{due.length} 个知识点快忘了</p>
             <p className="mt-1 text-xs text-ink-dim">趁还记得，刷一遍。</p>
           </div>
           <Button onClick={startReview}>
@@ -211,10 +229,10 @@ export default function BrainPage() {
             key={t}
             onClick={() => setTab(t)}
             className={cn(
-              "rounded-xl border px-4 py-2 text-sm font-medium transition cursor-pointer",
+              "rounded-[10px] border px-4 py-2 text-sm font-medium transition cursor-pointer",
               tab === t
-                ? "border-accent/60 bg-accent/15 text-white"
-                : "border-border text-ink-dim hover:text-ink"
+                ? "border-accent/30 bg-accent/[0.08] font-semibold text-accent"
+                : "border-border bg-white text-ink-dim hover:text-ink hover:border-[#d4d4d8]"
             )}
           >
             {label}
@@ -285,17 +303,17 @@ export default function BrainPage() {
           </div>
           {phase === "ask" && (
             <div className="py-8 text-center text-sm text-ink-dim">
-              <RefreshCcw className="mx-auto mb-3 size-6 animate-spin text-[#b7adff]" />
+              <RefreshCcw className="mx-auto mb-3 size-6 animate-spin text-accent" />
               正在出题…
             </div>
           )}
           {(phase === "answer" || phase === "graded") && (
             <>
-              <Card className="border-accent/40">
+              <Card className="border-accent/25">
                 <Markdown text={question} />
               </Card>
               <textarea
-                className="w-full rounded-xl border border-border bg-surface-2/80 px-3.5 py-2.5 text-sm outline-none focus:border-accent/70"
+                className="w-full rounded-[10px] border border-border bg-white px-3.5 py-2.5 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]"
                 rows={4}
                 placeholder="不看笔记，凭回忆写下答案…"
                 value={answer}
@@ -303,7 +321,7 @@ export default function BrainPage() {
                 onChange={(e) => setAnswer(e.target.value)}
               />
               {phase === "graded" && verdict && (
-                <Card className={cn("animate-rise", verdict.verdict === "pass" ? "border-ok/50" : "border-bad/50")}>
+                <Card className={cn("animate-rise", verdict.verdict === "pass" ? "border-ok/30" : "border-bad/30")}>
                   <Badge tone={verdict.verdict === "pass" ? "ok" : "bad"}>
                     {verdict.verdict === "pass" ? "回忆成功" : "有遗忘"}
                   </Badge>
@@ -379,7 +397,7 @@ function NoteCard({
   return (
     <Card className="group card-lift cursor-pointer transition hover:border-accent/50 hover:bg-surface-2/70" onClick={onOpen}>
       <div className="flex items-start justify-between gap-2">
-        <p className="font-semibold text-white">{note.title}</p>
+        <p className="font-semibold text-ink">{note.title}</p>
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -398,7 +416,7 @@ function NoteCard({
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
         <Badge tone="accent">{note.domain}</Badge>
         <Badge tone="dim">
-          {note.source === "learn" ? "🎯 学习" : note.source === "read" ? "📖 阅读" : note.source === "manual" ? "✍️ 手动" : "🧭 伙伴"}
+          <SourceTag source={note.source} />
           · {note.sourceTitle}
         </Badge>
         {note.nextReviewAt ? (
@@ -412,14 +430,14 @@ function NoteCard({
           {REVIEW_INTERVALS.map((_, i) => (
             <span
               key={i}
-              className={cn("inline-block size-1.5 rounded-full", i < note.reviewStage ? "bg-ok" : "bg-white/15")}
+              className={cn("inline-block size-1.5 rounded-full", i < note.reviewStage ? "bg-ok" : "bg-black/[0.12]")}
             />
           ))}
         </span>
       </div>
       {linkedTitles.length > 0 && (
-        <p className="mt-2 truncate text-[11px] text-[#8b83d6]">
-          🔗 {linkedTitles.join(" · ")}
+        <p className="mt-2 flex items-center gap-1 truncate text-[11px] text-accent/80">
+          <Link2 className="size-3 shrink-0" /> {linkedTitles.join(" · ")}
           {note.links.length > 3 ? " …" : ""}
         </p>
       )}
@@ -491,12 +509,12 @@ function NoteModal({
       });
       const parsed = autolinkSchema.parse(extractJson(full));
       if (parsed.links.length === 0) {
-        toast("AI 认为暂时没有真正有联系的笔记——宁缺毋滥。");
+        toast("暂时没有真正有联系的笔记——宁缺毋滥。");
       } else {
         setSuggests(parsed.links);
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "AI 建联失败");
+      toast.error(e instanceof Error ? e.message : "建联失败");
     } finally {
       setLinking(false);
     }
@@ -533,13 +551,13 @@ function NoteModal({
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge tone="accent">{note.domain}</Badge>
             <Badge tone="dim">
-              {note.source === "learn" ? "🎯 学习" : note.source === "read" ? "📖 阅读" : note.source === "manual" ? "✍️ 手动" : "🧭 伙伴"}
+              <SourceTag source={note.source} />
               · {note.sourceTitle}
             </Badge>
             <span className="text-ink-dim">{formatDate(note.masteredAt)} 掌握</span>
             <div className="ml-auto flex gap-2">
               <Button size="sm" variant="outline" onClick={autoLink} loading={linking}>
-                <Sparkles className="size-3.5" /> AI 建联
+                <Link2 className="size-3.5" /> 发现联系
               </Button>
               <Button size="sm" variant="outline" onClick={startEdit}>
                 <Pencil className="size-3.5" /> 编辑
@@ -556,9 +574,9 @@ function NoteModal({
 
           {/* AI 建联建议 */}
           {suggests.length > 0 && (
-            <Card className="border-accent/40 bg-accent/5">
-              <p className="mb-2 flex items-center gap-1.5 text-sm font-bold text-[#b7adff]">
-                <Sparkles className="size-4" /> AI 找到了这些联系（点击采纳）
+            <Card className="border-accent/25 bg-accent/[0.04]">
+              <p className="mb-2 flex items-center gap-1.5 text-sm font-bold text-accent">
+                <Link2 className="size-4" /> 找到了这些联系（点击采纳）
               </p>
               <div className="space-y-2">
                 {suggests
@@ -573,10 +591,10 @@ function NoteModal({
                           setSuggests((prev) => prev.filter((x) => x.targetId !== s.targetId));
                           toast.success("已建立连接");
                         }}
-                        className="w-full rounded-xl border border-border bg-surface-2/60 p-3 text-left transition hover:border-accent/50 cursor-pointer"
+                        className="w-full rounded-xl border border-border bg-surface-2/70 p-3 text-left transition hover:border-accent/40 cursor-pointer"
                       >
-                        <p className="text-sm font-semibold text-white">
-                          <GitBranch className="mr-1.5 inline size-3.5 text-[#8b83d6]" />
+                        <p className="text-sm font-semibold text-ink">
+                          <GitBranch className="mr-1.5 inline size-3.5 text-accent/70" />
                           {target?.title ?? "未知笔记"}
                         </p>
                         <p className="mt-1 text-xs text-ink-dim">{s.reason}</p>
@@ -592,13 +610,13 @@ function NoteModal({
 
           {/* 出链 */}
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
-              🔗 出链（{linked.length}）— 自己建立联系
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-ink-dim">
+              <Link2 className="size-3.5" /> 出链（{linked.length}）— 自己建立联系
             </p>
             <div className="mb-2 flex flex-wrap gap-1.5">
               {linked.map((l) => (
-                <span key={l.id} className="inline-flex items-center gap-1 rounded-lg border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-[#b7adff]">
-                  <button onClick={() => onOpenNote(l.id)} className="cursor-pointer hover:text-white">
+                <span key={l.id} className="inline-flex items-center gap-1 rounded-lg border border-accent/25 bg-accent/[0.06] px-2 py-1 text-xs text-accent">
+                  <button onClick={() => onOpenNote(l.id)} className="cursor-pointer hover:underline">
                     {l.title}
                   </button>
                   <button
@@ -635,7 +653,7 @@ function NoteModal({
                         linkNotes(note.id, n.id);
                         setLinkSearch("");
                       }}
-                      className="flex w-full items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-left text-xs text-ink-dim hover:border-accent/40 hover:text-ink cursor-pointer"
+                      className="flex w-full items-center gap-2 rounded-lg border border-border bg-white px-2.5 py-1.5 text-left text-xs text-ink-dim hover:border-accent/40 hover:text-ink cursor-pointer"
                     >
                       <Link2 className="size-3" /> {n.title}
                       <span className="ml-auto text-[10px] text-ink-dim/60">{n.domain}</span>
@@ -648,14 +666,14 @@ function NoteModal({
           {/* 反向链接 */}
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
-              🔙 反向链接（{backlinks.length}）
+              反向链接（{backlinks.length}）
             </p>
             <div className="flex flex-wrap gap-1.5">
               {backlinks.map((b) => (
                 <button
                   key={b.id}
                   onClick={() => onOpenNote(b.id)}
-                  className="rounded-lg border border-border bg-surface-2/60 px-2 py-1 text-xs text-ink-dim hover:text-ink cursor-pointer"
+                  className="rounded-lg border border-border bg-surface-2/70 px-2 py-1 text-xs text-ink-dim hover:text-ink cursor-pointer"
                 >
                   {b.title}
                 </button>
@@ -686,8 +704,8 @@ function FilterChip({
       className={cn(
         "rounded-full border px-3 py-1.5 text-xs transition cursor-pointer",
         active
-          ? "border-accent/50 bg-accent/15 text-white"
-          : "border-border text-ink-dim hover:text-ink"
+          ? "border-accent/30 bg-accent/[0.08] font-medium text-accent"
+          : "border-border bg-white text-ink-dim hover:text-ink hover:border-[#d4d4d8]"
       )}
     >
       {children}
@@ -716,7 +734,7 @@ function StatCard({
         {icon}
         <p className="text-xs">{label}</p>
       </div>
-      <p className="tabular mt-2 text-2xl font-extrabold text-white">
+      <p className="tabular mt-2 text-2xl font-extrabold text-ink">
         {value} <span className="text-sm font-normal text-ink-dim">{unit}</span>
       </p>
     </Card>

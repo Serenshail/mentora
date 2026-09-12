@@ -66,7 +66,7 @@ export default function SettingsPage() {
 
       {/* Provider 选择 */}
       <Card className="mb-6">
-        <p className="mb-4 text-sm font-bold text-white">模型</p>
+        <p className="mb-4 text-sm font-bold text-ink">模型</p>
         <div className="grid gap-2.5 sm:grid-cols-2">
           {(Object.keys(PROVIDERS) as ProviderId[]).map((id) => {
             const p = PROVIDERS[id];
@@ -78,12 +78,12 @@ export default function SettingsPage() {
                 className={cn(
                   "rounded-xl border p-3.5 text-left transition cursor-pointer",
                   selected
-                    ? "border-accent/60 bg-accent/10"
-                    : "border-border hover:border-accent/30 hover:bg-white/5"
+                    ? "border-accent/40 bg-accent/[0.06]"
+                    : "border-border hover:border-[#d4d4d8] hover:bg-black/[0.02]"
                 )}
               >
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-bold text-white">{p.name}</p>
+                  <p className="text-sm font-bold text-ink">{p.name}</p>
                   {selected && <Badge tone="accent">已选择</Badge>}
                 </div>
                 {p.note && <p className="mt-1 text-xs text-ink-dim">{p.note}</p>}
@@ -133,7 +133,7 @@ export default function SettingsPage() {
                     <button
                       key={m}
                       onClick={() => setSettings({ model: m })}
-                      className="rounded-md border border-border px-2 py-0.5 text-[11px] text-ink-dim hover:text-ink hover:border-accent/40 cursor-pointer"
+                      className="rounded-md border border-border bg-white px-2 py-0.5 text-[11px] text-ink-dim hover:text-ink hover:border-accent/40 cursor-pointer"
                     >
                       {m}
                     </button>
@@ -149,13 +149,13 @@ export default function SettingsPage() {
             href={info.keyUrl}
             target="_blank"
             rel="noreferrer"
-            className="mt-3 inline-block text-xs text-[#22d3ee] hover:underline"
+            className="mt-3 inline-block text-xs text-accent hover:underline"
           >
             ↗ 获取 {info.name} API Key
           </a>
         )}
         {settings.provider === "demo" && (
-          <p className="mt-3 rounded-xl border border-ok/30 bg-ok/10 p-3 text-xs text-ok/90">
+          <p className="mt-3 rounded-xl border border-ok/25 bg-ok/[0.06] p-3 text-xs text-ok">
             「自动」模式：优先使用部署者在服务端配置的模型（当前已配置 DeepSeek）；服务端未配置 Key 时回退为演示模式。
             想用自己的 Key？选上面任意服务商并填入，费用归你。
           </p>
@@ -164,7 +164,7 @@ export default function SettingsPage() {
 
       {/* 用户名 */}
       <Card className="mb-6">
-        <p className="mb-3 text-sm font-bold text-white">怎么称呼你</p>
+        <p className="mb-3 text-sm font-bold text-ink">怎么称呼你</p>
         <Input
           placeholder="教练会这样称呼你"
           value={settings.userName}
@@ -174,7 +174,7 @@ export default function SettingsPage() {
 
       {/* 数据管理 */}
       <Card className="mb-6">
-        <p className="mb-3 text-sm font-bold text-white">数据</p>
+        <p className="mb-3 text-sm font-bold text-ink">数据</p>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={exportAll}>
             <Download className="size-4" /> 导出备份

@@ -18,7 +18,8 @@ const W = 920;
 const H = 560;
 
 function domainColor(domain: string): string {
-  const palette = ["#7c6cff", "#22d3ee", "#34d399", "#fbbf24", "#f87171", "#f472b6", "#60a5fa", "#a78bfa"];
+  /* 沉稳编辑级色板：去品红/亮紫（AI 感），统一低饱和 */
+  const palette = ["#5b54e6", "#0e7490", "#047857", "#b45309", "#9f1239", "#475569"];
   let h = 0;
   for (let i = 0; i < domain.length; i++) h = (h * 31 + domain.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
@@ -139,7 +140,7 @@ export function GraphView({
     <svg
       ref={svgRef}
       viewBox={`0 0 ${W} ${H}`}
-      className="w-full rounded-2xl border border-border bg-[#0a0c11] touch-none"
+      className="w-full rounded-2xl border border-border bg-[#fcfcfd] touch-none"
       style={{ height: 560 }}
       onPointerMove={(e) => {
         if (!dragRef.current) return;
@@ -160,7 +161,7 @@ export function GraphView({
           <line
             key={i}
             x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-            stroke={active ? "#3b4260" : "#1c2030"}
+            stroke={active ? "#b9b4ee" : "#e9e9ec"}
             strokeWidth={active ? 1.4 : 1}
           />
         );
@@ -183,12 +184,12 @@ export function GraphView({
             onPointerEnter={() => setHover(n.id)}
             onPointerLeave={() => setHover(null)}
           >
-            <circle r={r} fill={domainColor(n.domain)} stroke={hover === n.id ? "#fff" : "none"} strokeWidth={2} />
+            <circle r={r} fill={domainColor(n.domain)} stroke={hover === n.id ? "#1a1a1a" : "none"} strokeWidth={2} />
             <text
               y={r + 13}
               textAnchor="middle"
               fontSize={11}
-              fill={hover === n.id ? "#fff" : "#9aa3b8"}
+              fill={hover === n.id ? "#1a1a1a" : "#6e6e73"}
               style={{ pointerEvents: "none", userSelect: "none" }}
             >
               {n.title.length > 12 ? n.title.slice(0, 12) + "…" : n.title}
@@ -197,7 +198,7 @@ export function GraphView({
         );
       })}
       {notes.length === 0 && (
-        <text x={W / 2} y={H / 2} textAnchor="middle" fill="#4a5164" fontSize={14}>
+        <text x={W / 2} y={H / 2} textAnchor="middle" fill="#a1a1aa" fontSize={14}>
           笔记还不够多——先积累几条，图谱会长出来
         </text>
       )}

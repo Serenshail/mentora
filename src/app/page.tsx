@@ -7,7 +7,7 @@ import { useAppStore, useDueReviews } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { cn, streakFrom } from "@/lib/utils";
 import {
-  ArrowRight, BookOpen, Brain, Compass, Flame, GraduationCap, Sparkles, Zap,
+  ArrowRight, BookOpen, Brain, Compass, Flame, GraduationCap, Zap,
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -41,14 +41,13 @@ export default function Dashboard() {
   return (
     <div>
       <PageHeader
-        icon={<Sparkles className="size-5" />}
         title={userName ? `${userName}，继续。` : "继续。"}
         desc="今天学什么、复习什么，都在这一页。"
       />
 
       {isEmpty ? (
-        <Card className="border-accent/40 bg-gradient-to-br from-accent/10 to-cyan-500/5">
-          <h2 className="text-lg font-bold text-white">👋 欢迎来到 Mentora</h2>
+        <Card className="border-accent/25 bg-accent/[0.035]">
+          <h2 className="text-lg font-bold text-ink">欢迎来到 Mentora</h2>
           <div className="mt-4 space-y-2 text-sm text-ink-dim">
             <p><b className="text-ink">① 说出你想学的。</b>教练问你几句，就排出计划。</p>
             <p><b className="text-ink">② 每天一课。</b>验收通过才放行，笔记自动进你的知识库。</p>
@@ -82,7 +81,7 @@ export default function Dashboard() {
                 <ProgressRing value={progress} size={72} label={`${Math.round(progress * 100)}%`} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold text-white">{activeGoal.topic}</h3>
+                    <h3 className="text-base font-bold text-ink">{activeGoal.topic}</h3>
                     <Badge tone="accent">进行中</Badge>
                   </div>
                   {activeDay ? (
@@ -90,7 +89,7 @@ export default function Dashboard() {
                       <StatusDot status="active" /> {activeDay.title}
                     </p>
                   ) : (
-                    <p className="mt-1 text-sm text-ok">全部完成 🎉</p>
+                    <p className="mt-1 text-sm text-ok">全部完成</p>
                   )}
                   <Button size="sm" className="mt-3" onClick={() => router.push(`/learn/${activeGoal.id}`)}>
                     {activeDay ? "继续今天的学习" : "查看成果"} <ArrowRight className="size-3.5" />
@@ -100,7 +99,7 @@ export default function Dashboard() {
             ) : (
               <p className="mt-3 text-sm text-ink-dim">
                 没有进行中的目标。
-                <Link href="/learn" className="ml-1 text-[#22d3ee] hover:underline">
+                <Link href="/learn" className="ml-1 text-accent hover:underline">
                   开一个新的 →
                 </Link>
               </p>
@@ -115,11 +114,11 @@ export default function Dashboard() {
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
               <Zap className="size-4" /> 第二大脑
             </p>
-            <p className="tabular mt-3 text-3xl font-extrabold text-white">
+            <p className="tabular mt-3 text-3xl font-extrabold text-ink">
               {knowledge.length} <span className="text-sm font-normal text-ink-dim">条知识</span>
             </p>
             {due.length > 0 ? (
-              <p className="mt-2 flex items-center gap-1.5 text-sm text-[#b7adff]">
+              <p className="mt-2 flex items-center gap-1.5 text-sm text-accent">
                 <Badge tone="warn">{due.length} 条待复习</Badge> 点此去刷
               </p>
             ) : (
@@ -134,17 +133,17 @@ export default function Dashboard() {
             </p>
             {readingBook ? (
               <>
-                <h3 className="mt-3 truncate text-lg font-bold text-white">《{readingBook.title}》</h3>
+                <h3 className="mt-3 truncate text-lg font-bold text-ink">《{readingBook.title}》</h3>
                 <p className="mt-1.5 text-sm text-ink-dim">
                   {readingBook.chapters.filter((c) => c.status === "done").length}/
                   {readingBook.chapters.length} 章 · 洞见 {readingBook.insights.length} 条
                 </p>
-                <p className="mt-3 text-sm text-[#22d3ee]">继续阅读 →</p>
+                <p className="mt-3 text-sm text-accent">继续阅读 →</p>
               </>
             ) : (
               <>
                 <p className="mt-3 text-sm text-ink-dim">书架空着。挑一本书，带着问题读。</p>
-                <p className="mt-3 text-sm text-[#22d3ee]">去添加 →</p>
+                <p className="mt-3 text-sm text-accent">去添加 →</p>
               </>
             )}
           </Card>

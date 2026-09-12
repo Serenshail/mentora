@@ -181,11 +181,11 @@ function IntakeInner() {
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-5 flex items-center gap-3">
-        <div className="flex size-10 items-center justify-center rounded-xl bg-accent/15 text-[#b7adff] border border-accent/25">
+        <div className="flex size-10 items-center justify-center rounded-xl bg-accent/[0.08] text-accent border border-accent/20">
           <Compass className="size-5" />
         </div>
         <div>
-          <h1 className="text-lg font-bold text-white">方向引导：学{topic}</h1>
+          <h1 className="text-lg font-bold text-ink">方向引导：学{topic}</h1>
           <p className="text-xs text-ink-dim">
             教练想真正了解你，会多问几句。对话自动保存，想走就走。
           </p>
@@ -201,7 +201,7 @@ function IntakeInner() {
         {messages.map((m) => (
           <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
             {m.role === "user" ? (
-              <div className="max-w-[80%] rounded-2xl rounded-br-md bg-accent/20 border border-accent/30 px-4 py-2.5 text-sm">
+              <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1a1a1a] px-4 py-2.5 text-sm text-white">
                 {m.content}
               </div>
             ) : (
@@ -224,10 +224,10 @@ function IntakeInner() {
 
       {/* 目标卡确认 */}
       {stage === "confirm" && card && (
-        <Card className="mt-6 animate-rise border-accent/40">
+        <Card className="mt-6 animate-rise border-accent/25">
           <div className="mb-4 flex items-center gap-2">
-            <Target className="size-5 text-[#b7adff]" />
-            <h3 className="font-bold text-white">目标卡确认</h3>
+            <Target className="size-5 text-accent" />
+            <h3 className="font-bold text-ink">目标卡确认</h3>
             <Badge tone="accent">可修改</Badge>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -268,7 +268,7 @@ function IntakeInner() {
               />
             </label>
             {(card.assumptions?.length ?? 0) > 0 && (
-              <div className="rounded-xl border border-warn/30 bg-warn/10 p-3 text-xs text-warn/90 sm:col-span-2">
+              <div className="rounded-xl border border-warn/25 bg-warn/[0.06] p-3 text-xs text-warn sm:col-span-2">
                 <p className="mb-1 font-semibold">教练替你做的假设（不同意就在对话里纠正）：</p>
                 <ul className="list-disc pl-4 space-y-0.5">
                   {card.assumptions!.map((a, i) => <li key={i}>{a}</li>)}
@@ -303,8 +303,8 @@ function IntakeInner() {
 
       {/* 计划生成中 */}
       {stage === "planning" && (
-        <Card className="mt-6 animate-rise border-accent/40">
-          <p className="mb-2 text-sm font-semibold text-white">
+        <Card className="mt-6 animate-rise border-accent/25">
+          <p className="mb-2 text-sm font-semibold text-ink">
             🏗️ 正在设计「{card?.topic}」的总学习纲要…
           </p>
           <pre className="max-h-40 overflow-hidden whitespace-pre-wrap text-xs text-ink-dim">
@@ -339,7 +339,7 @@ function IntakeInner() {
               });
             }}
             disabled={streaming}
-            className="mt-2 w-full cursor-pointer rounded-xl border border-dashed border-accent/40 py-2 text-xs text-ink-dim transition hover:border-accent/70 hover:text-[#b7adff] disabled:opacity-50"
+            className="mt-2 w-full cursor-pointer rounded-xl border border-dashed border-accent/30 py-2 text-xs text-ink-dim transition hover:border-accent/60 hover:text-accent disabled:opacity-50"
           >
             ⏭️ 不想再答了 —— 让教练按现有信息直接生成目标与计划
           </button>
