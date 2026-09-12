@@ -26,6 +26,7 @@ export default function BookPage() {
   const { messages, setMessages, pending, streaming, send } = useChat();
   const [input, setInput] = useState("");
   const [currentChapter, setCurrentChapter] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -135,18 +136,22 @@ export default function BookPage() {
           </Button>
         }
       />
-
       {book.profile && (
-        <Card className="mb-4 border-accent/30 bg-accent/5">
-          <p className="mb-2 text-xs font-bold uppercase tracking-wider text-[#b7adff]">📖 深度解剖档案</p>
-          <div className="space-y-2 text-sm leading-relaxed">
-            <p><b className="text-white">定位：</b><span className="text-ink-dim">{book.profile.positioning}</span></p>
-            <p><b className="text-white">作者：</b><span className="text-ink-dim">{book.profile.author}</span></p>
-            <p><b className="text-white">思想谱系：</b><span className="text-ink-dim">{book.profile.lineage}</span></p>
-            <p><b className="text-white">争议：</b><span className="text-ink-dim">{book.profile.controversies}</span></p>
-          </div>
-        </Card>
+        <div className="mb-6 grid gap-2.5 sm:grid-cols-2">
+          {([
+            ["这本书在解决什么", book.profile.positioning],
+            ["作者与立场", book.profile.author],
+            ["思想谱系", book.profile.lineage],
+            ["争议", book.profile.controversies],
+          ] as [string, string][]).map(([label, text]) => (
+            <Card key={label} className="p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[#8b83d6]">{label}</p>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-ink-dim">{text}</p>
+            </Card>
+          ))}
+        </div>
       )}
+
       {book.planSummary && (
         <Card className="mb-6 border-border bg-surface-2/50 text-sm text-ink-dim">
           <b className="text-ink">拆解路线：</b>{book.planSummary}
@@ -156,60 +161,78 @@ export default function BookPage() {
       <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
         {/* 章节计划 */}
         <Card className="h-fit lg:sticky lg:top-8">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-ink-dim">
-            阅读计划 · 带着问题读
+          <p className="mb-4 text-xs font-semibold uppercase tracking-wider text-ink-dim">
+            阅读路线 · 点击单元展开导读
           </p>
-          <div className="space-y-2">
-            {book.chapters.map((c, i) => (
-              <button
-                key={c.id}
-                onClick={() => setCurrentChapter(c.id)}
-                className={cn(
-                  "w-full rounded-xl border p-3 text-left text-xs transition cursor-pointer",
-                  chapter?.id === c.id
-                    ? "border-accent/60 bg-accent/10"
-                    : "border-border hover:border-accent/30 hover:bg-white/5"
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <StatusDot status={c.status} />
-                  <span className="font-semibold text-white">
-                    {i + 1}. {c.title}
+          <div className="relative ml-2 space-y-1 border-l border-white/[0.08] pl-5">
+            {book.chapters.map((c, i) => {
+              const expanded = expandedId === c.id || chapter?.id === c.id;
+              return (
+                <div key={c.id} className="relative">
+                  <span
+                    className={cn(
+                      "absolute -left-[27px] top-3 flex size-3.5 items-center justify-center rounded-full border text-[8px] font-bold",
+                      c.status === "done"
+                        ? "border-ok/60 bg-ok/20 text-ok"
+                        : chapter?.id === c.id
+                          ? "border-accent/70 bg-accent/25 text-white"
+                          : "border-white/15 bg-surface-2 text-ink-dim"
+                    )}
+                  >
+                    {i + 1}
                   </span>
-                  {c.status === "done" && <Check className="ml-auto size-3.5 text-ok" />}
+                  <button
+                    onClick={() => {
+                      setCurrentChapter(c.id);
+                      setExpandedId(expanded && chapter?.id === c.id ? null : c.id);
+                    }}
+                    className={cn(
+                      "w-full rounded-xl px-3 py-2.5 text-left transition cursor-pointer",
+                      chapter?.id === c.id ? "bg-accent/10" : "hover:bg-white/[0.04]"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={cn("text-[13px] font-semibold", chapter?.id === c.id ? "text-white" : "text-ink")}>
+                        {c.title}
+                      </span>
+                      {c.status === "done" && <Check className="ml-auto size-3.5 shrink-0 text-ok" />}
+                    </div>
+                    <p className="mt-0.5 line-clamp-1 text-[11.5px] text-ink-dim">❓ {c.focusQuestion}</p>
+                  </button>
+                  {expanded && (
+                    <div className="mb-2 space-y-2 rounded-xl border border-white/[0.06] bg-black/20 p-3">
+                      {c.coreIdea && (
+                        <p className="text-[11.5px] leading-relaxed text-ink-dim">
+                          <b className="text-ink">💡 核心论点：</b>{c.coreIdea}
+                        </p>
+                      )}
+                      {c.perspectives && c.perspectives.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10.5px] font-semibold uppercase tracking-wider text-[#8b83d6]">交叉视角</p>
+                          {c.perspectives.map((pv, j) => (
+                            <p key={j} className="text-[11.5px] leading-relaxed text-[#8b9dc6]">⟡ {pv}</p>
+                          ))}
+                        </div>
+                      )}
+                      {c.capture && c.capture.length > 0 && (
+                        <p className="text-[11px] leading-relaxed text-ink-dim/80">
+                          📝 值得记：{c.capture.join(" / ")}
+                        </p>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => toggleChapter(book.id, c.id)}
+                      >
+                        {c.status === "done" ? "标记为未读" : "标记此单元已读完"}
+                      </Button>
+                    </div>
+                  )}
                 </div>
-                <p className="mt-1.5 text-ink-dim">❓ {c.focusQuestion}</p>
-                {c.coreIdea && (
-                  <p className="mt-1.5 rounded-lg bg-black/20 px-2 py-1.5 text-[11px] leading-relaxed text-ink-dim">
-                    💡 核心论点：{c.coreIdea}
-                  </p>
-                )}
-                {c.perspectives && c.perspectives.length > 0 && (
-                  <div className="mt-1.5 space-y-1">
-                    {c.perspectives.map((pv, j) => (
-                      <p key={j} className="text-[11px] leading-relaxed text-[#8b9dc6]">
-                        ⟡ {pv}
-                      </p>
-                    ))}
-                  </div>
-                )}
-                {c.capture && c.capture.length > 0 && (
-                  <p className="mt-1.5 text-[11px] text-ink-dim/70">📝 值得记：{c.capture.join(" / ")}</p>
-                )}
-              </button>
-            ))}
+              );
+            })}
           </div>
-          {chapter && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-4 w-full"
-              onClick={() => toggleChapter(book.id, chapter.id)}
-            >
-              {chapter.status === "done" ? "标记为未读" : `标记「${chapter.title}」已读完`}
-            </Button>
-          )}
-
           {book.insights.length > 0 && (
             <div className="mt-6">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">

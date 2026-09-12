@@ -26,22 +26,22 @@ export function Button({
 }) {
   const variants: Record<BtnVariant, string> = {
     primary:
-      "bg-gradient-to-r from-[#7c6cff] to-[#5b8cff] text-white hover:brightness-110 shadow-[0_4px_20px_-4px_rgba(124,108,255,0.5)]",
-    ghost: "text-ink-dim hover:text-ink hover:bg-white/5",
+      "bg-gradient-to-r from-[#7c6cff] to-[#5b8cff] text-white hover:brightness-110 shadow-[0_6px_24px_-6px_rgba(124,108,255,0.55)] font-semibold",
+    ghost: "text-ink-dim hover:text-ink hover:bg-white/[0.06]",
     outline:
-      "border border-border bg-surface/60 text-ink hover:border-accent/60 hover:bg-surface-2",
-    danger: "bg-bad/15 text-bad border border-bad/40 hover:bg-bad/25",
-    ok: "bg-ok/15 text-ok border border-ok/40 hover:bg-ok/25",
+      "border border-border bg-surface/50 text-ink hover:border-accent/50 hover:bg-surface-2",
+    danger: "bg-bad/10 text-bad border border-bad/35 hover:bg-bad/20 font-medium",
+    ok: "bg-ok/10 text-ok border border-ok/35 hover:bg-ok/20 font-medium",
   };
   const sizes = {
-    sm: "h-8 px-3 text-xs rounded-lg",
-    md: "h-10 px-4 text-sm rounded-xl",
-    lg: "h-12 px-6 text-base rounded-xl",
+    sm: "h-8 px-3 text-[13px] rounded-[10px]",
+    md: "h-10 px-4.5 text-sm rounded-xl",
+    lg: "h-12 px-6 text-[15px] rounded-2xl",
   };
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center gap-2 font-medium transition-all active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none cursor-pointer",
+        "inline-flex items-center justify-center gap-2 tracking-[-0.01em] transition-all duration-150 active:scale-[0.98] disabled:opacity-45 disabled:pointer-events-none cursor-pointer",
         variants[variant],
         sizes[size],
         className
@@ -64,7 +64,7 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-2xl border border-border bg-surface/70 backdrop-blur p-5",
+        "rounded-[18px] border border-white/[0.07] bg-surface/80 shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset,0_8px_24px_-12px_rgba(0,0,0,0.5)] p-5",
         className
       )}
       {...props}
@@ -110,7 +110,7 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   return (
     <input
       className={cn(
-        "h-10 w-full rounded-xl border border-border bg-surface-2/80 px-3.5 text-sm text-ink placeholder:text-ink-dim/60 outline-none transition focus:border-accent/70 focus:ring-2 focus:ring-accent/20",
+        "h-10 w-full rounded-xl border border-white/[0.08] bg-black/25 px-3.5 text-sm text-ink placeholder:text-ink-dim/50 outline-none transition focus:border-accent/60 focus:ring-[3px] focus:ring-accent/15",
         className
       )}
       {...props}
@@ -125,7 +125,7 @@ export function Textarea({
   return (
     <textarea
       className={cn(
-        "w-full rounded-xl border border-border bg-surface-2/80 px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-dim/60 outline-none transition focus:border-accent/70 focus:ring-2 focus:ring-accent/20 resize-none",
+        "w-full rounded-xl border border-white/[0.08] bg-black/25 px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-dim/50 outline-none transition focus:border-accent/60 focus:ring-[3px] focus:ring-accent/15 resize-none",
         className
       )}
       {...props}
@@ -146,16 +146,16 @@ export function PageHeader({
   icon?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 mb-6">
-      <div className="flex items-start gap-3">
+    <div className="flex items-start justify-between gap-4 mb-8">
+      <div className="flex items-start gap-3.5">
         {icon && (
-          <div className="mt-0.5 flex size-10 items-center justify-center rounded-xl bg-accent/15 text-[#b7adff] border border-accent/25">
+          <div className="mt-1 flex size-11 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/20 to-accent-2/10 text-[#b7adff] border border-accent/20">
             {icon}
           </div>
         )}
         <div>
-          <h1 className="text-xl font-bold text-white tracking-tight">{title}</h1>
-          {desc && <p className="mt-1 text-sm text-ink-dim max-w-2xl">{desc}</p>}
+          <h1 className="text-[26px] leading-tight font-bold text-white tracking-[-0.03em]">{title}</h1>
+          {desc && <p className="mt-1.5 text-[13.5px] leading-relaxed text-ink-dim max-w-2xl">{desc}</p>}
         </div>
       </div>
       {right}

@@ -166,6 +166,8 @@ export default function CouncilPage() {
     setRtHost("");
     const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
     addSessionMsg(active.id, userMsg);
+    // 立即同步到聊天状态，让提问在生成期间就可见
+    setMessages([...active.messages, userMsg]);
     setInput("");
 
     const participants = (active.participants ?? []).map((id) => resolvePersona(id)).filter(Boolean) as ResolvedPersona[];
@@ -227,6 +229,11 @@ export default function CouncilPage() {
     } catch {
       toast.error("主持人纪要生成失败");
     }
+    // 全量同步：把圆桌的所有发言与纪要显示出来（这是清零 bug 的修复）
+    const finalMsgs = useAppStore.getState().sessions.find((x) => x.id === active.id)?.messages ?? [];
+    setMessages(finalMsgs);
+    setRtTakes({});
+    setRtHost("");
     setRtBusy(false);
   };
 

@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-bg: #0b0d12;
-  --color-surface: #12151d;
-  --color-surface-2: #181c27;
-  --color-border: #232838;
-  --color-ink: #e7eaf2;
-  --color-ink-dim: #9aa3b8;
+  --color-bg: #08090d;
+  --color-surface: #0f1218;
+  --color-surface-2: #161a23;
+  --color-border: #1e2330;
+  --color-ink: #eceff6;
+  --color-ink-dim: #98a1b6;
   --color-accent: #7c6cff;
   --color-accent-2: #22d3ee;
   --color-ok: #34d399;
@@ -19,28 +19,39 @@
 
 html {
   color-scheme: dark;
+  font-size: 15.5px;
 }
 
 body {
   background:
-    radial-gradient(1200px 600px at 80% -10%, rgba(124, 108, 255, 0.14), transparent 60%),
-    radial-gradient(900px 500px at -10% 20%, rgba(34, 211, 238, 0.08), transparent 55%),
+    radial-gradient(1400px 700px at 85% -15%, rgba(124, 108, 255, 0.11), transparent 55%),
+    radial-gradient(1000px 550px at -15% 15%, rgba(34, 211, 238, 0.06), transparent 50%),
     var(--color-bg);
   color: var(--color-ink);
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  letter-spacing: 0.01em;
+}
+
+h1, h2, h3 {
+  letter-spacing: -0.02em;
 }
 
 ::selection {
-  background: rgba(124, 108, 255, 0.35);
+  background: rgba(124, 108, 255, 0.32);
 }
 
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #2a3042;
+  background: #262c3d;
   border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #333a50;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
@@ -48,27 +59,39 @@ body {
 
 /* ---- markdown 内容排版 ---- */
 .prose-mentora {
-  line-height: 1.75;
-  font-size: 0.925rem;
+  line-height: 1.8;
+  font-size: 0.92rem;
   word-break: break-word;
 }
-.prose-mentora h2 {
-  font-size: 1.1rem;
+.prose-mentora h1 {
+  font-size: 1.15rem;
   font-weight: 700;
-  margin: 1.4em 0 0.6em;
+  margin: 1.5em 0 0.6em;
   color: #fff;
+  letter-spacing: -0.02em;
+}
+.prose-mentora h2 {
+  font-size: 1.08rem;
+  font-weight: 700;
+  margin: 1.6em 0 0.6em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--color-border);
+  color: #fff;
+  letter-spacing: -0.01em;
 }
 .prose-mentora h3 {
-  font-size: 1rem;
+  font-size: 0.98rem;
   font-weight: 600;
-  margin: 1.2em 0 0.5em;
+  margin: 1.25em 0 0.5em;
+  color: #dfe4f0;
 }
 .prose-mentora p {
-  margin: 0.6em 0;
+  margin: 0.65em 0;
+  color: #c9cfdd;
 }
 .prose-mentora ul,
 .prose-mentora ol {
-  margin: 0.6em 0;
+  margin: 0.65em 0;
   padding-left: 1.4em;
 }
 .prose-mentora ul {
@@ -78,60 +101,77 @@ body {
   list-style: decimal;
 }
 .prose-mentora li {
-  margin: 0.3em 0;
+  margin: 0.35em 0;
+  color: #c9cfdd;
+}
+.prose-mentora li::marker {
+  color: #5a6379;
+}
+.prose-mentora strong {
+  color: #fff;
+  font-weight: 600;
 }
 .prose-mentora code {
-  background: rgba(124, 108, 255, 0.12);
+  background: rgba(124, 108, 255, 0.1);
   color: #c4b5fd;
   border-radius: 5px;
-  padding: 0.1em 0.4em;
+  padding: 0.12em 0.4em;
   font-size: 0.85em;
   font-family: var(--font-mono);
 }
 .prose-mentora pre {
-  background: #0d1017;
+  background: #0a0d13;
   border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 14px 16px;
+  border-radius: 14px;
+  padding: 16px 18px;
   overflow-x: auto;
-  margin: 0.9em 0;
+  margin: 1em 0;
+  line-height: 1.65;
 }
 .prose-mentora pre code {
   background: none;
   padding: 0;
   color: #d8e0f0;
-  font-size: 0.82rem;
-  line-height: 1.6;
+  font-size: 0.8rem;
 }
 .prose-mentora blockquote {
-  border-left: 3px solid var(--color-accent);
-  padding-left: 12px;
+  border-left: 2px solid var(--color-accent);
+  padding: 0.2em 0 0.2em 14px;
   color: var(--color-ink-dim);
-  margin: 0.8em 0;
+  margin: 0.9em 0;
+  background: rgba(124, 108, 255, 0.04);
+  border-radius: 0 8px 8px 0;
 }
 .prose-mentora a {
   color: var(--color-accent-2);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.3);
+  transition: border-color 0.15s;
 }
-.prose-mentora strong {
-  color: #fff;
+.prose-mentora a:hover {
+  border-bottom-color: var(--color-accent-2);
 }
 .prose-mentora table {
   border-collapse: collapse;
-  margin: 0.8em 0;
+  margin: 0.9em 0;
   width: 100%;
+}
+.prose-mentora th {
+  color: #fff;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.03);
 }
 .prose-mentora th,
 .prose-mentora td {
   border: 1px solid var(--color-border);
-  padding: 6px 10px;
-  font-size: 0.85rem;
+  padding: 7px 11px;
+  font-size: 0.83rem;
   text-align: left;
 }
 .prose-mentora hr {
-  border-color: var(--color-border);
-  margin: 1.2em 0;
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 1.4em 0;
 }
 
 @keyframes rise {

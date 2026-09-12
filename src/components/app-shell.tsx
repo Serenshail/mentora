@@ -34,7 +34,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen w-full">
       {/* 侧边栏 */}
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-border bg-surface/40 backdrop-blur md:flex">
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/[0.06] bg-surface/30 backdrop-blur-xl md:flex">
         <div className="flex items-center gap-2.5 px-5 py-6">
           <div className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#7c6cff] to-[#22d3ee] shadow-[0_4px_16px_-2px_rgba(124,108,255,0.6)]">
             <Sparkles className="size-5 text-white" />
@@ -51,10 +51,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               key={href}
               href={href}
               className={cn(
-                "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all",
+                "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13.5px] font-medium tracking-[-0.01em] transition-all duration-150",
                 isActive(href)
-                  ? "bg-accent/15 text-white border border-accent/25"
-                  : "text-ink-dim hover:bg-white/5 hover:text-ink border border-transparent"
+                  ? "bg-gradient-to-r from-accent/20 to-accent/5 text-white border border-accent/25 shadow-[0_0_20px_-8px_rgba(124,108,255,0.6)]"
+                  : "text-ink-dim hover:bg-white/[0.04] hover:text-ink border border-transparent"
               )}
             >
               <Icon className="size-[18px]" />
@@ -78,7 +78,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* 主区 */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 移动端顶栏 */}
-        <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-bg/80 px-4 py-3 backdrop-blur md:hidden">
+        <header className="sticky top-0 z-40 flex items-center justify-between border-b border-white/[0.06] bg-bg/80 px-4 py-3 backdrop-blur-xl md:hidden">
           <Link href="/" className="flex items-center gap-2">
             <div className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-[#7c6cff] to-[#22d3ee]">
               <Sparkles className="size-4 text-white" />
@@ -87,7 +87,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Link>
         </header>
 
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 md:px-8 md:py-8">
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-7 md:px-10 md:py-10">
           {children}
         </main>
 
