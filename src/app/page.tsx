@@ -42,19 +42,18 @@ export default function Dashboard() {
     <div>
       <PageHeader
         icon={<Sparkles className="size-5" />}
-        title={userName ? `${userName}，今天推进什么？` : "今天推进什么？"}
-        desc="学习教练 × 第二大脑 × 读书伙伴 × 人生伙伴 —— 一套完整认知操作系统"
+        title={userName ? `${userName}，继续。` : "继续。"}
+        desc="今天学什么、复习什么，都在这一页。"
       />
 
       {isEmpty ? (
         <Card className="border-accent/40 bg-gradient-to-br from-accent/10 to-cyan-500/5">
           <h2 className="text-lg font-bold text-white">👋 欢迎来到 Mentora</h2>
-          <p className="mt-2 text-sm leading-relaxed text-ink-dim">
-            三步开始：
-            <b className="text-ink"> ① 学习教练</b> 里输入你想学的东西，教练会用苏格拉底式追问帮你把模糊的愿望变成清晰的目标和计划；
-            <b className="text-ink"> ②</b> 每天的学习文档 + 逐条验收，通过才解锁下一阶段，知识点自动沉淀到<b className="text-ink">第二大脑</b>并按 1/3/7/15 天复习；
-            <b className="text-ink"> ③</b> 困惑和焦虑随时扔给<b className="text-ink">人生伙伴</b>——12 位智者的思维方式给你独立判断。
-          </p>
+          <div className="mt-4 space-y-2 text-sm text-ink-dim">
+            <p><b className="text-ink">① 说出你想学的。</b>教练问你几句，就排出计划。</p>
+            <p><b className="text-ink">② 每天一课。</b>验收通过才放行，笔记自动进你的知识库。</p>
+            <p><b className="text-ink">③ 拿不定的事</b>，找几位说真话的老朋友。</p>
+          </div>
           <div className="mt-5 flex flex-wrap gap-2">
             <Button onClick={() => router.push("/learn")}>
               <GraduationCap className="size-4" /> 开始第一个目标
@@ -124,7 +123,7 @@ export default function Dashboard() {
                 <Badge tone="warn">{due.length} 条待复习</Badge> 点此去刷
               </p>
             ) : (
-              <p className="mt-2 text-sm text-ink-dim">今日复习已完成，记忆曲线稳着呢</p>
+              <p className="mt-2 text-sm text-ink-dim">该刷的都刷完了。</p>
             )}
           </Card>
 
@@ -161,7 +160,7 @@ export default function Dashboard() {
                   <Compass className="size-4" /> 人生伙伴
                 </p>
                 <p className="mt-3 text-sm leading-relaxed text-ink-dim">
-                  有焦虑、决策、自我怀疑？扔过来。「AI 会不会取代我」这种问题，它会先纠正你问法，再给你判断。
+                  拿不定的事，扔过来。他们不说客套话。
                 </p>
               </div>
               <Button variant="outline" className="shrink-0">

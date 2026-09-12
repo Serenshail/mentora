@@ -313,7 +313,7 @@ export default function CouncilPage() {
       <PageHeader
         icon={<Compass className="size-5" />}
         title="人生伙伴"
-        desc="高认知的思想伙伴：不迎合、不安慰式敷衍。12 位深度蒸馏的智者 + 自建智能体 + 全员圆桌研讨会。"
+        desc="拿不定的事，问他们。他们不说客套话。"
         right={
           <Button variant="outline" onClick={newChat}>
             <Plus className="size-4" /> 新对话
@@ -384,7 +384,7 @@ export default function CouncilPage() {
                     <div>
                       <p className="font-bold text-white">圆桌研讨会</p>
                       <p className="text-xs text-ink-dim">
-                        你选的每位与会者都独立发言，最后主持人给出纪要：共识 / 真分歧 / 被遗漏的视角 / 下一步
+                        每人独立发言，主持人收拢成纪要。
                       </p>
                     </div>
                   </div>
@@ -458,11 +458,10 @@ export default function CouncilPage() {
 
               <Card className="mt-6 border-warn/30 bg-warn/5">
                 <p className="flex items-center gap-2 text-sm font-bold text-warn">
-                  <Zap className="size-4" /> 这里的对话有一条铁律
+                  <Zap className="size-4" /> 规矩只有一条
                 </p>
                 <p className="mt-2 text-xs leading-relaxed text-ink-dim">
-                  第一句话就是明确判断，没有「取决于」「各有道理」；它会主动给出你观点的最强反方；
-                  不知道就说不知道；情绪问题会被翻译成可分析、可执行的问题。它不负责哄你开心，负责让你变清醒。
+                  第一句就是判断，没有「取决于」。你错，他们直说。
                 </p>
               </Card>
             </div>
@@ -578,7 +577,7 @@ export default function CouncilPage() {
                   </Button>
                 </div>
                 <p className="mt-2 text-center text-[11px] text-ink-dim/70">
-                  它给的是判断，不是 Standard Answer —— 重要决策请保留自己的最终裁量
+                  他们给判断，不是标准答案。最后拍板的还是你。
                 </p>
               </div>
             </>

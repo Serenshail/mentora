@@ -151,7 +151,7 @@ export default function BrainPage() {
       <PageHeader
         icon={<Brain className="size-5" />}
         title="第二大脑"
-        desc="Obsidian 式双链知识库：用 [[标题]] 连接笔记，自己建立联系或让 AI 建议连线；知识点自动流入并按 1/3/7/15 天复习。"
+        desc="学过的、想过的，都在这里互相连接。到期的知识点会提醒你。"
         right={
           <Button variant="outline" onClick={() => setAdding(true)}>
             <Plus className="size-4" /> 新笔记
@@ -190,8 +190,8 @@ export default function BrainPage() {
       {due.length > 0 && (
         <Card className="mb-6 flex items-center justify-between border-accent/40 bg-accent/5">
           <div>
-            <p className="font-bold text-white">🔔 有 {due.length} 个知识点到了复习日</p>
-            <p className="mt-1 text-xs text-ink-dim">遗忘曲线不等人，花 5 分钟把它们钉进长期记忆。</p>
+            <p className="font-bold text-white">{due.length} 个知识点快忘了</p>
+            <p className="mt-1 text-xs text-ink-dim">趁还记得，刷一遍。</p>
           </div>
           <Button onClick={startReview}>
             <RefreshCcw className="size-4" /> 开始复习
@@ -203,8 +203,8 @@ export default function BrainPage() {
       <div className="mb-4 flex gap-2">
         {(
           [
-            ["notes", "📒 笔记库"],
-            ["graph", "🕸️ 关系图谱"],
+            ["notes", "笔记"],
+            ["graph", "图谱"],
           ] as [Tab, string][]
         ).map(([t, label]) => (
           <button

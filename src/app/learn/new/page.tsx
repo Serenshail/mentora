@@ -167,7 +167,7 @@ function IntakeInner() {
         <div>
           <h1 className="text-lg font-bold text-white">方向引导：学{topic}</h1>
           <p className="text-xs text-ink-dim">
-            最多问两轮就开工 —— 对话自动保存，随时离开，随时点「直接生成」
+            教练想真正了解你，会多问几句。对话自动保存，想走就走。
           </p>
         </div>
         {stage === "planning" && <Badge tone="accent">计划生成中…</Badge>}

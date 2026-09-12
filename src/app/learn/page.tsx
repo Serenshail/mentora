@@ -44,7 +44,7 @@ export default function LearnPage() {
       <PageHeader
         icon={<GraduationCap className="size-5" />}
         title="学习教练"
-        desc="苏格拉底式引导 → 制定计划 → 每日文档 → 逐条验收 → 通过才解锁下一阶段"
+        desc="先聊几句摸清你的底细，再排计划。每天一课，验收不过不放行。"
       />
 
       {/* 新目标入口 */}
@@ -62,7 +62,7 @@ export default function LearnPage() {
           </Button>
         </div>
         <p className="mt-3 text-xs text-ink-dim">
-          教练会先问你几个问题（学来干什么、基础、每周几小时、截止日期……），方向清楚后才生成计划。
+          教练会先了解你——目的、基础、习惯。问完就开工。
         </p>
       </Card>
 
@@ -76,8 +76,8 @@ export default function LearnPage() {
       ) : goals.length === 0 ? (
         <Empty
           icon={<GraduationCap className="size-7" />}
-          title="还没有学习目标"
-          desc="输入你想学的东西，教练会把你模糊的愿望逼成清晰、可验收的目标。"
+          title="从一门想学的东西开始"
+          desc="说出它，教练来安排剩下的。"
         />
       ) : (
         <div className="space-y-4">

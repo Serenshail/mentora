@@ -77,7 +77,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
   return (
     <Card>
       <button className="flex w-full items-center justify-between cursor-pointer" onClick={() => setOpen(!open)}>
-        <p className="text-sm font-bold text-white">🙋 有疑问？随时问教练</p>
+        <p className="text-sm font-bold text-white">看不懂？问教练</p>
         <span className="text-xs text-ink-dim">{open ? "收起 ▲" : "展开 ▼"}</span>
       </button>
       {open && (
@@ -139,7 +139,7 @@ function QuickNotes({ goal, day }: { goal: Goal; day: DayPlan }) {
     <Card>
       <div className="flex items-center justify-between">
         <p className="text-sm font-bold text-white">📝 随手记</p>
-        <span className="text-[11px] text-ink-dim">灵感来了直接记，自动进第二大脑</span>
+        <span className="text-[11px] text-ink-dim">想到就记，直接进知识库</span>
       </div>
       <div className="mt-3">
         <input
@@ -775,7 +775,7 @@ function DayPanel({
       {/* 回看：历史验收记录 */}
       {readOnly && day.status === "passed" && goal.quizLog.filter((q) => q.dayId === day.id).length > 0 && (
         <Card>
-          <p className="mb-3 text-sm font-bold text-white">📜 历史验收记录</p>
+          <p className="mb-3 text-sm font-bold text-white">验收记录</p>
           <div className="space-y-3">
             {goal.quizLog
               .filter((q) => q.dayId === day.id)

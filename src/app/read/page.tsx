@@ -82,7 +82,7 @@ export default function ReadPage() {
       <PageHeader
         icon={<BookOpen className="size-5" />}
         title="读书伙伴"
-        desc="不是替你总结，而是带着问题陪你读：每章一个核心问题，读一章聊一章，洞见自动进第二大脑。"
+        desc="带着问题读，读完聊。聊出来的想法自动进你的知识库。"
         right={
           <Button onClick={() => setOpen(true)}>
             <Plus className="size-4" /> 添加书籍
@@ -95,8 +95,8 @@ export default function ReadPage() {
       ) : books.length === 0 ? (
         <Empty
           icon={<BookOpen className="size-7" />}
-          title="书架上还没有书"
-          desc="输入书名（或粘贴一段原文/笔记），教练会生成一份「带着问题读」的章节计划。"
+          title="从一本书开始"
+          desc="说书名就行，怎么读教练来安排。"
           action={
             <Button onClick={() => setOpen(true)}>
               <Plus className="size-4" /> 添加第一本书

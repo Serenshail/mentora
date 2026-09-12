@@ -61,12 +61,12 @@ export default function SettingsPage() {
       <PageHeader
         icon={<KeyRound className="size-5" />}
         title="设置"
-        desc="连接你自己的模型（BYOK，费用归你），或用演示模式体验全部功能。所有数据只存在本机浏览器。"
+        desc="接上你自己的模型就能用，费用归你。Key 只存在你的浏览器里。"
       />
 
       {/* Provider 选择 */}
       <Card className="mb-6">
-        <p className="mb-4 text-sm font-bold text-white">🔌 模型服务</p>
+        <p className="mb-4 text-sm font-bold text-white">模型</p>
         <div className="grid gap-2.5 sm:grid-cols-2">
           {(Object.keys(PROVIDERS) as ProviderId[]).map((id) => {
             const p = PROVIDERS[id];
@@ -164,9 +164,7 @@ export default function SettingsPage() {
 
       {/* 用户名 */}
       <Card className="mb-6">
-        <p className="mb-3 flex items-center gap-2 text-sm font-bold text-white">
-          <User className="size-4" /> 你怎么称呼
-        </p>
+        <p className="mb-3 text-sm font-bold text-white">怎么称呼你</p>
         <Input
           placeholder="教练会这样称呼你"
           value={settings.userName}
@@ -176,9 +174,7 @@ export default function SettingsPage() {
 
       {/* 数据管理 */}
       <Card className="mb-6">
-        <p className="mb-3 flex items-center gap-2 text-sm font-bold text-white">
-          <Database className="size-4" /> 数据（全部在本机 localStorage）
-        </p>
+        <p className="mb-3 text-sm font-bold text-white">数据</p>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={exportAll}>
             <Download className="size-4" /> 导出备份
@@ -211,7 +207,7 @@ export default function SettingsPage() {
           </Button>
         </div>
         <p className="mt-3 text-xs text-ink-dim">
-          换设备 / 换浏览器前先导出。多端同步、账号体系与云端数据库是 v2 路线（见 README）。
+          都存在这台电脑上。换设备前先导出。
         </p>
       </Card>
 

@@ -41,7 +41,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <div>
             <p className="text-[15px] font-extrabold tracking-[-0.02em] text-white">Mentora</p>
-            <p className="text-[10px] text-ink-dim/70">学习 · 认知 · 伙伴</p>
           </div>
         </div>
 
@@ -89,13 +88,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className="px-5 pb-4 pt-2">
-          <p className="text-[10px] text-ink-dim/40">Mentora v3.2 · 数据仅存本机</p>
+          <p className="text-[10px] text-ink-dim/40">数据只在你这台电脑上</p>
           {provider === "demo" && (
             <Link
               href="/settings"
               className="block rounded-xl border border-warn/30 bg-warn/10 px-3.5 py-2.5 text-xs text-warn/90 hover:bg-warn/15 transition"
             >
-              ⚡ 演示模式运行中 — 点此连接真实模型
+              正在用演示数据 · 点此接上真模型
             </Link>
           )}
         </div>

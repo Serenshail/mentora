@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mentora · 学习教练 × 第二大脑 × 人生伙伴",
+  title: "Mentora",
   description:
-    "苏格拉底式学习教练：从模糊愿望到可验收的学习计划；自带第二大脑与间隔复习；合并读书伙伴与名人智慧圆桌。",
+    "想学什么，说一声。教练帮你定计划、盯验收、管复习；读书有伴，困惑有人跟你说真话。",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
