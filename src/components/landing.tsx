@@ -42,9 +42,18 @@ function usePopText(text: string, delay = 0) {
           document.body.appendChild(s);
         });
       }
-      const PT = (window as unknown as { PopText?: { setEmojiBase: (b: string) => void; type: (el: HTMLElement, t: string, o?: object) => Promise<void> } }).PopText;
+      const PT = (
+        window as unknown as {
+          PopText?: {
+            setEmojiBase: (b: string) => void;
+            type: (el: HTMLElement, t: string, o?: object) => Promise<void>;
+            arm: (el: HTMLElement) => void;
+          };
+        }
+      ).PopText;
       if (cancelled || !PT || !elRef.current) return;
       PT.setEmojiBase("/poptext/emoji/");
+      PT.arm(elRef.current); // 悬停变形：必须在 type 前挂上（skill 文档：pointerover 委托）
       await PT.type(elRef.current, text, { step: 95, startDelay: delay, cursor: true });
       if (!cancelled) setReady(true);
     };
@@ -96,7 +105,7 @@ export default function Landing() {
       {/* 顶部导航 */}
       <header className="sticky top-0 z-40 border-b border-border bg-bg/80 backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
-          <span className="text-[15px] font-extrabold tracking-[-0.02em] text-ink">Mentora</span>
+          <span className="font-brand text-[22px] leading-none text-ink">Mentora</span>
           <div className="flex items-center gap-2">
             <Link href="/login">
               <Button variant="ghost" size="sm">登录</Button>
@@ -114,13 +123,13 @@ export default function Landing() {
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(700px 320px at 50% -8%, rgba(124,108,255,0.16), transparent 65%)",
+              "radial-gradient(700px 320px at 50% -8%, rgba(26,26,26,0.07), transparent 65%)",
           }}
         />
         <div className="relative">
           <h1
             ref={elRef}
-            className="min-h-[1.4em] leading-none"
+            className="pop-text min-h-[1.5em] leading-none"
             style={{ fontFamily: "'Great Vibes', cursive", fontSize: "min(110px, 16vw)", color: "var(--color-ink)" }}
           />
           <p className="mx-auto mt-8 max-w-xl text-lg leading-relaxed text-ink-dim">
