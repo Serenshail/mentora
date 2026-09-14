@@ -29,7 +29,7 @@ Obsidian 式双链笔记库。每条知识是独立笔记，正文支持 `[[标�
 
 - **账号**：邮箱 + 密码注册登录（scrypt 单向加盐哈希，HMAC 签名 HttpOnly cookie，30 天）
 - **云同步**：登录后学习计划 / 笔记 / 对话自动加密同步；换设备登录即恢复；断网时本地排队、恢复后自动重发
-- **加密存储**：用户数据库为私有 GitHub 仓库，所有数据 **AES-256-GCM 静态加密**——数据库文件即使被看到也是密文
+- **加密存储**：Upstash Redis（主通道，<10ms）+ 私有 GitHub 仓库（兜底与备份）双通道，所有数据 **AES-256-GCM 静态加密**——即使数据库被看到也是密文；两条通道同一套 key，可平滑互迁
 - **Key 隐私**：模型 API Key（BYOK）只存在你自己的浏览器，永不上云；数据导出自动剔除 Key
 - **作者后台**：`/admin`（管理密码门）查看全部注册用户与数据概况，行内菜单可删除用户（连云端数据一起清）
 - **反馈**：应用内反馈直达作者（GitHub Issues 后端），断网排队自动重试
@@ -66,7 +66,8 @@ vercel link && vercel --prod --yes
 | 变量 | 作用 |
 |------|------|
 | `AI_PROVIDER` / `DEEPSEEK_API_KEY` 等 | 服务端模型兜底（让访客零配置可用） |
-| `GITHUB_DB_TOKEN` / `GITHUB_DB_REPO` | 用户数据库（私有仓库，需 repo 权限） |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | 存储主通道（推荐，免费档够用）；不配则自动落到 GitHub 后端 |
+| `GITHUB_DB_TOKEN` / `GITHUB_DB_REPO` | 存储兜底（私有仓库，需 repo 权限）；`scripts/migrate-to-redis.mjs` 可把存量数据一键搬到 Redis |
 | `AUTH_SECRET` | 会话签名与数据加密密钥 |
 | `ADMIN_PASSWORD` | 作者后台密码 |
 | `GITHUB_TOKEN` | 用户反馈的 GitHub Issues 后端 |
@@ -87,7 +88,7 @@ src/
     api/auth  api/sync  # 注册登录（scrypt+HMAC） · 快照同步（AES-256-GCM）
     api/feedback        # 反馈 → GitHub Issues
   lib/ai/prompts.ts     # 全部系统提示词（核心资产）
-  lib/server/           # 加密存储层（GitHub 后端，可整体换 Postgres）
+  lib/server/           # 加密存储层（Redis 主通道 + GitHub 兜底，上层只见 dbGet/dbPut/dbList/dbDelete）
   components/brain/     # 图谱 / [[双链]] 渲染器
 ```
 
@@ -100,7 +101,7 @@ src/
 ## Roadmap
 
 - [ ] 读书伙伴：参考站复刻（进行中）/ EPUB·PDF 上传
-- [ ] 同步升级：GitHub 存储 → Postgres（存储层已收口，换后端只改一个文件）；字段级合并
+- [ ] 同步升级：快照 last-write-wins → 字段级合并；数据量大后再评估 Postgres
 - [ ] Token 计量与用量面板 / 移动端 PWA + 复习推送
 - [ ] 增长：内容获客 / SEO
 
