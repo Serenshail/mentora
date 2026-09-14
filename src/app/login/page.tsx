@@ -1,16 +1,72 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Card, Input } from "@/components/ui";
 import { useAuth, syncAfterLogin } from "@/lib/auth-client";
+import { usePopText } from "@/lib/use-poptext";
 import { toast } from "sonner";
+
+/* 左侧品牌轮廓：大字标（PopText）+ 卖点提纲 */
+function BrandPanel() {
+  const { elRef } = usePopText("Mentora", 300);
+
+  return (
+    <aside className="relative hidden flex-col justify-between overflow-hidden bg-ink p-10 text-white md:flex lg:p-14">
+      {/* 巨大的手写体水印 */}
+      <span
+        aria-hidden
+        className="font-brand pointer-events-none absolute -bottom-14 -right-8 select-none text-[340px] leading-none text-white/[0.04]"
+      >
+        M
+      </span>
+
+      <div className="relative">
+        <h1
+          ref={elRef}
+          className="pop-text min-h-[1.4em] leading-none"
+          style={{ fontFamily: "'Great Vibes', cursive", fontSize: "clamp(56px, 5vw, 76px)" }}
+        />
+      </div>
+
+      <div className="relative max-w-md">
+        <p
+          className="font-heading text-[clamp(26px, 2.6vw, 38px)] font-medium leading-[1.25] tracking-[-0.01em]"
+        >
+          把「学会任何东西」
+          <br />
+          变成日常。
+        </p>
+
+        <ul className="mt-10 space-y-5">
+          {[
+            { n: "01", t: "教练排计划，每天一课，验收通过才放行" },
+            { n: "02", t: "笔记自动织成网，按遗忘曲线提醒复习" },
+            { n: "03", t: "12 位人生伙伴，焦虑和决策都有人说真话" },
+          ].map((item) => (
+            <li key={item.n} className="flex items-baseline gap-4">
+              <span className="tabular text-xs font-semibold text-white/40">{item.n}</span>
+              <span className="font-body-display text-[15px] leading-relaxed text-white/75">{item.t}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <p className="relative text-xs leading-relaxed text-white/35">
+        密码单向加密存储 · 数据随时可导出带走
+        <br />
+        <span className="font-brand mr-1 text-[15px] text-white/60">Mentora</span>✳︎ 学习教练 ×
+        第二大脑 × 读书伙伴 × 人生伙伴
+      </p>
+    </aside>
+  );
+}
 
 function LoginInner() {
   const params = useSearchParams();
   const router = useRouter();
-  const { login, register } = useAuth();
+  const { user, checking, login, register } = useAuth();
   const [mode, setMode] = useState<"login" | "register">(
     params.get("mode") === "register" ? "register" : "login"
   );
@@ -18,6 +74,17 @@ function LoginInner() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+
+  /* 已登录还访问 /login：直接回首页，不渲染登录表单（否则出现三栏叠层） */
+  useEffect(() => {
+    if (!checking && user) {
+      router.replace(params.get("next") || "/");
+    }
+  }, [checking, user, router, params]);
+
+  if (user) {
+    return <div className="min-h-screen bg-bg" />;
+  }
 
   const afterAuth = async () => {
     const result = await syncAfterLogin(async (cloudUpdatedAt) => {
@@ -62,74 +129,83 @@ function LoginInner() {
   };
 
   return (
-    <div className="mx-auto max-w-md">
-      <div className="mb-8 flex flex-col items-center pt-8 text-center">
-        <Link href="/" className="mb-5 inline-block">
-          <span className="font-brand text-[34px] leading-none text-ink">Mentora</span>
-        </Link>
-        <h1 className="text-2xl font-bold tracking-[-0.03em] text-ink">
-          {mode === "login" ? "欢迎回来" : "建一个账号"}
-        </h1>
-        <p className="mt-2 text-sm text-ink-dim">
-          登录后，你的学习计划、笔记和对话跟着你走——换设备也在。
-        </p>
-      </div>
+    <div className="grid min-h-screen md:grid-cols-[1.1fr_1fr]">
+      <BrandPanel />
 
-      <Card>
-        <div className="space-y-3">
-          {mode === "register" && (
-            <Input placeholder="怎么称呼你（可选）" value={name} onChange={(e) => setName(e.target.value)} />
-          )}
-          <Input
-            type="email"
-            placeholder="邮箱"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submit()}
-          />
-          <Input
-            type="password"
-            placeholder="密码（至少 6 位）"
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submit()}
-          />
-          <Button className="w-full" size="lg" onClick={submit} loading={busy}>
-            {mode === "login" ? "登录" : "注册并登录"}
-          </Button>
+      {/* 右侧：登录表单 */}
+      <div className="flex items-center justify-center px-4 py-12 md:px-10">
+        <div className="w-full max-w-sm">
+          {/* 移动端字标 */}
+          <Link href="/" className="mb-8 flex items-baseline justify-center gap-2 md:hidden">
+            <span className="font-brand text-[36px] leading-none text-ink">Mentora</span>
+            <span className="text-[28px] leading-none text-ink">✳︎</span>
+          </Link>
+
+          <h2 className="font-heading text-2xl font-bold tracking-[-0.03em] text-ink">
+            {mode === "login" ? "欢迎回来" : "建一个账号"}
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-ink-dim">
+            登录后，你的学习计划、笔记和对话跟着你走——换设备也在。
+          </p>
+
+          <Card className="mt-6">
+            <div className="space-y-3">
+              {mode === "register" && (
+                <Input placeholder="怎么称呼你（可选）" value={name} onChange={(e) => setName(e.target.value)} />
+              )}
+              <Input
+                type="email"
+                placeholder="邮箱"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submit()}
+              />
+              <Input
+                type="password"
+                placeholder="密码（至少 6 位）"
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submit()}
+              />
+              <Button className="w-full" size="lg" onClick={submit} loading={busy}>
+                {mode === "login" ? "登录" : "注册并登录"}
+              </Button>
+            </div>
+            <p className="mt-4 text-center text-xs text-ink-dim">
+              {mode === "login" ? (
+                <>
+                  没有账号？{" "}
+                  <button onClick={() => setMode("register")} className="cursor-pointer text-accent hover:underline">
+                    注册一个
+                  </button>
+                </>
+              ) : (
+                <>
+                  已有账号？{" "}
+                  <button onClick={() => setMode("login")} className="cursor-pointer text-accent hover:underline">
+                    去登录
+                  </button>
+                </>
+              )}
+            </p>
+          </Card>
+
+          <p className="mt-5 text-center text-[11px] leading-relaxed text-ink-dim/60">
+            密码经单向加密存储，任何人（包括我们）看不到原文。
+            <br />
+            不想注册？数据照旧存在这台电脑上。
+          </p>
         </div>
-        <p className="mt-4 text-center text-xs text-ink-dim">
-          {mode === "login" ? (
-            <>
-              没有账号？{" "}
-              <button onClick={() => setMode("register")} className="cursor-pointer text-[#22d3ee] hover:underline">
-                注册一个
-              </button>
-            </>
-          ) : (
-            <>
-              已有账号？{" "}
-              <button onClick={() => setMode("login")} className="cursor-pointer text-[#22d3ee] hover:underline">
-                去登录
-              </button>
-            </>
-          )}
-        </p>
-      </Card>
-
-      <p className="mt-4 text-center text-[11px] leading-relaxed text-ink-dim/60">
-        密码经单向加密存储，任何人（包括我们）看不到原文。
-        不想注册？数据照旧存在这台电脑上。
-      </p>
+      </div>
     </div>
   );
 }
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="py-20 text-center text-ink-dim">加载中…</div>}>
+    <Suspense fallback={<div className="min-h-screen bg-bg" />}>
       <LoginInner />
     </Suspense>
   );

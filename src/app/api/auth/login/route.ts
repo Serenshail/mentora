@@ -10,6 +10,7 @@ interface UserRecord {
   name: string;
   salt: string;
   hash: string;
+  avatar?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -27,7 +28,12 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "邮箱或密码不对" }, { status: 401 });
   }
 
-  const user = { userId: record.userId, email: record.email, name: record.name };
+  const user = {
+    userId: record.userId,
+    email: record.email,
+    name: record.name,
+    ...(record.avatar ? { avatar: record.avatar } : {}),
+  };
   await setSessionCookie(user);
   return Response.json({ user });
 }

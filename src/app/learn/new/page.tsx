@@ -15,7 +15,7 @@ function planTitle(topic: string) {
 }
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { ArrowRight, Compass, Target } from "lucide-react";
+import { ArrowRight, Compass, Loader2, Target } from "lucide-react";
 
 function IntakeInner() {
   const params = useSearchParams();
@@ -304,8 +304,9 @@ function IntakeInner() {
       {/* 计划生成中 */}
       {stage === "planning" && (
         <Card className="mt-6 animate-rise border-accent/25">
-          <p className="mb-2 text-sm font-semibold text-ink">
-            🏗️ 正在设计「{card?.topic}」的总学习纲要…
+          <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-ink">
+            <Loader2 className="size-4 animate-spin text-accent" />
+            正在设计「{card?.topic}」的总学习纲要…
           </p>
           <pre className="max-h-40 overflow-hidden whitespace-pre-wrap text-xs text-ink-dim">
             {planStream.slice(0, 400) || "…"}

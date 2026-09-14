@@ -1,35 +1,36 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect } from "react";
+import { create } from "zustand";
 import { useAppStore } from "@/lib/store";
 
 export interface AuthUser {
   userId: string;
   email: string;
   name: string;
+  avatar?: string;
 }
 
 const CHOICE_KEY = "mentora-sync-choice";
 
-export function useAuth() {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [checking, setChecking] = useState(true);
+/* ---------------- 认证状态（全局单例：所有组件共享同一份） ---------------- */
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
-        const j = await res.json();
-        setUser(j.user ?? null);
-      } catch {
-        setUser(null);
-      } finally {
-        setChecking(false);
-      }
-    })();
-  }, []);
+let initialized = false;
 
-  const login = useCallback(async (email: string, password: string) => {
+interface AuthStore {
+  user: AuthUser | null;
+  checking: boolean;
+  login: (email: string, password: string) => Promise<AuthUser>;
+  register: (email: string, password: string, name: string) => Promise<AuthUser>;
+  logout: () => Promise<void>;
+  updateProfile: (patch: { name?: string; avatar?: string | null }) => Promise<AuthUser>;
+}
+
+export const useAuthStore = create<AuthStore>((set) => ({
+  user: null,
+  checking: true,
+
+  login: async (email, password) => {
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -37,11 +38,11 @@ export function useAuth() {
     });
     const j = await res.json();
     if (!res.ok) throw new Error(j.error || "登录失败");
-    setUser(j.user);
+    set({ user: j.user });
     return j.user as AuthUser;
-  }, []);
+  },
 
-  const register = useCallback(async (email: string, password: string, name: string) => {
+  register: async (email, password, name) => {
     const res = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -49,17 +50,48 @@ export function useAuth() {
     });
     const j = await res.json();
     if (!res.ok) throw new Error(j.error || "注册失败");
-    setUser(j.user);
+    set({ user: j.user });
     return j.user as AuthUser;
-  }, []);
+  },
 
-  const logout = useCallback(async () => {
+  logout: async () => {
     await fetch("/api/auth/logout", { method: "POST" });
-    setUser(null);
+    set({ user: null });
     localStorage.removeItem(CHOICE_KEY);
-  }, []);
+  },
 
-  return { user, checking, login, register, logout };
+  updateProfile: async (patch) => {
+    const res = await fetch("/api/auth/profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || "保存失败");
+    set({ user: j.user });
+    return j.user as AuthUser;
+  },
+}));
+
+/** 挂载时校验会话；全局只发一次请求，登录后所有页面同步看到 */
+export function useAuth() {
+  const store = useAuthStore();
+  useEffect(() => {
+    if (initialized) return;
+    initialized = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        const j = await res.json();
+        useAuthStore.setState({ user: j.user ?? null });
+      } catch {
+        useAuthStore.setState({ user: null });
+      } finally {
+        useAuthStore.setState({ checking: false });
+      }
+    })();
+  }, []);
+  return store;
 }
 
 /* ---------------- 云端同步 ---------------- */

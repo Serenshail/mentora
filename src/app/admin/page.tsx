@@ -1,361 +1,315 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { Button, Card, Input } from "@/components/ui";
-import { cn, formatDate } from "@/lib/utils";
-import { toast } from "sonner";
-import { ArrowDownUp, MoreHorizontal, RefreshCcw, Search, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Badge, Button, Card } from "@/components/ui";
+import { useAuth } from "@/lib/auth-client";
+import { cn } from "@/lib/utils";
+import {
+  AlertCircle, CheckCircle2, CircleDot, ExternalLink, Inbox, Lock, MessageSquare, RefreshCw, Users,
+} from "lucide-react";
 
-interface UserRow {
+interface AdminUser {
+  userId: string;
   email: string;
   name: string;
+  avatar?: string;
   createdAt: string;
-  updatedAt: string;
-  goals: { topic?: string; direction?: string }[];
-  knowledgeCount: number;
-  booksCount: number;
-  sessionsCount: number;
+  lastSyncAt: string | null;
+  stats: { goals: number; knowledge: number; books: number; sessions: number; personas: number };
 }
 
-type SortKey = "updatedAt" | "knowledgeCount" | "goalsCount" | "createdAt";
-
-function relTime(iso: string): string {
-  if (iso === "从未同步") return "从未同步";
-  const diff = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return "刚刚";
-  if (m < 60) return `${m} 分钟前`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d} 天前`;
-  return formatDate(iso.slice(0, 10));
+interface AdminFeedback {
+  number: number;
+  type: string;
+  content: string;
+  contact: string;
+  state: string;
+  createdAt: string;
+  url: string;
 }
 
-function statusOf(row: UserRow): { label: string; tone: string } {
-  if (row.updatedAt === "从未同步") return { label: "未激活", tone: "text-ink-dim bg-white/5" };
-  const days = (Date.now() - new Date(row.updatedAt).getTime()) / 86400000;
-  if (days <= 7) return { label: "活跃", tone: "text-ok bg-ok/10" };
-  if (days <= 30) return { label: "沉默", tone: "text-warn bg-warn/10" };
-  return { label: "流失", tone: "text-bad bg-bad/10" };
+interface Overview {
+  you: { email: string; name: string };
+  users: AdminUser[];
+  feedback: AdminFeedback[];
+  feedbackConfigured: boolean;
+}
+
+function fmtDate(iso: string | null): string {
+  if (!iso || iso === "未知") return "—";
+  try {
+    return new Date(iso).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return iso;
+  }
 }
 
 export default function AdminPage() {
-  const [password, setPassword] = useState("");
-  const [rows, setRows] = useState<UserRow[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const { user, checking } = useAuth();
+  const [data, setData] = useState<Overview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState<"users" | "feedback">("users");
+  const [processingId, setProcessingId] = useState<number | null>(null);
 
-  const deleteUser = async (email: string) => {
-    setBusy(true);
+  /* 一键处理/重开反馈（关/开 GitHub issue），改完本地同步状态 */
+  const setFeedbackState = async (number: number, state: "open" | "closed") => {
+    setProcessingId(number);
     try {
-      const res = await fetch("/api/admin/users", {
-        method: "DELETE",
+      const res = await fetch("/api/admin/feedback-state", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: password || sessionStorage.getItem("mentora-admin-pwd"), email }),
+        body: JSON.stringify({ number, state }),
       });
       const j = await res.json();
-      if (!res.ok) {
-        toast.error(j.error || "删除失败");
-        return;
-      }
-      setRows((prev) => (prev ?? []).filter((x) => x.email !== email));
-      toast.success(`已删除 ${email}（含云端数据）`);
-    } catch {
-      toast.error("删除失败");
+      if (!res.ok) throw new Error(j.error || "操作失败");
+      setData((d) =>
+        d
+          ? { ...d, feedback: d.feedback.map((f) => (f.number === number ? { ...f, state } : f)) }
+          : d
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "操作失败");
     } finally {
-      setBusy(false);
-      setConfirmDelete(null);
-      setMenuFor(null);
+      setProcessingId(null);
     }
   };
 
-  const load = async (pwd?: string) => {
-    const p = pwd ?? password;
-    if (!p) return;
-    setBusy(true);
+  const load = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const res = await fetch("/api/admin/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: p }),
-      });
+      const res = await fetch("/api/admin/overview", { cache: "no-store" });
       const j = await res.json();
       if (!res.ok) {
-        toast.error(j.error || "加载失败");
-        if (res.status === 401) setRows(null);
-        return;
+        setError(j.error || "加载失败");
+        setData(null);
+      } else {
+        setData(j as Overview);
       }
-      setRows(j.rows);
-      setPassword(p);
-      sessionStorage.setItem("mentora-admin-pwd", p);
+    } catch {
+      setError("网络错误");
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    const saved = sessionStorage.getItem("mentora-admin-pwd");
-    if (saved) {
-      setPassword(saved);
-      void load(saved);
-    }
+    if (!checking && user) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [checking, user]);
 
-  const filtered = useMemo(() => {
-    let r = rows ?? [];
-    const q = query.trim().toLowerCase();
-    if (q) {
-      r = r.filter(
-        (x) =>
-          x.email.toLowerCase().includes(q) ||
-          x.name.toLowerCase().includes(q) ||
-          x.goals.some((g) => (g.topic ?? "").toLowerCase().includes(q))
-      );
-    }
-    return [...r].sort((a, b) => {
-      switch (sortKey) {
-        case "knowledgeCount": return b.knowledgeCount - a.knowledgeCount;
-        case "goalsCount": return b.goals.length - a.goals.length;
-        case "createdAt": return a.createdAt < b.createdAt ? 1 : -1;
-        default: return a.updatedAt < b.updatedAt ? 1 : -1;
-      }
-    });
-  }, [rows, query, sortKey]);
-
-  const stats = useMemo(() => {
-    const r = rows ?? [];
-    const week = r.filter((x) => x.updatedAt !== "从未同步" && (Date.now() - new Date(x.updatedAt).getTime()) / 86400000 <= 7).length;
-    return {
-      total: r.length,
-      weekActive: week,
-      knowledge: r.reduce((a, x) => a + x.knowledgeCount, 0),
-      goals: r.reduce((a, x) => a + x.goals.length, 0),
-    };
-  }, [rows]);
-
-  if (!rows) {
+  /* 未登录 / 鉴权中 */
+  if (checking) {
+    return <div className="flex min-h-screen items-center justify-center bg-bg text-sm text-ink-dim">加载中…</div>;
+  }
+  if (!user) {
     return (
-      <div className="mx-auto max-w-sm pt-20">
-        <Card className="p-6">
-          <p className="text-sm font-bold text-ink">作者后台</p>
-          <p className="mt-1 text-xs text-ink-dim">输入管理密码查看全部用户与数据。</p>
-          <Input
-            type="password"
-            placeholder="管理密码"
-            className="mt-4"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && load()}
-          />
-          <Button className="mt-3 w-full" onClick={() => load()} loading={busy}>
-            进入控制台
-          </Button>
-        </Card>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-bg">
+        <Lock className="size-8 text-ink-dim/50" strokeWidth={1.5} />
+        <p className="text-sm font-bold text-ink">管理后台需要登录</p>
+        <Button onClick={() => (window.location.href = "/login?next=/admin")}>去登录</Button>
+      </div>
+    );
+  }
+  if (error === "此账号没有管理权限") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-bg px-6">
+        <Lock className="size-8 text-ink-dim/50" strokeWidth={1.5} />
+        <p className="text-sm font-bold text-ink">此账号没有管理权限</p>
+        <p className="max-w-sm text-center text-xs leading-relaxed text-ink-dim">
+          管理员邮箱在 Vercel 的 ADMIN_EMAILS 环境变量里配置（逗号分隔）。
+          当前登录：{user.email}
+        </p>
       </div>
     );
   }
 
+  const openCount = data?.feedback.filter((f) => f.state === "open").length ?? 0;
+  const syncedCount = data?.users.filter((u) => u.lastSyncAt).length ?? 0;
+
   return (
-    <div className="mx-auto max-w-5xl">
-      {/* 顶栏 */}
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <h1 className="text-base font-bold tracking-[-0.02em] text-ink">用户控制台</h1>
-          <p className="text-[11px] text-ink-dim">全部注册用户 · 云端数据概况</p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => load()} loading={busy}>
-          <RefreshCcw className="size-3.5" /> 刷新
-        </Button>
-      </div>
-
-      {/* 指标行 */}
-      <div className="mb-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.06] lg:grid-cols-4">
-        {([
-          ["注册用户", stats.total],
-          ["7 日活跃", stats.weekActive],
-          ["学习目标", stats.goals],
-          ["知识总量", stats.knowledge],
-        ] as [string, number][]).map(([label, v]) => (
-          <div key={label} className="bg-surface px-4 py-3.5">
-            <p className="text-[11px] text-ink-dim">{label}</p>
-            <p className="tabular mt-1 text-xl font-bold text-ink">{v}</p>
+    <div className="min-h-screen bg-bg">
+      <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+        {/* 头部 */}
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-bold tracking-[-0.02em] text-ink">管理后台</h1>
+              <Badge>内测</Badge>
+            </div>
+            <p className="mt-1.5 text-[13px] text-ink-dim">
+              {data?.you.email ?? user.email} · 用户数据与反馈总览，不用再去 GitHub 翻
+            </p>
           </div>
-        ))}
-      </div>
-
-      {/* 工具栏 */}
-      <div className="mb-3 flex items-center gap-2">
-        <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-dim" />
-          <Input
-            className="h-8 pl-8 text-xs"
-            placeholder="搜邮箱 / 名字 / 学习主题…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+          <Button variant="outline" onClick={load} loading={loading}>
+            {!loading && <RefreshCw className="size-4" />} 刷新
+          </Button>
         </div>
-        <span className="ml-auto text-[11px] text-ink-dim">{filtered.length} 条记录</span>
-      </div>
 
-      {/* 数据表 */}
-      <div className="overflow-x-auto rounded-xl border border-white/[0.07]">
-        <table className="w-full min-w-[720px] text-left text-[13px]">
-          <thead>
-            <tr className="border-b border-white/[0.07] bg-surface-2/40 text-[11px] uppercase tracking-wider text-ink-dim">
-              <th className="px-4 py-2.5 font-medium">用户</th>
-              <th className="px-3 py-2.5 font-medium">状态</th>
-              <th className="cursor-pointer px-3 py-2.5 font-medium hover:text-ink" onClick={() => setSortKey("goalsCount")}>
-                <span className="inline-flex items-center gap-1">目标 <ArrowDownUp className="size-3 opacity-50" /></span>
-              </th>
-              <th className="cursor-pointer px-3 py-2.5 font-medium hover:text-ink" onClick={() => setSortKey("knowledgeCount")}>
-                <span className="inline-flex items-center gap-1">知识 <ArrowDownUp className="size-3 opacity-50" /></span>
-              </th>
-              <th className="px-3 py-2.5 font-medium">书 / 对话</th>
-              <th className="cursor-pointer px-3 py-2.5 text-right font-medium hover:text-ink" onClick={() => setSortKey("updatedAt")}>
-                <span className="inline-flex items-center gap-1">最近活跃 <ArrowDownUp className="size-3 opacity-50" /></span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((r) => {
-              const st = statusOf(r);
-              const key = r.email;
-              const open = expanded === key;
-              return (
-                <Fragment key={key}>
-                  <tr
-                    onClick={() => setExpanded(open ? null : key)}
-                    className={cn(
-                      "cursor-pointer border-b border-white/[0.05] transition-colors",
-                      open ? "bg-accent/[0.06]" : "hover:bg-white/[0.03]"
-                    )}
-                  >
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-ink">{r.name}</p>
-                      <p className="text-[11px] text-ink-dim">{r.email}</p>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium", st.tone)}>
-                        <span className="size-1.5 rounded-full bg-current" />
-                        {st.label}
-                      </span>
-                    </td>
-                    <td className="tabular px-3 py-3">{r.goals.length}</td>
-                    <td className="tabular px-3 py-3">{r.knowledgeCount}</td>
-                    <td className="tabular px-3 py-3 text-ink-dim">
-                      {r.booksCount} / {r.sessionsCount}
-                    </td>
-                    <td className="relative px-3 py-3 text-right">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setMenuFor(menuFor === key ? null : key);
-                        }}
-                        className="rounded-lg p-1.5 text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer"
-                      >
-                        <MoreHorizontal className="size-4" />
-                      </button>
-                      {menuFor === key && (
-                        <div
-                          className="absolute right-3 top-9 z-20 w-40 overflow-hidden rounded-xl border border-border bg-white shadow-lg"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <button
-                            onClick={() => {
-                              setExpanded(open ? null : key);
-                              setMenuFor(null);
-                            }}
-                            className="w-full px-3.5 py-2.5 text-left text-xs text-ink hover:bg-black/[0.04] cursor-pointer"
-                          >
-                            展开详情
-                          </button>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard?.writeText(r.email);
-                              setMenuFor(null);
-                              toast.success("邮箱已复制");
-                            }}
-                            className="w-full px-3.5 py-2.5 text-left text-xs text-ink hover:bg-black/[0.04] cursor-pointer"
-                          >
-                            复制邮箱
-                          </button>
-                          <button
-                            onClick={() => {
-                              setConfirmDelete(r.email);
-                              setMenuFor(null);
-                            }}
-                            className="w-full px-3.5 py-2.5 text-left text-xs text-bad hover:bg-bad/[0.06] cursor-pointer"
-                          >
-                            删除用户…
-                          </button>
-                        </div>
-                      )}
-                    </td>
+        {error && error !== "此账号没有管理权限" && (
+          <Card className="mt-6 flex items-center gap-3 border-bad/25 bg-bad/[0.04]">
+            <AlertCircle className="size-4 shrink-0 text-bad" />
+            <p className="text-sm text-bad">{error}</p>
+          </Card>
+        )}
+
+        {/* 统计卡 */}
+        <div className="mt-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            { label: "注册用户", value: data?.users.length ?? "—", icon: Users },
+            { label: "有云端数据", value: data ? syncedCount : "—", icon: RefreshCw },
+            { label: "反馈总数", value: data?.feedback.length ?? "—", icon: MessageSquare },
+            { label: "待处理反馈", value: data ? openCount : "—", icon: Inbox },
+          ].map((s) => (
+            <Card key={s.label} className="p-4">
+              <div className="flex items-center gap-2 text-ink-dim">
+                <s.icon className="size-3.5" />
+                <span className="text-xs">{s.label}</span>
+              </div>
+              <p className="tabular mt-2 text-2xl font-bold tracking-tight text-ink">{s.value}</p>
+            </Card>
+          ))}
+        </div>
+
+        {/* 标签切换 */}
+        <div className="mt-8 flex gap-1 border-b border-border">
+          {(
+            [
+              { id: "users", label: `用户（${data?.users.length ?? 0}）` },
+              { id: "feedback", label: `反馈（${data?.feedback.length ?? 0}）` },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={cn(
+                "-mb-px cursor-pointer border-b-2 px-4 py-2.5 text-[13.5px] font-medium transition",
+                tab === t.id
+                  ? "border-ink text-ink"
+                  : "border-transparent text-ink-dim hover:text-ink"
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 用户表 */}
+        {tab === "users" && (
+          <div className="mt-6 overflow-hidden rounded-2xl border border-border bg-surface">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[820px] text-left text-[13px]">
+                <thead>
+                  <tr className="border-b border-border bg-black/[0.02] text-xs text-ink-dim">
+                    <th className="px-4 py-3 font-medium">用户</th>
+                    <th className="px-4 py-3 font-medium">邮箱</th>
+                    <th className="px-4 py-3 font-medium">注册时间</th>
+                    <th className="px-4 py-3 font-medium">最近同步</th>
+                    <th className="px-4 py-3 font-medium">数据量（目标/笔记/书/对话/人物）</th>
                   </tr>
-                  {open && (
-                    <tr className="border-b border-white/[0.05] bg-black/20">
-                      <td colSpan={6} className="px-4 py-3">
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <div>
-                            <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim">学习目标</p>
-                            {r.goals.length === 0 ? (
-                              <p className="text-xs text-ink-dim/60">—</p>
-                            ) : (
-                              r.goals.map((g, j) => (
-                                <p key={j} className="truncate text-xs text-ink-dim">
-                                  · <b className="text-ink">{g.topic}</b> — {g.direction}
-                                </p>
-                              ))
-                            )}
-                          </div>
-                          <div className="text-xs text-ink-dim">
-                            <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider">账号</p>
-                            <p>注册：{r.createdAt === "?" ? "?" : new Date(r.createdAt).toLocaleString("zh-CN")}</p>
-                            <p className="mt-1">最近同步：{r.updatedAt === "从未同步" ? "从未" : new Date(r.updatedAt).toLocaleString("zh-CN")}</p>
-                          </div>
+                </thead>
+                <tbody>
+                  {data?.users.map((u) => (
+                    <tr key={u.userId} className="border-b border-border/60 last:border-0 hover:bg-black/[0.015]">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          {u.avatar ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={u.avatar} alt={u.name} className="size-7 rounded-lg border border-border object-cover" />
+                          ) : (
+                            <div className="flex size-7 items-center justify-center rounded-lg bg-[#1a1a1a] text-[11px] font-bold text-white">
+                              {u.name.slice(0, 1).toUpperCase()}
+                            </div>
+                          )}
+                          <span className="font-medium text-ink">{u.name}</span>
                         </div>
                       </td>
+                      <td className="px-4 py-3 text-ink-dim">{u.email}</td>
+                      <td className="px-4 py-3 text-ink-dim">{fmtDate(u.createdAt)}</td>
+                      <td className="px-4 py-3 text-ink-dim">{u.lastSyncAt ? fmtDate(u.lastSyncAt) : "—"}</td>
+                      <td className="px-4 py-3">
+                        <span className="tabular text-ink-dim">
+                          {u.stats.goals} / {u.stats.knowledge} / {u.stats.books} / {u.stats.sessions} / {u.stats.personas}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {data && data.users.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-12 text-center text-ink-dim">还没有注册用户</td>
                     </tr>
                   )}
-                </Fragment>
-              );
-            })}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-ink-dim">
-                  没有匹配的用户
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <p className="mt-3 text-[11px] text-ink-dim/60">
-        点击行展开详情 · 点列头排序 · 数据来自加密数据库，明文仅此页可见
-      </p>
-
-      {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setConfirmDelete(null)}>
-          <Card className="max-w-sm" onClick={(e) => e.stopPropagation()}>
-            <p className="text-sm font-bold text-ink">删除 {confirmDelete}？</p>
-            <p className="mt-2 text-xs leading-relaxed text-ink-dim">
-              其账号与云端全部数据（学习目标、笔记、对话）将被永久移除，不可恢复。
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setConfirmDelete(null)}>取消</Button>
-              <Button variant="danger" size="sm" onClick={() => deleteUser(confirmDelete)} loading={busy}>
-                确认删除
-              </Button>
+                </tbody>
+              </table>
             </div>
-          </Card>
-        </div>
-      )}
+            <p className="border-t border-border bg-black/[0.02] px-4 py-2.5 text-[11px] leading-relaxed text-ink-dim/70">
+              密码说明：所有密码经 scrypt 单向哈希存储，连数据库原文都不存在——这是行业标准（Google/Apple 也一样），任何人、任何后台都无法查看用户密码原文。
+            </p>
+          </div>
+        )}
+
+        {/* 反馈列表 */}
+        {tab === "feedback" && (
+          <div className="mt-6 space-y-3">
+            {data && !data.feedbackConfigured && (
+              <Card className="border-warn/25 bg-warn/[0.04] text-xs text-warn">
+                服务端未配置 GITHUB_TOKEN，反馈通道离线（用户提交会失败并本地排队）。
+              </Card>
+            )}
+            {data?.feedback.map((f) => (
+              <Card key={f.number} className="p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={f.type === "问题" ? "bad" : f.type === "建议" ? "accent" : undefined}>
+                    {f.type}
+                  </Badge>
+                  <span className="text-xs text-ink-dim">#{f.number} · {fmtDate(f.createdAt)}</span>
+                  {f.state === "open" ? (
+                    <span className="flex items-center gap-1 text-xs text-accent">
+                      <CircleDot className="size-3" /> 待处理
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-xs text-ink-dim/60">
+                      <CheckCircle2 className="size-3" /> 已处理
+                    </span>
+                  )}
+                  <a
+                    href={f.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-auto inline-flex items-center gap-1 text-xs text-ink-dim transition hover:text-accent"
+                  >
+                    GitHub <ExternalLink className="size-3" />
+                  </a>
+                  <button
+                    onClick={() => setFeedbackState(f.number, f.state === "open" ? "closed" : "open")}
+                    disabled={processingId === f.number}
+                    className={cn(
+                      "cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-medium transition disabled:opacity-50",
+                      f.state === "open"
+                        ? "border-ok/30 bg-ok/[0.06] text-ok hover:bg-ok/[0.12]"
+                        : "border-border bg-white text-ink-dim hover:text-ink"
+                    )}
+                  >
+                    {processingId === f.number
+                      ? "处理中…"
+                      : f.state === "open"
+                        ? "标记已处理"
+                        : "重新打开"}
+                  </button>
+                </div>
+                <p className="mt-2.5 whitespace-pre-wrap text-sm leading-relaxed text-ink">{f.content}</p>
+                {f.contact && (
+                  <p className="mt-2 text-xs text-ink-dim">联系方式：{f.contact}</p>
+                )}
+              </Card>
+            ))}
+            {data && data.feedback.length === 0 && (
+              <Card className="p-12 text-center text-sm text-ink-dim">还没有收到反馈</Card>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,22 +1,241 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Input, PageHeader } from "@/components/ui";
 import { useAppStore, DEFAULT_SETTINGS } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { PROVIDERS } from "@/lib/ai/providers";
 import type { ProviderId } from "@/lib/types";
+import { useAuth } from "@/lib/auth-client";
 import { cn, downloadJson } from "@/lib/utils";
 import { toast } from "sonner";
-import { Database, Download, KeyRound, Save, Trash2, Upload, User } from "lucide-react";
+import {
+  Camera, Database, Download, KeyRound, LogOut, Save, Trash2, Upload, UserRound, X,
+} from "lucide-react";
 
-export default function SettingsPage() {
+/* ================= 账户：头像 + 称呼 ================= */
+
+/** 选中的图片 → 居中裁剪到 256×256 JPEG dataURL（~30KB） */
+async function fileToAvatar(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas 不可用");
+  const scale = Math.max(size / bitmap.width, size / bitmap.height);
+  const w = bitmap.width * scale;
+  const h = bitmap.height * scale;
+  ctx.drawImage(bitmap, (size - w) / 2, (size - h) / 2, w, h);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
+
+function AccountSection() {
+  const { user, checking, updateProfile, logout } = useAuth();
+  const setSettings = useAppStore((s) => s.setSettings);
+  const [name, setName] = useState("");
+  const [avatar, setAvatar] = useState<string | null>(null);
+  const [savingName, setSavingName] = useState(false);
+  const [savingAvatar, setSavingAvatar] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /* 拉一次完整资料（含头像） */
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/auth/profile", { cache: "no-store" });
+        const j = await res.json();
+        if (!res.ok || cancelled) return;
+        setAvatar(j.user?.avatar ?? null);
+        setName(j.user?.name ?? "");
+      } catch {
+        /* 读不到就用本地会话里的 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, checking]);
+
+  if (checking) return <div className="h-64 animate-pulse rounded-2xl bg-surface/60" />;
+
+  if (!user) {
+    return (
+      <Card className="p-8 text-center">
+        <UserRound className="mx-auto size-8 text-ink-dim/50" strokeWidth={1.5} />
+        <p className="mt-3 text-sm font-bold text-ink">当前是本机演示模式</p>
+        <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+          数据只存在这台电脑上。登录后可以换头像、改称呼，数据跟着账号走。
+        </p>
+        <Button className="mt-5" onClick={() => (window.location.href = "/login")}>
+          去登录
+        </Button>
+      </Card>
+    );
+  }
+
+  const pickAvatar = async (file: File) => {
+    if (savingAvatar) return;
+    try {
+      const dataUrl = await fileToAvatar(file);
+      setSavingAvatar(true);
+      await updateProfile({ avatar: dataUrl });
+      setAvatar(dataUrl);
+      toast.success("头像已更新");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "头像上传失败");
+    } finally {
+      setSavingAvatar(false);
+    }
+  };
+
+  const removeAvatar = async () => {
+    if (savingAvatar) return;
+    try {
+      setSavingAvatar(true);
+      await updateProfile({ avatar: null });
+      setAvatar(null);
+      toast.success("已恢复默认");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "操作失败");
+    } finally {
+      setSavingAvatar(false);
+    }
+  };
+
+  const saveName = async () => {
+    if (savingName) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      toast.error("称呼不能为空");
+      return;
+    }
+    try {
+      setSavingName(true);
+      await updateProfile({ name: trimmed });
+      setSettings({ userName: trimmed }); // 教练打招呼的称呼同步
+      toast.success("称呼已更新");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "保存失败");
+    } finally {
+      setSavingName(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* 头像 + 称呼 */}
+      <Card>
+        <p className="text-sm font-bold text-ink">头像与称呼</p>
+        <div className="mt-5 flex flex-col gap-6 sm:flex-row sm:items-center">
+          {/* 头像 */}
+          <div className="flex items-center gap-4">
+            <div className="relative shrink-0">
+              {avatar ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={avatar}
+                  alt="头像"
+                  className="size-20 rounded-2xl border border-border object-cover"
+                />
+              ) : (
+                <div className="flex size-20 items-center justify-center rounded-2xl bg-[#1a1a1a] text-2xl font-black text-white">
+                  {(name || user.email).slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              {savingAvatar && (
+                <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/70">
+                  <span className="size-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-medium text-ink transition hover:border-[#d4d4d8] hover:bg-black/[0.02]"
+              >
+                <Camera className="size-3.5" /> 换头像
+              </button>
+              {avatar && (
+                <button
+                  type="button"
+                  onClick={removeAvatar}
+                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-ink-dim transition hover:text-bad"
+                >
+                  <X className="size-3.5" /> 移除
+                </button>
+              )}
+              <p className="text-[11px] text-ink-dim/70">JPG / PNG / WebP，自动裁成正方形</p>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && pickAvatar(e.target.files[0])}
+              />
+            </div>
+          </div>
+
+          {/* 称呼 */}
+          <div className="min-w-0 flex-1">
+            <label className="block text-xs text-ink-dim">
+              怎么称呼你
+              <div className="mt-1.5 flex gap-2">
+                <Input
+                  placeholder="教练会这样称呼你"
+                  value={name}
+                  maxLength={24}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveName()}
+                />
+                <Button onClick={saveName} loading={savingName}>
+                  <Save className="size-4" /> 保存
+                </Button>
+              </div>
+            </label>
+            <p className="mt-4 text-xs text-ink-dim">
+              邮箱（登录用，不可改）
+              <span className="mt-1.5 block rounded-lg border border-border bg-surface-2 px-3 py-2 text-[13px] text-ink-dim">
+                {user.email}
+              </span>
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      {/* 会话 */}
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-ink">登录会话</p>
+            <p className="mt-1 text-xs text-ink-dim">30 天内免登录；退出后本机数据保留、云端备份不动。</p>
+          </div>
+          <Button
+            variant="danger"
+            onClick={async () => {
+              await logout();
+              window.location.href = "/";
+            }}
+          >
+            <LogOut className="size-4" /> 退出登录
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* ================= 模型 ================= */
+
+function ModelSection() {
   const hydrated = useHydrated();
   const settings = useAppStore((s) => s.settings);
   const setSettings = useAppStore((s) => s.setSettings);
-  const importData = useAppStore((s) => s.importData);
-  const resetAll = useAppStore((s) => s.resetAll);
-  const [confirmReset, setConfirmReset] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (!hydrated) return <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />;
@@ -33,39 +252,9 @@ export default function SettingsPage() {
     });
   };
 
-  const exportAll = () => {
-    const s = useAppStore.getState();
-    downloadJson(`mentora-backup-${new Date().toISOString().slice(0, 10)}.json`, {
-      exportedAt: new Date().toISOString(),
-      goals: s.goals,
-      knowledge: s.knowledge,
-      books: s.books,
-      sessions: s.sessions,
-      settings: { ...s.settings, apiKey: "" },
-    });
-    toast.success("已导出备份 JSON（不含 API Key）");
-  };
-
-  const importFile = async (file: File) => {
-    try {
-      const data = JSON.parse(await file.text());
-      importData(data);
-      toast.success("导入成功");
-    } catch {
-      toast.error("文件格式不对，导入失败");
-    }
-  };
-
   return (
-    <div className="mx-auto max-w-3xl">
-      <PageHeader
-        icon={<KeyRound className="size-5" />}
-        title="设置"
-        desc="接上你自己的模型就能用，费用归你。Key 只存在你的浏览器里。"
-      />
-
-      {/* Provider 选择 */}
-      <Card className="mb-6">
+    <div className="space-y-6">
+      <Card>
         <p className="mb-4 text-sm font-bold text-ink">模型</p>
         <div className="grid gap-2.5 sm:grid-cols-2">
           {(Object.keys(PROVIDERS) as ProviderId[]).map((id) => {
@@ -162,59 +351,133 @@ export default function SettingsPage() {
         )}
       </Card>
 
-      {/* 用户名 */}
-      <Card className="mb-6">
-        <p className="mb-3 text-sm font-bold text-ink">怎么称呼你</p>
-        <Input
-          placeholder="教练会这样称呼你"
-          value={settings.userName}
-          onChange={(e) => setSettings({ userName: e.target.value })}
-        />
-      </Card>
-
-      {/* 数据管理 */}
-      <Card className="mb-6">
-        <p className="mb-3 text-sm font-bold text-ink">数据</p>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={exportAll}>
-            <Download className="size-4" /> 导出备份
-          </Button>
-          <Button variant="outline" onClick={() => fileRef.current?.click()}>
-            <Upload className="size-4" /> 导入备份
-          </Button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json"
-            className="hidden"
-            onChange={(e) => e.target.files?.[0] && importFile(e.target.files[0])}
-          />
-          <Button
-            variant="danger"
-            onClick={() => {
-              if (!confirmReset) {
-                setConfirmReset(true);
-                toast("再点一次确认清空（不可恢复）");
-                setTimeout(() => setConfirmReset(false), 4000);
-                return;
-              }
-              resetAll();
-              setConfirmReset(false);
-              toast.success("已清空全部数据");
-            }}
-          >
-            <Trash2 className="size-4" /> {confirmReset ? "确认清空？" : "清空全部数据"}
-          </Button>
-        </div>
-        <p className="mt-3 text-xs text-ink-dim">
-          都存在这台电脑上。换设备前先导出。
-        </p>
-      </Card>
-
       <div className="flex justify-end">
         <Button variant="ghost" onClick={() => setSettings({ ...DEFAULT_SETTINGS })}>
           <Save className="size-4" /> 恢复默认（演示模式）
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/* ================= 数据 ================= */
+
+function DataSection() {
+  const importData = useAppStore((s) => s.importData);
+  const resetAll = useAppStore((s) => s.resetAll);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const exportAll = () => {
+    const s = useAppStore.getState();
+    downloadJson(`mentora-backup-${new Date().toISOString().slice(0, 10)}.json`, {
+      exportedAt: new Date().toISOString(),
+      goals: s.goals,
+      knowledge: s.knowledge,
+      books: s.books,
+      sessions: s.sessions,
+      settings: { ...s.settings, apiKey: "" },
+    });
+    toast.success("已导出备份 JSON（不含 API Key）");
+  };
+
+  const importFile = async (file: File) => {
+    try {
+      const data = JSON.parse(await file.text());
+      importData(data);
+      toast.success("导入成功");
+    } catch {
+      toast.error("文件格式不对，导入失败");
+    }
+  };
+
+  return (
+    <Card>
+      <p className="mb-3 text-sm font-bold text-ink">数据</p>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={exportAll}>
+          <Download className="size-4" /> 导出备份
+        </Button>
+        <Button variant="outline" onClick={() => fileRef.current?.click()}>
+          <Upload className="size-4" /> 导入备份
+        </Button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json"
+          className="hidden"
+          onChange={(e) => e.target.files?.[0] && importFile(e.target.files[0])}
+        />
+        <Button
+          variant="danger"
+          onClick={() => {
+            if (!confirmReset) {
+              setConfirmReset(true);
+              toast("再点一次确认清空（不可恢复）");
+              setTimeout(() => setConfirmReset(false), 4000);
+              return;
+            }
+            resetAll();
+            setConfirmReset(false);
+            toast.success("已清空全部数据");
+          }}
+        >
+          <Trash2 className="size-4" /> {confirmReset ? "确认清空？" : "清空全部数据"}
+        </Button>
+      </div>
+      <p className="mt-3 text-xs text-ink-dim">
+        登录后数据自动同步云端（加密存储）；不登录则只在这台电脑上，换设备前先导出。
+      </p>
+    </Card>
+  );
+}
+
+/* ================= 页面 ================= */
+
+const TABS = [
+  { id: "account", label: "账户", icon: UserRound },
+  { id: "model", label: "模型", icon: KeyRound },
+  { id: "data", label: "数据", icon: Database },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+export default function SettingsPage() {
+  const [tab, setTab] = useState<TabId>("account");
+
+  return (
+    <div className="mx-auto max-w-4xl">
+      <PageHeader
+        icon={<KeyRound className="size-5" />}
+        title="设置"
+        desc="账户、模型与数据，都在这一页管。"
+      />
+
+      <div className="mt-8 grid gap-8 md:grid-cols-[170px_1fr]">
+        {/* 标签栏：桌面竖排 / 移动横排 */}
+        <nav className="flex gap-1 overflow-x-auto md:flex-col md:gap-0.5 md:overflow-visible">
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={cn(
+                "flex shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-[13.5px] font-medium transition",
+                tab === id
+                  ? "bg-black/[0.05] font-semibold text-ink"
+                  : "text-ink-dim hover:bg-black/[0.035] hover:text-ink"
+              )}
+            >
+              <Icon className="size-[17px]" strokeWidth={1.75} />
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        <div>
+          {tab === "account" && <AccountSection />}
+          {tab === "model" && <ModelSection />}
+          {tab === "data" && <DataSection />}
+        </div>
       </div>
     </div>
   );

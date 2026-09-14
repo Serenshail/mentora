@@ -470,9 +470,12 @@ function PlanTimeline({
                 阶段{pi + 1} · {phase.title}
               </p>
               {phase.status === "passed" && <Badge tone="ok">已通过</Badge>}
-              {phase.status === "locked" && <Badge tone="dim">🔒 未解锁</Badge>}
+              {phase.status === "locked" && <Badge tone="dim">未解锁</Badge>}
             </div>
-            <p className="mb-2 mt-1 pl-4 text-xs text-ink-dim">🏁 {phase.outcome}</p>
+            <p className="mb-2 mt-1 flex items-center gap-1.5 pl-4 text-xs text-ink-dim">
+              <Flag className="size-3 shrink-0" />
+              {phase.outcome}
+            </p>
             {phase.planned === false && phase.dayIds.length === 0 && phase.outline && (
               <ul className="mb-2 ml-1 space-y-1 border-l border-border pl-3">
                 {phase.outline.slice(0, 6).map((o, i) => (
@@ -658,7 +661,7 @@ function DayPanel({
           "learn",
           `${goal.topic} · ${day.title}`
         );
-        toast.success("验收通过 🎉 下一阶段已解锁，知识点已存入第二大脑。");
+        toast.success("验收通过，下一阶段已解锁，知识点已存入第二大脑。");
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "评分失败，请重试");
@@ -682,7 +685,7 @@ function DayPanel({
       items: [],
     });
     setSkipConfirm(false);
-    toast("已强制跳过，该阶段标记为 skipped，知识点未入第二大脑。", { icon: "⚠️" });
+    toast("已强制跳过，该阶段标记为 skipped，知识点未入第二大脑。");
   };
 
   return (
@@ -792,7 +795,10 @@ function DayPanel({
           {/* 项目例子 */}
           {day.example && (
             <Card>
-              <p className="text-sm font-bold text-ink">🧩 {day.example.title}</p>
+              <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
+                <Puzzle className="size-4 text-accent" />
+                {day.example.title}
+              </p>
               <p className="mt-1 text-xs text-ink-dim">{day.example.description}</p>
               {day.example.code && (
                 <pre className="mt-3 overflow-x-auto rounded-xl border border-[#26262b] bg-[#18181b] p-4 text-xs leading-relaxed text-[#d4d4d8]">
@@ -813,8 +819,9 @@ function DayPanel({
       {/* ===== 验收模式 ===== */}
       {mode === "quiz" && !readOnly && (
         <Card className="border-warn/30">
-          <p className="text-sm font-bold text-ink">
-            ⚔️ 验收关卡 —— 逐条通过才能解锁下一阶段
+          <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
+            <Swords className="size-4 text-warn" />
+            验收关卡 —— 逐条通过才能解锁下一阶段
           </p>
           <p className="mt-1 text-xs text-ink-dim">
             讲解测试用自己的话讲；变体测试是新条件下的应用题。答不上来可以回头再学，验收不计时。
@@ -902,8 +909,9 @@ function DayPanel({
             {grade.reviewAdvice}
           </div>
           {grade.overall === "pass" ? (
-            <p className="mt-4 text-center text-sm text-ink-dim">
-              🎉 已解锁下一任务，左侧时间线可查看。
+            <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-sm text-ink-dim">
+              <Check className="size-4 text-ok" />
+              已解锁下一任务，左侧时间线可查看。
             </p>
           ) : (
             <div className="mt-4 flex items-center justify-between">
