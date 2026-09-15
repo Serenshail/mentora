@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useTypewriter } from "@/lib/use-typewriter";
+import { usePopText } from "@/lib/use-poptext";
 import { ArrowRight, BookOpen, Brain, Check, Compass, GraduationCap } from "lucide-react";
 
 /* ================= Mainframe 规格资产 ================= */
@@ -163,6 +164,7 @@ const TYPE_TEXT = "很高兴你来了。会学习的人，最后总会走到这�
 
 export default function Landing() {
   const { displayed, done } = useTypewriter(TYPE_TEXT, 38, 600);
+  const { elRef: popRef } = usePopText("Mentora", 300);
   const [showPills, setShowPills] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -287,6 +289,14 @@ export default function Landing() {
       {/* ===== Hero（z-1，整屏） ===== */}
       <section className="relative z-[1] flex h-screen flex-col justify-end overflow-hidden px-5 pb-12 sm:px-8 md:justify-center md:px-10 md:pb-0">
         <div className="relative z-10 max-w-xl">
+          {/* 品牌大字：PopText 手写体，逐字弹入，划过字母变专属 3D 物件 */}
+          <h1
+            ref={popRef}
+            className="pop-text font-brand pointer-events-auto mb-3 select-none leading-none text-white sm:mb-5"
+            style={{ fontSize: "clamp(76px, 10vw, 132px)", minHeight: "1.25em" }}
+            aria-label="Mentora"
+          />
+
           {/* 磨砂引言（blur 4px） */}
           <p
             className="font-body-display pointer-events-none mb-5 select-none text-white sm:mb-6"

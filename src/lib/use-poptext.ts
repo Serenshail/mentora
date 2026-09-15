@@ -10,14 +10,29 @@ export function usePopText(text: string, delay = 0) {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      // css
-      if (!document.querySelector('link[data-poptext-css]')) {
+      // css：等样式表真正加载完再打字（否则早期变形图层没有绝对定位，会飘）
+      await new Promise<void>((resolve) => {
+        const existing = document.querySelector('link[data-poptext-css]') as HTMLLinkElement | null;
+        if (existing) {
+          if (existing.sheet) resolve();
+          else existing.addEventListener("load", () => resolve(), { once: true });
+          return;
+        }
         const link = document.createElement("link");
         link.rel = "stylesheet";
         link.href = "/poptext/pop-text.css";
         link.setAttribute("data-poptext-css", "1");
+        link.onload = () => resolve();
+        link.onerror = () => resolve();
         document.head.appendChild(link);
-      }
+      });
+      // 品牌字体就绪（避免打字中途字形跳变）
+      try {
+        await Promise.race([
+          document.fonts.load('1em "Great Vibes"'),
+          new Promise((r) => setTimeout(r, 1500)),
+        ]);
+      } catch { /* 字体加载失败也继续 */ }
       // js
       if (!(window as unknown as { PopText?: unknown }).PopText) {
         await new Promise<void>((resolve) => {
