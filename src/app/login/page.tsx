@@ -8,6 +8,11 @@ import { useAuth, syncAfterLogin } from "@/lib/auth-client";
 import { usePopText } from "@/lib/use-poptext";
 import { toast } from "sonner";
 
+/* 登录后回跳目标：只认站内路径，避免 ?next= 被拿去跳外站 */
+function safeNext(raw: string | null): string {
+  return raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+}
+
 /* 左侧品牌轮廓：大字标（PopText）+ 卖点提纲 */
 function BrandPanel() {
   const { elRef } = usePopText("Mentora", 300);
@@ -75,10 +80,10 @@ function LoginInner() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
-  /* 已登录还访问 /login：直接回首页，不渲染登录表单（否则出现三栏叠层） */
+  /* 已登录还访问 /login：直接回目标页，不渲染登录表单（否则出现三栏叠层） */
   useEffect(() => {
     if (!checking && user) {
-      router.replace(params.get("next") || "/");
+      router.replace(safeNext(params.get("next")));
     }
   }, [checking, user, router, params]);
 
@@ -108,7 +113,8 @@ function LoginInner() {
     });
     if (result === "pulled") toast.success("已从云端恢复你的数据");
     else if (result === "pushed") toast.success("本机数据已备份到云端");
-    router.push("/");
+    // 从 /admin 等页面被送来的，登录完要回到那里，别一律甩回首页
+    router.push(safeNext(params.get("next")));
   };
 
   const submit = async () => {

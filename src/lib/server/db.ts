@@ -201,12 +201,16 @@ export async function dbDelete(path: string, sha: string | null): Promise<void> 
     return;
   }
 
-  let res = await ghApi(path, "DELETE", sha ? { sha } : undefined);
+  /* GitHub Contents API 的 DELETE 必须带 message，漏了会一律 422（"message" wasn't supplied） */
+  const del = (s: string | null) =>
+    ghApi(path, "DELETE", { message: `db: delete ${path}`, ...(s ? { sha: s } : {}) });
+
+  let res = await del(sha);
   if (res.status === 404) return;
   if (res.status === 422) {
     const cur = await ghApi(path, "GET");
     const fresh = (cur.json as { sha?: string })?.sha;
-    res = await ghApi(path, "DELETE", fresh ? { sha: fresh } : undefined);
+    res = await del(fresh ?? null);
   }
   if (res.status >= 300) throw new Error(`DB 删除失败（${res.status}）`);
 }
