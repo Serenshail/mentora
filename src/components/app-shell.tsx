@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { FeedbackWidget } from "@/components/feedback-widget";
 import { useAuth, useAutoPush } from "@/lib/auth-client";
+import { isAdminEmail } from "@/lib/admin-emails";
 import { useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
@@ -27,11 +28,7 @@ const NAV = [
   { href: "/settings", label: "设置", icon: Settings2 },
 ];
 
-/* 管理员邮箱（与 /admin 鉴权一致）；非管理员不显示入口 */
-const ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || "text@qq.com,haow9508@gmail.com")
-  .split(",")
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
+/* 管理员邮箱（与 /admin 服务端鉴权同一份白名单）；非管理员不显示入口 */
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -106,7 +103,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {label}
               </Link>
             ))}
-            {user && ADMIN_EMAILS.includes(user.email.toLowerCase()) && (
+            {user && isAdminEmail(user.email, process.env.NEXT_PUBLIC_ADMIN_EMAILS) && (
               <Link
                 href="/admin"
                 className={cn(

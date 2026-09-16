@@ -1,17 +1,9 @@
 import { dbGet, dbList } from "@/lib/server/db";
 import { getSessionUser } from "@/lib/server/auth";
+import { isAdminEmail } from "@/lib/admin-emails";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-/** 管理员邮箱白名单（逗号分隔）。默认内测账号，线上用 ADMIN_EMAILS 覆盖 */
-function isAdmin(email: string): boolean {
-  const list = (process.env.ADMIN_EMAILS || "text@qq.com")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  return list.includes(email.trim().toLowerCase());
-}
 
 interface UserRecord {
   userId: string;
@@ -35,7 +27,7 @@ interface DataRecord {
 export async function GET() {
   const session = await getSessionUser();
   if (!session) return Response.json({ error: "未登录" }, { status: 401 });
-  if (!isAdmin(session.email)) {
+  if (!isAdminEmail(session.email, process.env.ADMIN_EMAILS)) {
     return Response.json({ error: "此账号没有管理权限" }, { status: 403 });
   }
 
