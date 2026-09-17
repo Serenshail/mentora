@@ -2,7 +2,7 @@
    否则会出现"看得见入口、进不去后台"的错位。
    线上用 ADMIN_EMAILS 覆盖；NEXT_PUBLIC_ADMIN_EMAILS 只决定侧栏是否显示入口。 */
 
-export const DEFAULT_ADMIN_EMAILS = "haow9508@gmail.com,text@qq.com";
+export const DEFAULT_ADMIN_EMAILS = "haow9508@gmail.com,laiyif68@gmail.com,text@qq.com";
 
 export function parseAdminEmails(raw: string | undefined): string[] {
   return (raw && raw.trim() ? raw : DEFAULT_ADMIN_EMAILS)
