@@ -82,7 +82,15 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/overview", { cache: "no-store" });
       const j = await res.json();
       if (!res.ok) {
-        setError(res.status === 401 ? "登录状态已过期，请退出后重新登录" : j.error || "加载失败");
+        /* 会话失效（多标签页退出/凭证过期）:不留在报错页,直接送去重新登录 */
+        if (res.status === 401) {
+          setError("登录状态已过期，正在为你转到登录页…");
+          setTimeout(() => {
+            window.location.href = "/login?next=/admin";
+          }, 800);
+          return;
+        }
+        setError(j.error || "加载失败");
         setData(null);
       } else {
         setData(j as Overview);
