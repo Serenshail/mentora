@@ -18,11 +18,10 @@
   white-space:pre;
   line-height:1;
   position:relative;           /* 气球图层的定位基准 */
-  overflow:hidden;
   padding:.08em .1em;          /* 给气球留出膨胀空间,负 margin 抵消 */
   margin:-.08em -.1em;
   opacity:0;
-  transform:translateX(.18em) translateY(.18em) scale(.3) rotate(8deg);
+  transform:translateY(.18em) scale(.3) rotate(8deg);
   filter:blur(5px);
   will-change:transform,filter,opacity;
   cursor:default;
