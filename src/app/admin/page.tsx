@@ -105,10 +105,19 @@ export default function AdminPage() {
   }
   if (!user) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-bg">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-bg px-6">
         <Lock className="size-8 text-ink-dim/50" strokeWidth={1.5} />
         <p className="text-sm font-bold text-ink">管理后台需要登录</p>
-        <Button onClick={() => (window.location.href = "/login?next=/admin")}>去登录</Button>
+        <div className="flex flex-col items-center gap-2">
+          <Button onClick={() => (window.location.href = "/login?next=/admin")}>去登录</Button>
+          <a
+            href="/api/debug/auth"
+            target="_blank"
+            className="text-xs text-ink-dim/60 hover:text-accent hover:underline"
+          >
+            查看登录状态调试信息 →
+          </a>
+        </div>
       </div>
     );
   }
@@ -121,6 +130,13 @@ export default function AdminPage() {
           管理员邮箱在 Vercel 的 ADMIN_EMAILS 环境变量里配置（逗号分隔）。
           当前登录：{user.email}
         </p>
+        <a
+          href="/api/debug/auth"
+          target="_blank"
+          className="mt-2 text-xs text-ink-dim/60 hover:text-accent hover:underline"
+        >
+          查看登录状态调试信息 →
+        </a>
       </div>
     );
   }

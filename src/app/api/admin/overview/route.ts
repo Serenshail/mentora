@@ -26,8 +26,12 @@ interface DataRecord {
 
 export async function GET() {
   const session = await getSessionUser();
+  console.log("[admin/overview] session:", session ? { email: session.email, userId: session.userId } : "null");
   if (!session) return Response.json({ error: "未登录" }, { status: 401 });
-  if (!isAdminEmail(session.email, process.env.ADMIN_EMAILS)) {
+
+  const isAdmin = isAdminEmail(session.email, process.env.ADMIN_EMAILS);
+  console.log("[admin/overview] isAdmin:", isAdmin, "email:", session.email);
+  if (!isAdmin) {
     return Response.json({ error: "此账号没有管理权限" }, { status: 403 });
   }
 
