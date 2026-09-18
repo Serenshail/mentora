@@ -156,6 +156,8 @@
     if (old) old.remove();
 
     var ch0 = glyph.textContent;
+    /* t/T 专属上浮量(em)：其余字母为 0,图标仍落在字母正中（原效果） */
+    var liftEm = (ch0 === 't' || ch0 === 'T') ? -0.75 : 0;
     var bb, isImg = false;
     if (IMG_FOR[ch0.toLowerCase()]) {
       bb = document.createElement('img');
@@ -211,7 +213,7 @@
         requestAnimationFrame(frame);          /* 图标未就绪:等待,不推进 */
         return;
       }
-      var scale, bbOp, gOp, rise, wob;
+      var scale, bbOp, gOp, rise, wob, lift;
       if (t < 0.24) {                          /* 跳起:减速曲线入场,轻微过冲 */
         var k = t / 0.24;
         var e = 1 - Math.pow(1 - k, 3);
@@ -220,12 +222,14 @@
         gOp = 1 - Math.min(1, k * 1.5);
         rise = -0.06 * e;
         wob = 2.2 * e * Math.sin(k * 6.283);
+        lift = liftEm * e;
         if (!sparked && k > 0.55) { spark(); sparked = true; }
       } else if (t < 0.66) {                   /* 悬浮:极克制的呼吸 + 摇摆 */
         var k2 = (t - 0.24) / 0.42;
         scale = 1.15 + 0.025 * Math.sin(k2 * Math.PI * 2);
         bbOp = 1; gOp = 0; rise = -0.06;
         wob = 1.2 * Math.sin(k2 * Math.PI * 3);
+        lift = liftEm;
       } else {                                 /* 缩回:快速收敛 */
         var k3 = (t - 0.66) / 0.34;
         var k3e = k3 * k3;
@@ -234,13 +238,16 @@
         gOp = k3;
         rise = -0.06 * (1 - k3);
         wob = 1.2 * (1 - k3);
+        lift = liftEm * (1 - k3);
       }
       ch.style.transform = 'translateY(' + rise.toFixed(3) + 'em)';
       glyph.style.opacity = gOp.toFixed(2);
       glyph.style.transform = gOp > 0 ? 'scale(' + (1 - 0.08 * (1 - gOp)).toFixed(3) + ')' : '';
       bb.style.opacity = bbOp.toFixed(2);
+      /* t 的图标单独上浮（lift）：它比字形宽得多，居中放会盖住左邻 n——
+         跳起时多升一截悬到文字上方，其余字母维持原来的居中效果不变 */
       bb.style.transform =
-        'translate(-50%,-50%) translateY(' + (rise * 0.45).toFixed(3) + 'em)' +
+        'translate(-50%,-50%) translateY(' + (lift + rise * 0.45).toFixed(3) + 'em)' +
         ' rotate(' + wob.toFixed(1) + 'deg) scale(' + scale.toFixed(3) + ')';
       bb.style.filter = 'drop-shadow(0 ' + (0.04 + 0.05 * (-rise / 0.06)).toFixed(2) + 'em ' +
         (0.06 + 0.06 * (-rise / 0.06)).toFixed(2) + 'em rgba(0,0,0,' + (0.24 + 0.12 * (-rise / 0.06)).toFixed(2) + '))';

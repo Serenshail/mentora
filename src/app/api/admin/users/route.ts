@@ -1,16 +1,19 @@
 import { NextRequest } from "next/server";
-import crypto from "node:crypto";
 import { dbGet, dbList, dbDelete, emailHash } from "@/lib/server/db";
+import { getSessionUser } from "@/lib/server/auth";
+import { isAdminEmail } from "@/lib/admin-emails";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-function checkPassword(password: string): boolean {
-  const expected = process.env.ADMIN_PASSWORD || "";
-  if (!expected) return false;
-  const a = Buffer.from(password);
-  const b = Buffer.from(expected);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+/* 不再要管理密码：登上白名单账号就直接能用，鉴权与 /api/admin/overview 一致 */
+async function requireAdmin(): Promise<{ error: string; status: number } | null> {
+  const session = await getSessionUser();
+  if (!session) return { error: "未登录", status: 401 };
+  if (!isAdminEmail(session.email, process.env.ADMIN_EMAILS)) {
+    return { error: "此账号没有管理权限", status: 403 };
+  }
+  return null;
 }
 
 interface UserRecord {
@@ -22,10 +25,9 @@ interface UserRecord {
 
 /** 删除用户：连同其云端数据一并移除 */
 export async function DELETE(req: NextRequest) {
+  const denied = await requireAdmin();
+  if (denied) return Response.json({ error: denied.error }, { status: denied.status });
   const body = await req.json().catch(() => ({}));
-  if (!checkPassword(String(body.password ?? ""))) {
-    return Response.json({ error: "管理密码不对" }, { status: 401 });
-  }
   const email = String(body.email ?? "").trim().toLowerCase();
   if (!email) return Response.json({ error: "缺少 email" }, { status: 400 });
 
@@ -40,11 +42,9 @@ export async function DELETE(req: NextRequest) {
   return Response.json({ ok: true });
 }
 
-export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  if (!checkPassword(String(body.password ?? ""))) {
-    return Response.json({ error: "管理密码不对" }, { status: 401 });
-  }
+export async function POST() {
+  const denied = await requireAdmin();
+  if (denied) return Response.json({ error: denied.error }, { status: denied.status });
 
   const userFiles = await dbList("users");
   const users: Record<string, { userId: string; email: string; name: string; createdAt: string }> = {};

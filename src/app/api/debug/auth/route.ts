@@ -1,5 +1,5 @@
 import { getSessionUser } from "@/lib/server/auth";
-import { isAdminEmail } from "@/lib/admin-emails";
+import { isAdminEmail, parseAdminEmails } from "@/lib/admin-emails";
 
 export const runtime = "nodejs";
 
@@ -15,9 +15,7 @@ export async function GET() {
         }
       : null,
     isAdmin: session ? isAdminEmail(session.email, process.env.ADMIN_EMAILS) : false,
-    adminEmails: (process.env.ADMIN_EMAILS || "haow9508@gmail.com,laiyif68@gmail.com,text@qq.com")
-      .split(",")
-      .map((s) => s.trim().toLowerCase()),
+    adminEmails: parseAdminEmails(process.env.ADMIN_EMAILS),
     timestamp: new Date().toISOString(),
   });
 }

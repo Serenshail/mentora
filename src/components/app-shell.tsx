@@ -55,6 +55,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
+  /* 管理员：侧栏（桌面）与底栏（移动端）都给出后台入口，登上账号就能直达 */
+  const isAdmin = isAdminEmail(user.email, process.env.NEXT_PUBLIC_ADMIN_EMAILS);
+
   return (
     <div className="flex min-h-screen w-full">
       {/* 侧边栏 */}
@@ -103,7 +106,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {label}
               </Link>
             ))}
-            {user && isAdminEmail(user.email, process.env.NEXT_PUBLIC_ADMIN_EMAILS) && (
+            {isAdmin && (
               <Link
                 href="/admin"
                 className={cn(
@@ -185,8 +188,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </main>
 
-        {/* 移动端底部导航 */}
-        <nav className="sticky bottom-0 z-40 grid grid-cols-6 border-t border-border bg-white/90 backdrop-blur md:hidden">
+        {/* 移动端底部导航（管理员多一个「后台」入口） */}
+        <nav
+          className={cn(
+            "sticky bottom-0 z-40 grid border-t border-border bg-white/90 backdrop-blur md:hidden",
+            isAdmin ? "grid-cols-7" : "grid-cols-6"
+          )}
+        >
           {NAV.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
@@ -200,6 +208,18 @@ export function AppShell({ children }: { children: ReactNode }) {
               {label}
             </Link>
           ))}
+          {isAdmin && (
+            <Link
+              href="/admin"
+              className={cn(
+                "flex flex-col items-center gap-1 py-2.5 text-[10px]",
+                isActive("/admin") ? "font-semibold text-accent" : "text-ink-dim"
+              )}
+            >
+              <ShieldCheck className="size-5" />
+              后台
+            </Link>
+          )}
         </nav>
       </div>
     </div>
