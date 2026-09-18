@@ -37,7 +37,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, logout, checking } = useAuth();
   useAutoPush(!!user);
 
-  const isPublicPath = pathname === "/" || pathname === "/login";
+  /* /admin 自带独立密码门，不需要登录态，也不参与登录跳转（否则和登录页互相弹） */
+  const isPublicPath = pathname === "/" || pathname === "/login" || pathname === "/admin";
   useEffect(() => {
     if (!checking && !user && !isPublicPath) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);

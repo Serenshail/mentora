@@ -1,9 +1,34 @@
+import { NextRequest } from "next/server";
+import crypto from "node:crypto";
 import { dbGet, dbList } from "@/lib/server/db";
 import { getSessionUser } from "@/lib/server/auth";
 import { isAdminEmail } from "@/lib/admin-emails";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+/* 两条进入后台的路：
+   1) 管理员账号登录（白名单会话）；
+   2) 独立后台密码（x-admin-password 请求头，比对 ADMIN_PASSWORD 环境变量）。
+   会话残留/登录跳转死循环都与后台无关——输对密码就能看数据。 */
+function timingSafeEq(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
+async function authorize(req: NextRequest): Promise<{ email: string; name: string } | null> {
+  const expected = process.env.ADMIN_PASSWORD || "";
+  const given = req.headers.get("x-admin-password") ?? "";
+  if (expected && given && timingSafeEq(given, expected)) {
+    return { email: "后台密码登录", name: "管理员" };
+  }
+  const session = await getSessionUser();
+  if (session && isAdminEmail(session.email, process.env.ADMIN_EMAILS)) {
+    return { email: session.email, name: session.name };
+  }
+  return null;
+}
 
 interface UserRecord {
   userId: string;
@@ -24,16 +49,13 @@ interface DataRecord {
   };
 }
 
-export async function GET() {
-  const session = await getSessionUser();
-  console.log("[admin/overview] session:", session ? { email: session.email, userId: session.userId } : "null");
-  if (!session) return Response.json({ error: "未登录" }, { status: 401 });
-
-  const isAdmin = isAdminEmail(session.email, process.env.ADMIN_EMAILS);
-  console.log("[admin/overview] isAdmin:", isAdmin, "email:", session.email);
-  if (!isAdmin) {
-    return Response.json({ error: "此账号没有管理权限" }, { status: 403 });
+export async function GET(req: NextRequest) {
+  const you = await authorize(req);
+  if (!you) {
+    console.log("[admin/overview] denied");
+    return Response.json({ error: "未登录" }, { status: 401 });
   }
+  console.log("[admin/overview] authed:", you.email);
 
   /* ---- 用户列表 ---- */
   const users: {
@@ -137,7 +159,7 @@ export async function GET() {
   }
 
   return Response.json({
-    you: { email: session.email, name: session.name },
+    you,
     users,
     feedback,
     feedbackConfigured: Boolean(token),

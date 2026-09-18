@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Badge, Button, Card } from "@/components/ui";
+import { Badge, Button, Card, Input } from "@/components/ui";
 import { useAuth } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import {
@@ -45,12 +45,15 @@ function fmtDate(iso: string | null): string {
 }
 
 export default function AdminPage() {
-  const { user, checking, logout } = useAuth();
+  const { user, checking } = useAuth();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<"users" | "feedback">("users");
   const [processingId, setProcessingId] = useState<number | null>(null);
+  /* 独立后台密码：不需要登录账号，输对密码直接看数据（也绕开一切登录跳转问题） */
+  const [needPw, setNeedPw] = useState(false);
+  const [pw, setPw] = useState("");
 
   /* 一键处理/重开反馈（关/开 GitHub issue），改完本地同步状态 */
   const setFeedbackState = async (number: number, state: "open" | "closed") => {
@@ -75,24 +78,27 @@ export default function AdminPage() {
     }
   };
 
-  const load = async () => {
+  /* 会话管理员免密进入；否则落到底部密码门。401 一律不跳转，就地出密码框 */
+  const load = async (password?: string) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/admin/overview", { cache: "no-store" });
+      const res = await fetch("/api/admin/overview", {
+        cache: "no-store",
+        headers: password ? { "x-admin-password": password } : {},
+      });
       const j = await res.json();
       if (!res.ok) {
-        /* 会话失效（多标签页退出/凭证过期）:不留在报错页,直接送去重新登录 */
         if (res.status === 401) {
-          setError("登录状态已过期，正在为你转到登录页…");
-          setTimeout(() => {
-            window.location.href = "/login?next=/admin";
-          }, 800);
-          return;
+          setNeedPw(true);
+          setData(null);
+          setError(password ? "后台密码不对，再试一次" : null);
+        } else {
+          setError(j.error || "加载失败");
+          setData(null);
         }
-        setError(j.error || "加载失败");
-        setData(null);
       } else {
+        setNeedPw(false);
         setData(j as Overview);
       }
     } catch {
@@ -103,45 +109,45 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    if (!checking && user) void load();
+    if (!checking) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checking, user]);
+  }, [checking]);
 
-  /* 未登录 / 鉴权中 */
+  const submitPw = async () => {
+    if (loading || !pw) return;
+    await load(pw);
+  };
+
+  /* 鉴权中 */
   if (checking) {
     return <div className="flex min-h-screen items-center justify-center bg-bg text-sm text-ink-dim">加载中…</div>;
   }
-  if (!user) {
+
+  /* 后台密码门：会话不是管理员/已失效时，输对密码即可进入 */
+  if (needPw) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-bg px-6">
         <Lock className="size-8 text-ink-dim/50" strokeWidth={1.5} />
-        <p className="text-sm font-bold text-ink">管理后台需要登录</p>
-        <div className="flex flex-col items-center gap-2">
-          <Button onClick={() => (window.location.href = "/login?next=/admin")}>去登录</Button>
-          <a
-            href="/api/debug/auth"
-            target="_blank"
-            className="text-xs text-ink-dim/60 hover:text-accent hover:underline"
-          >
-            查看登录状态调试信息 →
-          </a>
+        <p className="text-sm font-bold text-ink">管理后台</p>
+        <p className="text-xs text-ink-dim">输入后台密码查看全部用户数据</p>
+        <div className="flex w-full max-w-xs gap-2">
+          <Input
+            type="password"
+            placeholder="后台密码"
+            value={pw}
+            onChange={(e) => setPw(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitPw()}
+            autoFocus
+          />
+          <Button onClick={submitPw} loading={loading}>
+            进入
+          </Button>
         </div>
-      </div>
-    );
-  }
-  if (error === "此账号没有管理权限") {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-bg px-6">
-        <Lock className="size-8 text-ink-dim/50" strokeWidth={1.5} />
-        <p className="text-sm font-bold text-ink">此账号没有管理权限</p>
-        <p className="max-w-sm text-center text-xs leading-relaxed text-ink-dim">
-          管理员邮箱在 Vercel 的 ADMIN_EMAILS 环境变量里配置（逗号分隔）。
-          当前登录：{user.email}
-        </p>
+        {error && <p className="text-xs text-bad">{error}</p>}
         <a
           href="/api/debug/auth"
           target="_blank"
-          className="mt-2 text-xs text-ink-dim/60 hover:text-accent hover:underline"
+          className="text-xs text-ink-dim/60 hover:text-accent hover:underline"
         >
           查看登录状态调试信息 →
         </a>
@@ -164,30 +170,18 @@ export default function AdminPage() {
               <Badge tone="accent">v5</Badge>
             </div>
             <p className="mt-1.5 text-[13px] text-ink-dim">
-              {data?.you.email ?? user.email} · 用户数据与反馈总览，不用再去 GitHub 翻
+              {data?.you.email ?? user?.email ?? "管理后台"} · 用户数据与反馈总览，不用再去 GitHub 翻
             </p>
           </div>
-          <Button variant="outline" onClick={load} loading={loading}>
+          <Button variant="outline" onClick={() => load()} loading={loading}>
             {!loading && <RefreshCw className="size-4" />} 刷新
           </Button>
         </div>
 
-        {error && error !== "此账号没有管理权限" && (
+        {error && (
           <Card className="mt-6 flex items-center gap-3 border-bad/25 bg-bad/[0.04]">
             <AlertCircle className="size-4 shrink-0 text-bad" />
             <p className="text-sm text-bad">{error}</p>
-            {error.includes("重新登录") && (
-              <Button
-                variant="outline"
-                className="ml-auto shrink-0"
-                onClick={async () => {
-                  await logout();
-                  window.location.href = "/login?next=/admin";
-                }}
-              >
-                重新登录
-              </Button>
-            )}
           </Card>
         )}
 
