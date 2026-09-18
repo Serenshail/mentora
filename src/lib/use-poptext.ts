@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 /* PopText 资产按需加载（css + js + emoji base）——来自 D:\zcode\ui 自建 skill */
-const POPTEXT_VERSION = "v8"; // 改这里强制刷新缓存
+const POPTEXT_VERSION = "v10"; // 改这里强制刷新缓存
 
 export function usePopText(text: string, delay = 0) {
   const elRef = useRef<HTMLHeadingElement>(null);
