@@ -45,7 +45,7 @@ function fmtDate(iso: string | null): string {
 }
 
 export default function AdminPage() {
-  const { user, checking } = useAuth();
+  const { user, checking, logout } = useAuth();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -82,7 +82,7 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/overview", { cache: "no-store" });
       const j = await res.json();
       if (!res.ok) {
-        setError(j.error || "加载失败");
+        setError(res.status === 401 ? "登录状态已过期，请退出后重新登录" : j.error || "加载失败");
         setData(null);
       } else {
         setData(j as Overview);
@@ -168,6 +168,18 @@ export default function AdminPage() {
           <Card className="mt-6 flex items-center gap-3 border-bad/25 bg-bad/[0.04]">
             <AlertCircle className="size-4 shrink-0 text-bad" />
             <p className="text-sm text-bad">{error}</p>
+            {error.includes("重新登录") && (
+              <Button
+                variant="outline"
+                className="ml-auto shrink-0"
+                onClick={async () => {
+                  await logout();
+                  window.location.href = "/login?next=/admin";
+                }}
+              >
+                重新登录
+              </Button>
+            )}
           </Card>
         )}
 

@@ -194,10 +194,13 @@
       bb.style.webkitTextStroke = '.085em ' + style.stroke;
       bb.style.filter = 'drop-shadow(0 .04em .07em ' + style.glow + ')';
     }
-    bb.className = 'pt-bb';
-    bb.alt = '';
-    bb.draggable = false;
-    ch.appendChild(bb);
+      bb.className = 'pt-bb';
+      bb.alt = '';
+      bb.draggable = false;
+      /* t/T 的气球文字默认渲染在盒子左缘（墨迹因此整体压到左邻 n 上）——
+         让它在盒内居中,配合下面的 translateX 校正,恰好盖在 t 本身上 */
+      if (ch0 === 't' || ch0 === 'T') bb.style.textAlign = 'center';
+      ch.appendChild(bb);
 
     /* 交换瞬间的小光点(只闪一次,细微) */
     function spark() {
