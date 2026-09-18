@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 
 /* PopText 资产按需加载（css + js + emoji base）——来自 D:\zcode\ui 自建 skill */
+const POPTEXT_VERSION = "v5"; // 改这里强制刷新缓存
+
 export function usePopText(text: string, delay = 0) {
   const elRef = useRef<HTMLHeadingElement>(null);
   const [ready, setReady] = useState(false);
@@ -20,7 +22,7 @@ export function usePopText(text: string, delay = 0) {
         }
         const link = document.createElement("link");
         link.rel = "stylesheet";
-        link.href = "/poptext/pop-text.css";
+        link.href = `/poptext/pop-text.css?v=${POPTEXT_VERSION}`;
         link.setAttribute("data-poptext-css", "1");
         link.onload = () => resolve();
         link.onerror = () => resolve();
@@ -37,7 +39,7 @@ export function usePopText(text: string, delay = 0) {
       if (!(window as unknown as { PopText?: unknown }).PopText) {
         await new Promise<void>((resolve) => {
           const s = document.createElement("script");
-          s.src = "/poptext/pop-text.js";
+          s.src = `/poptext/pop-text.js?v=${POPTEXT_VERSION}`;
           s.onload = () => resolve();
           s.onerror = () => resolve();
           document.body.appendChild(s);

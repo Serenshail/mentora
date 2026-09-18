@@ -153,6 +153,7 @@ export default function AdminPage() {
             <div className="flex items-center gap-3">
               <h1 className="text-xl font-bold tracking-[-0.02em] text-ink">管理后台</h1>
               <Badge>内测</Badge>
+              <Badge tone="accent">v5</Badge>
             </div>
             <p className="mt-1.5 text-[13px] text-ink-dim">
               {data?.you.email ?? user.email} · 用户数据与反馈总览，不用再去 GitHub 翻
