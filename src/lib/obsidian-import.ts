@@ -123,7 +123,7 @@ export async function parseVault(
 
     let title = file.name.replace(/\.md$/i, "");
     let body = "";
-    let domain = segs.length > 1 ? segs[0] : "Obsidian";
+    const domain = segs.length > 1 ? segs[0] : "Obsidian";
     let tags: string[] = [];
 
     if (!skipped) {
