@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbPut, emailHash } from "@/lib/server/db";
 import { hashPassword, setSessionCookie } from "@/lib/server/auth";
+import { checkEmailDeliverable } from "@/lib/email-check";
 
 export const runtime = "nodejs";
 
@@ -21,6 +22,11 @@ export async function POST(req: NextRequest) {
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return Response.json({ error: "邮箱格式不对" }, { status: 400 });
+  }
+  /* 邮箱真实性：MX/A 记录取证 + 临时邮箱拦截——假的邮箱会让找回流程失效 */
+  const check = await checkEmailDeliverable(email);
+  if (!check.ok) {
+    return Response.json({ error: check.reason }, { status: 400 });
   }
   if (password.length < 6) {
     return Response.json({ error: "密码至少 6 位" }, { status: 400 });

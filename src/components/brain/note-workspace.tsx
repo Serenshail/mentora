@@ -982,53 +982,68 @@ export function NoteWorkspace({
                 </div>
               )}
 
-              {/* 正文：编辑 / 预览 */}
-              <div className="relative flex-1 overflow-y-auto">
+              {/* 正文：编辑（左写右实时渲染，Obsidian 式所见即所得）/ 预览 */}
+              <div className="relative flex-1 overflow-hidden">
                 {mode === "edit" ? (
-                  <div className="relative h-full">
-                    <textarea
-                      ref={taRef}
-                      className="h-full w-full resize-none bg-transparent px-5 py-4 font-mono text-[13.5px] leading-relaxed text-ink outline-none"
-                      value={note.body}
-                      spellCheck={false}
-                      placeholder="用 Markdown 写。输入 [[ 可以链接到其他笔记…"
-                      onChange={(e) => onTaChange(e.target.value, e.target.selectionStart ?? 0)}
-                      onClick={(e) => onTaChange(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
-                      onKeyDown={onTaKeyDown}
-                    />
-                    {/* [[ 补全下拉 */}
-                    {suggest && (
-                      <div className="absolute left-5 right-5 top-16 z-10 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
-                        <p className="border-b border-border bg-surface-2 px-3 py-1 text-[10px] text-ink-dim">
-                          ↑↓ 选择 · Enter 插入 · Esc 关闭
-                        </p>
-                        {suggestCandidates.map((k, i) => (
+                  <div className="grid h-full grid-cols-1 overflow-hidden lg:grid-cols-2">
+                    <div className="relative h-full overflow-y-auto border-r border-border">
+                      <textarea
+                        ref={taRef}
+                        className="h-full w-full resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-relaxed text-ink outline-none"
+                        value={note.body}
+                        spellCheck={false}
+                        placeholder="用 Markdown 写。输入 [[ 可以链接到其他笔记…"
+                        onChange={(e) => onTaChange(e.target.value, e.target.selectionStart ?? 0)}
+                        onClick={(e) => onTaChange(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
+                        onKeyDown={onTaKeyDown}
+                      />
+                      {/* [[ 补全下拉 */}
+                      {suggest && (
+                        <div className="absolute left-4 right-4 top-16 z-10 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
+                          <p className="border-b border-border bg-surface-2 px-3 py-1 text-[10px] text-ink-dim">
+                            ↑↓ 选择 · Enter 插入 · Esc 关闭
+                          </p>
+                          {suggestCandidates.map((k, i) => (
+                            <button
+                              key={k.id}
+                              onClick={() => applySuggest(k.title)}
+                              className={cn(
+                                "block w-full px-3 py-1.5 text-left text-[13px] cursor-pointer",
+                                i === suggestIdx ? "bg-accent/[0.09] text-accent" : "text-ink hover:bg-black/[0.03]"
+                              )}
+                            >
+                              {k.title}
+                              <span className="ml-2 text-[10px] text-ink-dim/60">{k.domain}</span>
+                            </button>
+                          ))}
                           <button
-                            key={k.id}
-                            onClick={() => applySuggest(k.title)}
+                            onClick={() => {
+                              const t = suggest.fragment.trim();
+                              if (t) applySuggest(t);
+                            }}
                             className={cn(
-                              "block w-full px-3 py-1.5 text-left text-[13px] cursor-pointer",
-                              i === suggestIdx ? "bg-accent/[0.09] text-accent" : "text-ink hover:bg-black/[0.03]"
+                              "block w-full border-t border-border px-3 py-1.5 text-left text-[13px] cursor-pointer",
+                              suggestCandidates.length === 0 && suggestIdx === 0 ? "bg-accent/[0.09] text-accent" : "text-ink-dim hover:text-ink"
                             )}
                           >
-                            {k.title}
-                            <span className="ml-2 text-[10px] text-ink-dim/60">{k.domain}</span>
+                            ＋ 新建「{suggest.fragment.trim() || "…"}」并链接
                           </button>
-                        ))}
-                        <button
-                          onClick={() => {
-                            const t = suggest.fragment.trim();
-                            if (t) applySuggest(t);
-                          }}
-                          className={cn(
-                            "block w-full border-t border-border px-3 py-1.5 text-left text-[13px] cursor-pointer",
-                            suggestCandidates.length === 0 && suggestIdx === 0 ? "bg-accent/[0.09] text-accent" : "text-ink-dim hover:text-ink"
-                          )}
-                        >
-                          ＋ 新建「{suggest.fragment.trim() || "…"}」并链接
-                        </button>
-                      </div>
-                    )}
+                        </div>
+                      )}
+                    </div>
+                    {/* 右半：实时渲染（跟着输入即时变） */}
+                    <div className="hidden h-full overflow-y-auto px-4 py-4 lg:block">
+                      {note.body.trim() ? (
+                        <WikiMarkdown
+                          body={note.body}
+                          notes={knowledge}
+                          onOpen={(id) => onOpenNote(id)}
+                          onCreate={(title) => openByTitle(title, true)}
+                        />
+                      ) : (
+                        <p className="pt-10 text-center text-sm text-ink-dim">左侧写，右侧即时成型。</p>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="px-5 py-4">

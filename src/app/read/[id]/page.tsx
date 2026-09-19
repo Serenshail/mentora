@@ -9,6 +9,7 @@ import { useChat, useHydrated } from "@/lib/use-chat";
 import { INSIGHT_EXTRACT, READING_CHAT, VERIFY_SCORE } from "@/lib/ai/prompts";
 import { extractJson, insightsSchema } from "@/lib/ai/client";
 import { heuristicVerify } from "@/lib/verify-heuristic";
+import { ragContext, retrieve } from "@/lib/rag";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { ArrowLeft, Check, Lightbulb, PanelLeftClose, PanelLeftOpen, ShieldCheck } from "lucide-react";
@@ -81,8 +82,18 @@ export default function BookPage() {
     const text = input.trim();
     if (!text || streaming) return;
     setInput("");
+    /* RAG 第一步：按用户这句话，从第二大脑检索最相关的笔记注入上下文 */
+    const hits = retrieve(
+      `${text} ${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`,
+      useAppStore.getState().knowledge.map((k) => ({ id: k.id, title: k.title, body: k.body, domain: k.domain })),
+      3
+    );
+    const ragCtx = ragContext(hits);
     void send({
-      system: READING_CHAT(bookCtx()),
+      system: READING_CHAT(bookCtx()) + (ragCtx ? `
+
+## 你的主人的第二大脑里有这些相关笔记（聊天时自然引用，别硬塞）
+${ragCtx}` : ""),
       userText: text,
       task: "reading-chat",
       onDone: (full) => {
