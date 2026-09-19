@@ -31,6 +31,7 @@ interface AppState {
   books: Book[];
   sessions: CouncilSession[];
   customPersonas: CustomPersona[];
+  folders: string[]; // 第二大脑的文件夹（Obsidian 式目录树）
   settings: Settings;
 
   addGoal: (g: Goal) => void;
@@ -46,6 +47,8 @@ interface AppState {
   incrementAttempts: (goalId: string, dayId: string) => void;
   logQuiz: (goalId: string, result: QuizResult) => void;
 
+  addFolder: (name: string) => void;
+  removeFolder: (name: string) => void;
   addKnowledge: (
     items: { title: string; body?: string; domain: string }[],
     source: KnowledgeSource,
@@ -127,6 +130,7 @@ export const useAppStore = create<AppState>()(
       books: [],
       sessions: [],
       customPersonas: [],
+      folders: [],
       settings: DEFAULT_SETTINGS,
 
       addGoal: (g) => set((s) => ({ goals: [g, ...s.goals] })),
@@ -192,6 +196,10 @@ export const useAppStore = create<AppState>()(
           ),
         })),
 
+      addFolder: (name) =>
+        set((s) => (s.folders.includes(name) ? s : { folders: [...s.folders, name] })),
+      removeFolder: (name) => set((s) => ({ folders: s.folders.filter((f) => f !== name) })),
+
       addKnowledge: (items, source, sourceTitle) => {
         const existing = new Set(get().knowledge.map((k) => k.title));
         const fresh: KnowledgeItem[] = items
@@ -210,6 +218,7 @@ export const useAppStore = create<AppState>()(
           }));
         set((s) => ({ knowledge: [...fresh, ...s.knowledge] }));
       },
+
 
       createKnowledge: (init) => {
         const base = (init?.title ?? "无标题").trim() || "无标题";

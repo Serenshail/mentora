@@ -14,6 +14,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { FeedbackWidget } from "@/components/feedback-widget";
+import { AssistantWidget } from "@/components/assistant-widget";
 import { useAuth, useAutoPush } from "@/lib/auth-client";
 import { isAdminEmail } from "@/lib/admin-emails";
 import { useRouter } from "next/navigation";
@@ -173,6 +174,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         </div>
       </aside>
+
+      <AssistantWidget />
 
       {/* 主区（未登录时全屏渲染：落地页/登录页自带结构） */}
       <div className="flex min-w-0 flex-1 flex-col">

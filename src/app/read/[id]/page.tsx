@@ -11,7 +11,7 @@ import { extractJson, insightsSchema } from "@/lib/ai/client";
 import { heuristicVerify } from "@/lib/verify-heuristic";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Lightbulb, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Check, Lightbulb, PanelLeftClose, PanelLeftOpen, ShieldCheck } from "lucide-react";
 
 export default function BookPage() {
   const hydrated = useHydrated();
@@ -33,6 +33,7 @@ export default function BookPage() {
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [answers, setAnswers] = useState<string[]>(["", "", ""]);
   const [grading, setGrading] = useState(false);
+  const [planOpen, setPlanOpen] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -239,12 +240,22 @@ export default function BookPage() {
         </Card>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
-        {/* 章节计划 */}
+      <div className={cn("grid gap-6", planOpen && "lg:grid-cols-[300px_1fr]")}>
+        {/* 章节计划（可收起） */}
+        {planOpen && (
         <Card className="h-fit lg:sticky lg:top-8">
-          <p className="mb-4 text-xs font-semibold uppercase tracking-wider text-ink-dim">
-            阅读路线 · 点击单元展开导读
-          </p>
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wider text-ink-dim">
+              阅读路线 · 点击单元展开导读
+            </p>
+            <button
+              onClick={() => setPlanOpen(false)}
+              title="收起阅读路线"
+              className="rounded-md p-1 text-ink-dim/60 transition hover:text-ink cursor-pointer"
+            >
+              <PanelLeftClose className="size-4" />
+            </button>
+          </div>
           <div className="relative ml-2 space-y-1 border-l border-border pl-5">
             {book.chapters.map((c, i) => {
               const expanded = expandedId === c.id || chapter?.id === c.id;
@@ -436,6 +447,19 @@ export default function BookPage() {
             </div>
           )}
         </Card>
+        )}
+
+        {/* 折叠时的展开入口 */}
+        {!planOpen && (
+          <button
+            onClick={() => setPlanOpen(true)}
+            title="展开阅读路线"
+            className="fixed left-4 top-1/2 z-20 hidden -translate-y-1/2 flex-col items-center gap-1 rounded-r-xl border border-l-0 border-border bg-white px-1.5 py-4 text-[10px] text-ink-dim shadow-sm transition hover:text-ink cursor-pointer lg:flex"
+          >
+            <PanelLeftOpen className="size-4" />
+            <span className="[writing-mode:vertical-lr] tracking-widest">阅读路线</span>
+          </button>
+        )}
 
         {/* 对话区 */}
         <div className="min-w-0">

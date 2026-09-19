@@ -90,6 +90,12 @@ function demoTask(
       })();
     case "coach-qa":
       return demoCouncil(messages);
+    case "app-assistant":
+      return (async function* () {
+        yield* (await import("@/lib/ai/demo")).chunked(
+          "**演示模式的助手只会照本宣科。**接上真模型后，我可以告诉你每个功能在哪、怎么用——比如 Obsidian 导入、三重验收、后台密码门。"
+        );
+      })();
     default: return demoCouncil(messages);
   }
 }

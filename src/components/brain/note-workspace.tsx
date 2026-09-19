@@ -16,8 +16,10 @@ import { cn } from "@/lib/utils";
 import type { KnowledgeItem } from "@/lib/types";
 import { toast } from "sonner";
 import {
-  ArrowDownUp, Bold, Braces, Eye, FileText, Heading2, Heading3, Link2, List, ListOrdered,
-  Minus, Pencil, Plus, Quote, Search, Sparkles, Tag, Trash2, Type, X,
+  ArrowDownUp, Bold, Braces, ChevronRight, Eye, FileText, FolderPlus, Heading2, Heading3,
+  PanelRight,
+  Link2, List, ListOrdered, Minus, Pencil, Plus, Quote, RefreshCcw, Search, Sparkles, Tag,
+  Trash2, Type, X, Zap,
 } from "lucide-react";
 
 type RightTab = "backlinks" | "outgoing" | "outline" | "tags";
@@ -106,17 +108,30 @@ export function NoteWorkspace({
   onOpenNote,
   mode,
   onModeChange,
+  onGraph,
+  onReview,
+  dueCount = 0,
+  importSlot,
 }: {
   openId: string | null;
   onOpenNote: (id: string | null) => void;
   mode: "preview" | "edit";
   onModeChange: (m: "preview" | "edit") => void;
+  /** 左缘 ribbon：切图谱 / 开始复习（数据从父组件来） */
+  onGraph?: () => void;
+  onReview?: () => void;
+  dueCount?: number;
+  /** Obsidian 导入按钮（iconOnly 形态） */
+  importSlot?: React.ReactNode;
 }) {
   const knowledge = useAppStore((s) => s.knowledge);
   const createKnowledge = useAppStore((s) => s.createKnowledge);
   const updateKnowledge = useAppStore((s) => s.updateKnowledge);
   const removeKnowledge = useAppStore((s) => s.removeKnowledge);
   const linkNotes = useAppStore((s) => s.linkNotes);
+  const folders = useAppStore((s) => s.folders);
+  const addFolder = useAppStore((s) => s.addFolder);
+  const removeFolder = useAppStore((s) => s.removeFolder);
 
   const [query, setQuery] = useState("");
   const [domain, setDomain] = useState("all");
@@ -125,6 +140,9 @@ export function NoteWorkspace({
   const [tagEdit, setTagEdit] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [switcher, setSwitcher] = useState(false);
+  const [rightOpen, setRightOpen] = useState(true);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [newFolder, setNewFolder] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   /* [[ 自动补全状态：fragment 为 [[ 之后到光标的文本 */
@@ -132,6 +150,13 @@ export function NoteWorkspace({
   const [suggestIdx, setSuggestIdx] = useState(0);
 
   const note = knowledge.find((k) => k.id === openId) ?? null;
+
+  /* 文件夹树 = 用户自建文件夹 ∪ 笔记的一级目录（domain 即文件夹） */
+  const treeFolders = useMemo(() => {
+    const set = new Set(folders);
+    for (const k of knowledge) set.add(k.domain);
+    return [...set];
+  }, [folders, knowledge]);
 
   /* ---- 派生 ---- */
   const domains = useMemo(() => Array.from(new Set(knowledge.map((k) => k.domain))), [knowledge]);
@@ -195,11 +220,12 @@ export function NoteWorkspace({
     [knowledge, createKnowledge, onOpenNote]
   );
 
-  const createNote = () => {
-    const id = createKnowledge({ domain: "笔记" });
+  const createNote = (domain?: string) => {
+    const id = createKnowledge({ domain: domain ?? "笔记" });
     onOpenNote(id);
     onModeChange("edit");
-    toast.success("已新建，标题点一下就能改。");
+    if (!domain) toast.success("已新建，标题点一下就能改。");
+    else setExpanded((s) => new Set(s).add(domain));
   };
 
   /* Ctrl+K 快速切换器 */
@@ -393,10 +419,44 @@ export function NoteWorkspace({
 
   const leftPane = (
     <div className="flex h-full flex-col">
-      <Button size="sm" onClick={createNote} className="mb-2 w-full">
-        <Plus className="size-4" /> 新笔记
-      </Button>
-      <div className="relative mb-2">
+      {/* 新建文件夹（Obsidian：树顶加号） */}
+      <div className="mb-1.5 flex items-center justify-between px-0.5">
+        <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-ink-dim/70">文件夹</p>
+        <button
+          title="新建文件夹"
+          onClick={() => setNewFolder("")}
+          className="rounded-md p-1 text-ink-dim/70 transition hover:text-ink cursor-pointer"
+        >
+          <FolderPlus className="size-3.5" />
+        </button>
+      </div>
+      {newFolder !== null && (
+        <input
+          autoFocus
+          className="mb-1.5 w-full rounded-lg border border-accent/50 bg-white px-2 py-1 text-[12px] outline-none"
+          placeholder="文件夹名，回车创建"
+          value={newFolder}
+          onChange={(e) => setNewFolder(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && newFolder.trim()) {
+              addFolder(newFolder.trim());
+              setExpanded((s) => new Set(s).add(newFolder.trim()));
+              setNewFolder(null);
+            }
+            if (e.key === "Escape") setNewFolder(null);
+          }}
+          onBlur={() => {
+            if (newFolder && newFolder.trim()) {
+              addFolder(newFolder.trim());
+              setExpanded((s) => new Set(s).add(newFolder.trim()));
+            }
+            setNewFolder(null);
+          }}
+        />
+      )}
+
+      {/* 搜索 */}
+      <div className="relative mb-1.5">
         <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-dim" />
         <input
           className="w-full rounded-lg border border-border bg-white py-1.5 pl-8 pr-2 text-[13px] outline-none transition focus:border-accent/50"
@@ -407,7 +467,7 @@ export function NoteWorkspace({
       </div>
       {/* 标签筛选 */}
       {allTags.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1">
+        <div className="mb-1.5 flex flex-wrap gap-1">
           {allTags.map(([t, n]) => (
             <button
               key={t}
@@ -424,71 +484,113 @@ export function NoteWorkspace({
           ))}
         </div>
       )}
-      {/* 目录（domain）筛选 */}
-      <div className="mb-2 flex flex-wrap gap-1">
-        <button
-          onClick={() => setDomain("all")}
-          className={cn(
-            "rounded-md px-1.5 py-0.5 text-[10.5px] cursor-pointer",
-            domain === "all" ? "bg-ink text-white" : "text-ink-dim hover:text-ink"
-          )}
-        >
-          全部
-        </button>
-        {domains.map((d) => (
-          <button
-            key={d}
-            onClick={() => setDomain(d)}
-            className={cn(
-              "rounded-md px-1.5 py-0.5 text-[10.5px] cursor-pointer",
-              domain === d ? "bg-ink text-white" : "text-ink-dim hover:text-ink"
-            )}
-          >
-            {d}
-          </button>
-        ))}
-      </div>
-      {/* 笔记列表 */}
+
+      {/* 文件夹树 */}
       <div className="-mr-1 flex-1 space-y-0.5 overflow-y-auto pr-1">
-        {filtered.length === 0 && (
+        {treeFolders.length === 0 && (
           <p className="px-2 py-6 text-center text-xs text-ink-dim">
-            {knowledge.length === 0 ? "还没有笔记" : "没有匹配的笔记"}
+            {knowledge.length === 0 ? "点上面 + 建一个文件夹" : "没有匹配的笔记"}
           </p>
         )}
-        {filtered.map((k) => {
-          const active = k.id === openId;
+        {treeFolders.map((folder) => {
+          const isOpen = expanded.has(folder);
+          const inFolder = filtered.filter((k) => k.domain === folder);
+          const isCustom = !domains.includes(folder); // 没有笔记的空文件夹
           return (
-            <button
-              key={k.id}
-              onClick={() => {
-                onOpenNote(k.id);
-                onModeChange("preview");
-              }}
-              className={cn(
-                "w-full rounded-lg px-2.5 py-2 text-left transition cursor-pointer",
-                active ? "bg-accent/[0.09]" : "hover:bg-black/[0.035]"
-              )}
-            >
-              <p className={cn("truncate text-[13px]", active ? "font-semibold text-accent" : "font-medium text-ink")}>
-                {k.title}
-              </p>
-              <p className="mt-0.5 truncate text-[11px] text-ink-dim/80">
-                {k.body.replace(/\[\[([^\[\]]+)\]\]/g, "$1").replace(/[#*`>-]/g, "").slice(0, 46) || "（空笔记）"}
-              </p>
-              {TAGS_OF(k).length > 0 && (
-                <p className="mt-0.5 truncate text-[10px] text-accent/60">
-                  {TAGS_OF(k).slice(0, 3).map((t) => `#${t}`).join(" ")}
-                </p>
-              )}
-            </button>
+            <div key={folder}>
+              <div
+                className={cn(
+                  "group flex items-center gap-1 rounded-lg px-1.5 py-1.5 transition",
+                  isOpen ? "bg-black/[0.03]" : "hover:bg-black/[0.03]"
+                )}
+              >
+                <button
+                  onClick={() =>
+                    setExpanded((s) => {
+                      const next = new Set(s);
+                      if (next.has(folder)) next.delete(folder);
+                      else next.add(folder);
+                      return next;
+                    })
+                  }
+                  className="flex min-w-0 flex-1 items-center gap-1 text-left cursor-pointer"
+                >
+                  <ChevronRight
+                    className={cn("size-3.5 shrink-0 text-ink-dim transition", isOpen && "rotate-90")}
+                  />
+                  <span className="truncate text-[12.5px] font-medium text-ink">{folder}</span>
+                  <span className="tabular shrink-0 text-[10px] text-ink-dim/60">{inFolder.length}</span>
+                </button>
+                <button
+                  title="在这个文件夹里新建笔记"
+                  onClick={() => createNote(folder)}
+                  className="hidden shrink-0 rounded p-0.5 text-ink-dim/60 transition hover:text-ink group-hover:block cursor-pointer"
+                >
+                  <Plus className="size-3.5" />
+                </button>
+                {isCustom && (
+                  <button
+                    title="删除这个空文件夹"
+                    onClick={() => {
+                      removeFolder(folder);
+                      setExpanded((s) => {
+                        const next = new Set(s);
+                        next.delete(folder);
+                        return next;
+                      });
+                    }}
+                    className="hidden shrink-0 rounded p-0.5 text-ink-dim/60 transition hover:text-bad group-hover:block cursor-pointer"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                )}
+              </div>
+              {isOpen &&
+                (inFolder.length === 0 ? (
+                  <p className="pb-1.5 pl-7 text-[11px] text-ink-dim/60">空文件夹</p>
+                ) : (
+                  <div className="ml-3 border-l border-border/70 pl-1">
+                    {inFolder.map((k) => {
+                      const active = k.id === openId;
+                      return (
+                        <button
+                          key={k.id}
+                          onClick={() => {
+                            onOpenNote(k.id);
+                            onModeChange("preview");
+                          }}
+                          className={cn(
+                            "w-full rounded-lg px-2 py-1.5 text-left transition cursor-pointer",
+                            active ? "bg-accent/[0.09]" : "hover:bg-black/[0.035]"
+                          )}
+                        >
+                          <p
+                            className={cn(
+                              "truncate text-[12.5px]",
+                              active ? "font-semibold text-accent" : "text-ink"
+                            )}
+                          >
+                            {k.title}
+                          </p>
+                          <p className="mt-0.5 truncate text-[10.5px] text-ink-dim/70">
+                            {k.body.replace(/\[\[([^\[\]]+)\]\]/g, "$1").replace(/[#*`>-]/g, "").slice(0, 40) ||
+                              (TAGS_OF(k).length ? TAGS_OF(k).slice(0, 3).map((t) => `#${t}`).join(" ") : "（空笔记）")}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+            </div>
           );
         })}
       </div>
-      <p className="pt-2 text-[10px] text-ink-dim/60">
+      <p className="pt-1.5 text-[10px] text-ink-dim/60">
         {knowledge.length} 篇 · {filtered.length} 篇可见
       </p>
     </div>
   );
+
 
   const rightPane = (
     <div className="flex h-full flex-col">
@@ -639,13 +741,46 @@ export function NoteWorkspace({
 
   return (
     <div>
-      {/* 工作台三栏 */}
-      <div className="grid gap-3 lg:grid-cols-[250px_1fr_260px]">
-        {/* 左栏 */}
-        <Card className="h-[calc(100vh-190px)] min-h-[480px] overflow-hidden p-3">{leftPane}</Card>
+      {/* 工作台：左缘 ribbon + 文件夹树 + 编辑器 + 功能面板（可收起） */}
+      <div
+        className={cn(
+          "grid gap-2",
+          rightOpen
+            ? "lg:grid-cols-[44px_240px_1fr_250px]"
+            : "lg:grid-cols-[44px_240px_1fr]"
+        )}
+      >
+        {/* 左缘 ribbon（Obsidian 式竖排图标） */}
+        <div className="hidden h-[calc(100vh-140px)] min-h-[480px] flex-col items-center gap-1.5 rounded-2xl border border-border bg-white py-3 lg:flex">
+          <button title="新建笔记" onClick={() => createNote()} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] cursor-pointer">
+            <Plus className="size-4.5" />
+          </button>
+          {importSlot}
+          <button title="开始复习" onClick={onReview} disabled={dueCount === 0} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] disabled:opacity-30 cursor-pointer">
+            <RefreshCcw className="size-4.5" />
+          </button>
+          <button title="关系图谱" onClick={onGraph} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] cursor-pointer">
+            <Zap className="size-4.5" />
+          </button>
+          <div className="mt-auto flex flex-col items-center gap-1">
+            <button
+              title={rightOpen ? "收起功能面板" : "展开功能面板"}
+              onClick={() => setRightOpen((v) => !v)}
+              className={cn(
+                "rounded-lg p-2 transition cursor-pointer",
+                rightOpen ? "bg-accent/[0.1] text-accent" : "text-ink-dim hover:bg-black/[0.05] hover:text-ink"
+              )}
+            >
+              <PanelRight className="size-4.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* 文件树 */}
+        <Card className="h-[calc(100vh-150px)] min-h-[480px] overflow-hidden p-3">{leftPane}</Card>
 
         {/* 中栏：编辑器 / 预览 */}
-        <Card className="h-[calc(100vh-190px)] min-h-[480px] overflow-hidden p-0">
+        <Card className="h-[calc(100vh-150px)] min-h-[480px] overflow-hidden p-0">
           {!note ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
               <Empty
@@ -653,7 +788,7 @@ export function NoteWorkspace({
                 title="选一篇笔记，或新建一篇"
                 desc="双链 [[]]、#标签、反向链接、大纲——都在这套工作台里。Ctrl+K 快速跳转。"
               />
-              <Button size="sm" onClick={createNote}>
+              <Button size="sm" onClick={() => createNote()}>
                 <Plus className="size-4" /> 新笔记
               </Button>
             </div>
@@ -828,8 +963,10 @@ export function NoteWorkspace({
           )}
         </Card>
 
-        {/* 右栏 */}
-        <Card className="h-[calc(100vh-190px)] min-h-[480px] overflow-hidden p-3">{rightPane}</Card>
+        {/* 功能面板（右上角，可收起） */}
+        {rightOpen && (
+          <Card className="h-[calc(100vh-150px)] min-h-[480px] overflow-hidden p-3">{rightPane}</Card>
+        )}
       </div>
 
       {/* Ctrl+K 快速切换器 */}

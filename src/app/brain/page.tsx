@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import {
-  Badge, Button, Card, Input, Modal, PageHeader, ProgressRing, Textarea,
+  Badge, Button, Card, Modal,
 } from "@/components/ui";
 import { GraphView } from "@/components/brain/graph-view";
 import { ObsidianImport } from "@/components/brain/obsidian-import";
@@ -12,26 +12,20 @@ import { useAppStore, useDueReviews } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { REVIEW_GRADE, REVIEW_PROMPT } from "@/lib/ai/prompts";
 import { extractJson, reviewGradeSchema } from "@/lib/ai/client";
-import { cn, streakFrom } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import {
-  Brain, Flame, Link2, Plus, RefreshCcw, Zap,
-} from "lucide-react";
+import { Brain, RefreshCcw } from "lucide-react";
 
 type Tab = "notes" | "graph";
 
 export default function BrainPage() {
   const hydrated = useHydrated();
   const knowledge = useAppStore((s) => s.knowledge);
-  const addKnowledge = useAppStore((s) => s.addKnowledge);
 
   const due = useDueReviews();
   const [tab, setTab] = useState<Tab>("notes");
   const [openId, setOpenId] = useState<string | null>(null);
   const [wsMode, setWsMode] = useState<"preview" | "edit">("preview");
-  const [adding, setAdding] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newBody, setNewBody] = useState("");
 
   // 复习会话
   const [reviewQueue, setReviewQueue] = useState<string[]>([]);
@@ -41,8 +35,6 @@ export default function BrainPage() {
   const [verdict, setVerdict] = useState<{ verdict: string; feedback: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const streak = streakFrom(knowledge.map((k) => k.masteredAt));
-  const weekCount = knowledge.filter((k) => daysAgo(k.masteredAt) < 7).length;
 
   /* ---- 复习流程 ---- */
   const startReview = async () => {
@@ -133,81 +125,43 @@ export default function BrainPage() {
 
   return (
     <div>
-      <PageHeader
-        icon={<Brain className="size-5" />}
-        title="第二大脑"
-        desc="学过的、想过的，都在这里互相连接。到期的知识点会提醒你。"
-        right={
-          <div className="flex items-center gap-2">
-            <ObsidianImport />
-            <Button variant="outline" onClick={() => setAdding(true)}>
-              <Plus className="size-4" /> 新笔记
-            </Button>
-          </div>
-        }
-      />
-
-      {/* 统计卡 */}
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard icon={<Brain className="size-4" />} label="笔记总量" value={knowledge.length} unit="条" />
-        <StatCard icon={<Zap className="size-4" />} label="本周新增" value={weekCount} unit="条" />
-        <StatCard
-          icon={<Link2 className="size-4" />}
-          label="连接数"
-          value={knowledge.reduce((acc, k) => acc + k.links.length, 0)}
-          unit="条"
-        />
-        <button onClick={startReview} disabled={due.length === 0} className="text-left cursor-pointer disabled:cursor-default">
-          <Card className={cn("transition", due.length > 0 && "border-accent/40 hover:bg-surface-2")}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="flex items-center gap-1 text-xs text-ink-dim">
-                  <Flame className="size-3.5" /> 连续 {streak} 天 · 待复习
-                </p>
-                <p className={cn("mt-1 text-2xl font-extrabold", due.length > 0 ? "text-accent" : "text-ink-dim")}>
-                  {due.length} <span className="text-sm font-normal">条</span>
-                </p>
-              </div>
-              <ProgressRing value={knowledge.length ? 1 - due.length / Math.max(1, knowledge.length) : 0} size={44} label="刷" />
-            </div>
-          </Card>
-        </button>
-      </div>
-
-      {/* 复习提醒 */}
-      {due.length > 0 && (
-        <Card className="mb-6 flex items-center justify-between border-accent/25 bg-accent/[0.04]">
-          <div>
-            <p className="font-bold text-ink">{due.length} 个知识点快忘了</p>
-            <p className="mt-1 text-xs text-ink-dim">趁还记得，刷一遍。</p>
-          </div>
-          <Button onClick={startReview}>
-            <RefreshCcw className="size-4" /> 开始复习
-          </Button>
-        </Card>
-      )}
-
-      {/* Tab 切换 */}
-      <div className="mb-4 flex gap-2">
-        {(
-          [
-            ["notes", "笔记"],
-            ["graph", "图谱"],
-          ] as [Tab, string][]
-        ).map(([t, label]) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={cn(
-              "rounded-[10px] border px-4 py-2 text-sm font-medium transition cursor-pointer",
-              tab === t
-                ? "border-accent/30 bg-accent/[0.08] font-semibold text-accent"
-                : "border-border bg-white text-ink-dim hover:text-ink hover:border-[#d4d4d8]"
-            )}
-          >
-            {label}
-          </button>
-        ))}
+      {/* 紧凑顶栏：标题 + 统计 + 复习 + Tab */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h1 className="flex items-center gap-2 text-[17px] font-bold tracking-[-0.01em] text-ink">
+          <Brain className="size-4.5 text-accent" /> 第二大脑
+        </h1>
+        <span className="text-xs text-ink-dim">
+          {knowledge.length} 篇 · 连接 {knowledge.reduce((a, k) => a + k.links.length, 0)}
+          {due.length > 0 && (
+            <>
+              {" "}· 待复习{" "}
+              <button onClick={startReview} className="font-semibold text-accent hover:underline cursor-pointer">
+                {due.length}
+              </button>
+            </>
+          )}
+        </span>
+        <div className="ml-auto flex gap-1.5">
+          {(
+            [
+              ["notes", "笔记"],
+              ["graph", "图谱"],
+            ] as [Tab, string][]
+          ).map(([t, label]) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={cn(
+                "rounded-lg border px-3 py-1.5 text-[12.5px] font-medium transition cursor-pointer",
+                tab === t
+                  ? "border-accent/30 bg-accent/[0.08] font-semibold text-accent"
+                  : "border-border bg-white text-ink-dim hover:text-ink"
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {tab === "notes" && (
@@ -219,6 +173,10 @@ export default function BrainPage() {
           }}
           mode={wsMode}
           onModeChange={setWsMode}
+          onGraph={() => setTab("graph")}
+          onReview={startReview}
+          dueCount={due.length}
+          importSlot={<ObsidianImport iconOnly />}
         />
       )}
 
@@ -288,65 +246,9 @@ export default function BrainPage() {
         </div>
       </Modal>
 
-      {/* 新笔记 */}
-      <Modal open={adding} onClose={() => setAdding(false)} title="记一条笔记">
-        <div className="space-y-3">
-          <Input
-            placeholder="标题（如：系统1与认知放松）"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-          />
-          <Textarea
-            rows={5}
-            placeholder="正文 Markdown，用 [[标题]] 可以链到其他笔记…"
-            value={newBody}
-            onChange={(e) => setNewBody(e.target.value)}
-          />
-          <div className="flex justify-end">
-            <Button
-              onClick={() => {
-                if (!newTitle.trim()) return;
-                addKnowledge([{ title: newTitle.trim(), body: newBody.trim(), domain: "手动" }], "manual", "手动记录");
-                setNewTitle("");
-                setNewBody("");
-                setAdding(false);
-                toast.success("已存入第二大脑");
-              }}
-            >
-              保存
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 }
 
 
-function daysAgo(iso: string) {
-  return Math.round((Date.now() - new Date(iso + "T00:00:00").getTime()) / 86400000);
-}
 
-function StatCard({
-  icon,
-  label,
-  value,
-  unit,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-  unit: string;
-}) {
-  return (
-    <Card>
-      <div className="flex items-center gap-2 text-ink-dim">
-        {icon}
-        <p className="text-xs">{label}</p>
-      </div>
-      <p className="tabular mt-2 text-2xl font-extrabold text-ink">
-        {value} <span className="text-sm font-normal text-ink-dim">{unit}</span>
-      </p>
-    </Card>
-  );
-}

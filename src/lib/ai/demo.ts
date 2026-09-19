@@ -5,7 +5,7 @@ type Msg = { role: "user" | "assistant"; content: string };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function* chunked(text: string, size = 6, delay = 12) {
+export async function* chunked(text: string, size = 6, delay = 12) {
   for (let i = 0; i < text.length; i += size) {
     yield text.slice(i, i + size);
     await sleep(delay);

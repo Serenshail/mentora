@@ -14,7 +14,13 @@ import { FolderUp } from "lucide-react";
 
 const SOFT_LIMIT_KB = 2500;
 
-export function ObsidianImport({ onDone }: { onDone?: () => void }) {
+export function ObsidianImport({
+  onDone,
+  iconOnly,
+}: {
+  onDone?: () => void;
+  iconOnly?: boolean;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const addKnowledge = useAppStore((s) => s.addKnowledge);
   const importKnowledge = useAppStore((s) => s.importKnowledge);
@@ -112,8 +118,16 @@ export function ObsidianImport({ onDone }: { onDone?: () => void }) {
         className="hidden"
         onChange={onFiles}
       />
-      <Button variant="outline" size="sm" onClick={pick} disabled={parsing}>
-        <FolderUp className="size-4" /> {parsing ? `解析中 ${progress.done}/${progress.total}` : "从 Obsidian 导入"}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={pick}
+        disabled={parsing}
+        title={parsing ? `解析中 ${progress.done}/${progress.total}` : "从 Obsidian 导入"}
+        className={cn(iconOnly && "px-2.5")}
+      >
+        <FolderUp className="size-4" />
+        {!iconOnly && (parsing ? `解析中 ${progress.done}/${progress.total}` : "从 Obsidian 导入")}
       </Button>
 
       <Modal open={!!parsed} onClose={() => !importing && setParsed(null)} title="从 Obsidian 导入" wide>
