@@ -11,6 +11,9 @@ import {
   LayoutDashboard,
   GraduationCap,
   Settings2,
+  LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShieldCheck,
 } from "lucide-react";
 import { FeedbackWidget } from "@/components/feedback-widget";
@@ -18,7 +21,7 @@ import { AssistantWidget } from "@/components/assistant-widget";
 import { useAuth, useAutoPush } from "@/lib/auth-client";
 import { isAdminEmail } from "@/lib/admin-emails";
 import { useRouter } from "next/navigation";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 const NAV = [
   { href: "/", label: "总览", icon: LayoutDashboard },
@@ -60,32 +63,74 @@ export function AppShell({ children }: { children: ReactNode }) {
   /* 管理员：侧栏（桌面）与底栏（移动端）都给出后台入口，登上账号就能直达 */
   const isAdmin = isAdminEmail(user.email, process.env.NEXT_PUBLIC_ADMIN_EMAILS);
 
+  /* 侧栏可收起（图标条模式），用户自己决定宽窄，选择记住 */
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("mentora-sidebar-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("mentora-sidebar-collapsed", collapsed ? "1" : "0");
+    } catch {}
+  }, [collapsed]);
+
   return (
     <div className="flex min-h-screen w-full">
       {/* 侧边栏 */}
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-white/80 backdrop-blur-xl md:flex">
-        <Link href="/" className="flex items-baseline px-5 pb-5 pt-6">
-          <span className="font-brand text-[30px] leading-none text-ink">Mentora</span>
-        </Link>
+      <aside
+        className={cn(
+          "sticky top-0 hidden h-screen shrink-0 flex-col border-r border-border bg-white/80 backdrop-blur-xl transition-[width] duration-200 md:flex",
+          collapsed ? "w-14" : "w-64"
+        )}
+      >
+        <div className="flex items-center justify-between px-3 pb-4 pt-5">
+          {collapsed ? (
+            <Link href="/" className="mx-auto font-brand text-[22px] leading-none text-ink">
+              M
+            </Link>
+          ) : (
+            <Link href="/" className="flex items-baseline px-2">
+              <span className="font-brand text-[30px] leading-none text-ink">Mentora</span>
+            </Link>
+          )}
+          <button
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? "展开侧栏" : "收起侧栏"}
+            className={cn(
+              "rounded-md p-1 text-ink-dim/60 transition hover:text-ink cursor-pointer",
+              collapsed && "mx-auto"
+            )}
+          >
+            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+          </button>
+        </div>
 
         <div>
-          <nav className="space-y-0.5 px-3">
-            <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/60">
-              工作台
-            </p>
+          <nav className={cn("space-y-0.5", collapsed ? "px-1.5" : "px-3")}>
+            {!collapsed && (
+              <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/60">
+                工作台
+              </p>
+            )}
             {NAV.slice(0, 5).map(({ href, label, icon: Icon }) => (
               <Link
                 key={href}
                 href={href}
+                title={collapsed ? label : undefined}
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-[13.5px] tracking-[-0.01em] transition-all duration-150",
+                  "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
+                  collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
                   isActive(href)
                     ? "bg-black/[0.05] font-semibold text-ink"
                     : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
                 )}
               >
-                <Icon className="size-[18px]" strokeWidth={1.75} />
-                {label}
+                <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
+                {!collapsed && label}
               </Link>
             ))}
           </nav>
@@ -97,36 +142,40 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Link
                 key={href}
                 href={href}
+                title={collapsed ? label : undefined}
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-[13.5px] tracking-[-0.01em] transition-all duration-150",
+                  "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
+                  collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
                   isActive(href)
                     ? "bg-black/[0.05] font-semibold text-ink"
                     : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
                 )}
               >
-                <Icon className="size-[18px]" strokeWidth={1.75} />
-                {label}
+                <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
+                {!collapsed && label}
               </Link>
             ))}
             {isAdmin && (
               <Link
                 href="/admin"
+                title={collapsed ? "管理后台" : undefined}
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-[13.5px] tracking-[-0.01em] transition-all duration-150",
+                  "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
+                  collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
                   isActive("/admin")
                     ? "bg-black/[0.05] font-semibold text-ink"
                     : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
                 )}
               >
-                <ShieldCheck className="size-[18px]" strokeWidth={1.75} />
-                管理后台
+                <ShieldCheck className="size-[18px] shrink-0" strokeWidth={1.75} />
+                {!collapsed && "管理后台"}
               </Link>
             )}
           </nav>
         </div>
 
-        <div className="mt-auto px-3 pb-4 pt-2">
-          <FeedbackWidget />
+        <div className={cn("mt-auto pb-4 pt-2", collapsed ? "px-1.5" : "px-3")}>
+          {!collapsed && <FeedbackWidget />}
           {user ? (
             <div className="mt-1 flex items-center gap-2 rounded-xl px-2.5 py-2">
               {user.avatar ? (
@@ -141,16 +190,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                   {(user.name || user.email).slice(0, 1).toUpperCase()}
                 </div>
               )}
-              <span className="truncate text-xs text-ink">{user.name || user.email}</span>
+              {!collapsed && <span className="truncate text-xs text-ink">{user.name || user.email}</span>}
               <button
                 onClick={async () => {
                   await logout();
                   router.push("/");
                 }}
-                className="ml-auto text-[11px] text-ink-dim hover:text-ink cursor-pointer"
+                className={cn("text-[11px] text-ink-dim hover:text-ink cursor-pointer", !collapsed && "ml-auto")}
                 title="退出登录"
               >
-                退出
+                {collapsed ? <LogOut className="size-3.5" /> : "退出"}
               </button>
             </div>
           ) : (
@@ -161,10 +210,12 @@ export function AppShell({ children }: { children: ReactNode }) {
               登录 · 数据跟设备走
             </button>
           )}
-          <p className="px-2.5 pt-2 text-[10px] text-ink-dim/50">
-            {user ? "已登录 · 数据自动同步" : "数据只在你这台电脑上"}
-          </p>
-          {provider === "demo" && (
+          {!collapsed && (
+            <p className="px-2.5 pt-2 text-[10px] text-ink-dim/50">
+              {user ? "已登录 · 数据自动同步" : "数据只在你这台电脑上"}
+            </p>
+          )}
+          {provider === "demo" && !collapsed && (
             <Link
               href="/settings"
               className="mt-1 block rounded-lg border border-warn/25 bg-warn/[0.07] px-3.5 py-2.5 text-xs text-warn hover:bg-warn/[0.12] transition"
@@ -186,7 +237,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Link>
         </header>
 
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-7 md:px-10 md:py-10">
+        <main className="w-full flex-1 px-4 py-6 md:px-7 md:py-8">
           <div key={pathname} className="page-fade">
             {children}
           </div>

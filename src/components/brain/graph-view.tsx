@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 import type { KnowledgeItem } from "@/lib/types";
 
 interface SimNode {
@@ -35,25 +36,50 @@ export function GraphView({
 }) {
   const [tick, setTick] = useState(0);
   const [hover, setHover] = useState<string | null>(null);
+  /* Obsidian 右上角控制面板：搜索 / 目录筛选 / 孤立节点 */
+  const [gQuery, setGQuery] = useState("");
+  const [gDomain, setGDomain] = useState("all");
+  const [showOrphans, setShowOrphans] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  const gDomains = useMemo(
+    () => Array.from(new Set(notes.map((n) => n.domain.split("/")[0]))).sort(),
+    [notes]
+  );
+
+  const visibleNotes = useMemo(() => {
+    const q = gQuery.trim().toLowerCase();
+    return notes.filter((n) => {
+      if (gDomain !== "all" && n.domain.split("/")[0] !== gDomain) return false;
+      if (!q) return true;
+      return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
+    });
+  }, [notes, gQuery, gDomain]);
+
+  const orphanIds = useMemo(() => {
+    const linked = new Set<string>();
+    for (const n of notes) for (const l of n.links) linked.add(l);
+    return new Set(notes.filter((n) => n.links.length === 0 && !linked.has(n.id)).map((n) => n.id));
+  }, [notes]);
   const nodesRef = useRef<SimNode[]>([]);
   const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   const edges = useMemo(() => {
-    const ids = new Set(notes.map((n) => n.id));
-    return notes.flatMap((n) =>
+    const ids = new Set(visibleNotes.map((n) => n.id));
+    return visibleNotes.flatMap((n) =>
       n.links
         .filter((l) => ids.has(l))
         .map((l) => ({ from: n.id, to: l }))
     );
-  }, [notes]);
+  }, [visibleNotes]);
 
   // 初始化节点
   useEffect(() => {
     const prev = new Map(nodesRef.current.map((n) => [n.id, n]));
-    nodesRef.current = notes.map((n, i) => {
+    nodesRef.current = visibleNotes.map((n, i) => {
       const old = prev.get(n.id);
-      const angle = (i / Math.max(1, notes.length)) * Math.PI * 2;
+      const angle = (i / Math.max(1, visibleNotes.length)) * Math.PI * 2;
       return {
         id: n.id,
         title: n.title,
@@ -66,7 +92,7 @@ export function GraphView({
       };
     });
     setTick((t) => t + 1);
-  }, [notes]);
+  }, [visibleNotes]);
 
   // 力模拟
   useEffect(() => {
@@ -136,7 +162,72 @@ export function GraphView({
 
   void tick; // 触发重渲
 
+  const shownNodes = nodesRef.current.filter((n) => showOrphans || !orphanIds.has(n.id));
+
   return (
+    <div className="relative">
+      {/* Obsidian 式右上角控制面板 */}
+      <div className="absolute right-3 top-3 z-10 w-56 rounded-xl border border-border bg-white/95 p-2.5 shadow-sm backdrop-blur">
+        <div className="mb-1.5 flex items-center justify-between">
+          <p className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim/70">图谱过滤</p>
+          <button
+            onClick={() => setPanelOpen((v) => !v)}
+            className="text-[10.5px] text-accent hover:underline cursor-pointer"
+          >
+            {panelOpen ? "收起" : "展开"}
+          </button>
+        </div>
+        {panelOpen ? (
+          <div className="space-y-2">
+            <input
+              className="w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-[12px] outline-none focus:border-accent/50"
+              placeholder="搜索笔记标题/正文…"
+              value={gQuery}
+              onChange={(e) => setGQuery(e.target.value)}
+            />
+            <div className="flex flex-wrap gap-1">
+              <button
+                onClick={() => setGDomain("all")}
+                className={cn(
+                  "rounded-full border px-2 py-0.5 text-[10.5px] cursor-pointer",
+                  gDomain === "all"
+                    ? "border-accent/40 bg-accent/[0.1] font-semibold text-accent"
+                    : "border-border bg-white text-ink-dim hover:text-ink"
+                )}
+              >
+                全部目录
+              </button>
+              {gDomains.map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setGDomain(gDomain === d ? "all" : d)}
+                  className={cn(
+                    "max-w-full truncate rounded-full border px-2 py-0.5 text-[10.5px] cursor-pointer",
+                    gDomain === d
+                      ? "border-accent/40 bg-accent/[0.1] font-semibold text-accent"
+                      : "border-border bg-white text-ink-dim hover:text-ink"
+                  )}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+            <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink-dim">
+              <input
+                type="checkbox"
+                checked={showOrphans}
+                onChange={(e) => setShowOrphans(e.target.checked)}
+                className="size-3 accent-[#6c5ce7]"
+              />
+              显示孤立节点（无连接）
+            </label>
+          </div>
+        ) : (
+          <p className="text-[10.5px] text-ink-dim/70">
+            {shownNodes.length} 节点 · {edges.length} 连接
+          </p>
+        )}
+      </div>
     <svg
       ref={svgRef}
       viewBox={`0 0 ${W} ${H}`}
@@ -167,7 +258,7 @@ export function GraphView({
         );
       })}
       {/* 节点 */}
-      {nodesRef.current.map((n) => {
+      {shownNodes.map((n) => {
         const r = 7 + Math.min(10, n.degree * 2.4);
         const active = !neighborSet || neighborSet.has(n.id);
         return (
@@ -197,11 +288,12 @@ export function GraphView({
           </g>
         );
       })}
-      {notes.length === 0 && (
+      {visibleNotes.length === 0 && (
         <text x={W / 2} y={H / 2} textAnchor="middle" fill="#a1a1aa" fontSize={14}>
-          笔记还不够多——先积累几条，图谱会长出来
+          {notes.length === 0 ? "笔记还不够多——先积累几条，图谱会长出来" : "没有匹配的笔记"}
         </text>
       )}
     </svg>
+    </div>
   );
 }

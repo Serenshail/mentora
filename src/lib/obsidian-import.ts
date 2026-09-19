@@ -123,7 +123,8 @@ export async function parseVault(
 
     let title = file.name.replace(/\.md$/i, "");
     let body = "";
-    const domain = segs.length > 1 ? segs[0] : "Obsidian";
+    /* domain = 完整相对目录路径（如 WorkBuddy/学习/agent项目），保留 Obsidian 的嵌套结构 */
+    const domain = segs.length > 1 ? segs.slice(0, -1).join("/") : "Obsidian";
     let tags: string[] = [];
 
     if (!skipped) {
