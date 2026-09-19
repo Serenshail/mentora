@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Badge, Button, Card, Input } from "@/components/ui";
 import { useAuth } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
@@ -126,7 +127,13 @@ export default function AdminPage() {
   /* 后台密码门：会话不是管理员/已失效时，输对密码即可进入 */
   if (needPw) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-bg px-6">
+      <div className="relative flex min-h-screen flex-col items-center justify-center gap-4 bg-bg px-6">
+        <Link
+          href="/"
+          className="absolute left-4 top-4 text-xs text-ink-dim/60 transition hover:text-ink sm:left-6 sm:top-6"
+        >
+          ← 返回首页
+        </Link>
         <Lock className="size-8 text-ink-dim/50" strokeWidth={1.5} />
         <p className="text-sm font-bold text-ink">管理后台</p>
         <p className="text-xs text-ink-dim">输入后台密码查看全部用户数据</p>
@@ -161,6 +168,12 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-bg">
       <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+        {/* 未登录（密码进入）时也有返回应用的出口，不困在后台里 */}
+        {!user && (
+          <Link href="/" className="text-xs text-ink-dim/60 transition hover:text-ink">
+            ← 返回首页
+          </Link>
+        )}
         {/* 头部 */}
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
