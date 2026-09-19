@@ -1,54 +1,34 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
-  Badge, Button, Card, Empty, Input, Modal, PageHeader, ProgressRing, Textarea,
+  Badge, Button, Card, Input, Modal, PageHeader, ProgressRing, Textarea,
 } from "@/components/ui";
-import { Markdown } from "@/components/markdown";
 import { GraphView } from "@/components/brain/graph-view";
-import { WikiMarkdown } from "@/components/brain/wiki-markdown";
+import { ObsidianImport } from "@/components/brain/obsidian-import";
+import { NoteWorkspace } from "@/components/brain/note-workspace";
+import { Markdown } from "@/components/markdown";
 import { useAppStore, useDueReviews } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
-import { REVIEW_GRADE, REVIEW_PROMPT, AUTOLINK } from "@/lib/ai/prompts";
-import { extractJson, reviewGradeSchema, autolinkSchema } from "@/lib/ai/client";
-import { cn, formatDate, REVIEW_INTERVALS, streakFrom, todayISO } from "@/lib/utils";
-import type { KnowledgeItem } from "@/lib/types";
+import { REVIEW_GRADE, REVIEW_PROMPT } from "@/lib/ai/prompts";
+import { extractJson, reviewGradeSchema } from "@/lib/ai/client";
+import { cn, streakFrom } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  BookOpen, Brain, Compass, Flame, GitBranch, GraduationCap, Link2, PenLine,
-  Pencil, Plus, RefreshCcw, Search, Trash2, Zap,
+  Brain, Flame, Link2, Plus, RefreshCcw, Zap,
 } from "lucide-react";
 
 type Tab = "notes" | "graph";
 
-/* 笔记来源：线性图标替代 emoji（去 AI 感） */
-const SOURCE_META = {
-  learn: { Icon: GraduationCap, label: "学习" },
-  read: { Icon: BookOpen, label: "阅读" },
-  manual: { Icon: PenLine, label: "手动" },
-  council: { Icon: Compass, label: "伙伴" },
-} as const;
-
-function SourceTag({ source }: { source: string }) {
-  const meta = SOURCE_META[source as keyof typeof SOURCE_META] ?? SOURCE_META.council;
-  return (
-    <span className="inline-flex items-center gap-1">
-      <meta.Icon className="size-3" strokeWidth={2} /> {meta.label}
-    </span>
-  );
-}
-
 export default function BrainPage() {
   const hydrated = useHydrated();
   const knowledge = useAppStore((s) => s.knowledge);
-  const removeKnowledge = useAppStore((s) => s.removeKnowledge);
   const addKnowledge = useAppStore((s) => s.addKnowledge);
 
   const due = useDueReviews();
   const [tab, setTab] = useState<Tab>("notes");
-  const [query, setQuery] = useState("");
-  const [domain, setDomain] = useState<string>("all");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [wsMode, setWsMode] = useState<"preview" | "edit">("preview");
   const [adding, setAdding] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newBody, setNewBody] = useState("");
@@ -61,21 +41,8 @@ export default function BrainPage() {
   const [verdict, setVerdict] = useState<{ verdict: string; feedback: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const domains = useMemo(() => Array.from(new Set(knowledge.map((k) => k.domain))), [knowledge]);
-  const filtered = useMemo(
-    () =>
-      knowledge.filter(
-        (k) =>
-          (domain === "all" || k.domain === domain) &&
-          (!query.trim() ||
-            k.title.includes(query.trim()) ||
-            k.body.includes(query.trim()))
-      ),
-    [knowledge, query, domain]
-  );
   const streak = streakFrom(knowledge.map((k) => k.masteredAt));
   const weekCount = knowledge.filter((k) => daysAgo(k.masteredAt) < 7).length;
-  const openNote = (openId ? knowledge.find((k) => k.id === openId) : null) ?? null;
 
   /* ---- 复习流程 ---- */
   const startReview = async () => {
@@ -171,9 +138,12 @@ export default function BrainPage() {
         title="第二大脑"
         desc="学过的、想过的，都在这里互相连接。到期的知识点会提醒你。"
         right={
-          <Button variant="outline" onClick={() => setAdding(true)}>
-            <Plus className="size-4" /> 新笔记
-          </Button>
+          <div className="flex items-center gap-2">
+            <ObsidianImport />
+            <Button variant="outline" onClick={() => setAdding(true)}>
+              <Plus className="size-4" /> 新笔记
+            </Button>
+          </div>
         }
       />
 
@@ -241,58 +211,31 @@ export default function BrainPage() {
       </div>
 
       {tab === "notes" && (
-        <>
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            <div className="relative min-w-52 flex-1">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-dim" />
-              <Input
-                className="pl-9"
-                placeholder="搜索标题与正文…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-            <FilterChip active={domain === "all"} onClick={() => setDomain("all")}>
-              全部
-            </FilterChip>
-            {domains.map((d) => (
-              <FilterChip key={d} active={domain === d} onClick={() => setDomain(d)}>
-                {d}
-              </FilterChip>
-            ))}
-          </div>
-
-          {filtered.length === 0 ? (
-            <Empty
-              icon={<Brain className="size-7" />}
-              title={knowledge.length === 0 ? "第二大脑还是空的" : "没有匹配的笔记"}
-              desc={
-                knowledge.length === 0
-                  ? "在「学习教练」通过验收、在「读书伙伴」提炼洞见，笔记会自动流进这里；也可以手动记录。"
-                  : "换个关键词或筛选条件试试。"
-              }
-            />
-          ) : (
-            <div className="grid gap-3 md:grid-cols-2">
-              {filtered.map((k) => (
-                <NoteCard key={k.id} note={k} onOpen={() => setOpenId(k.id)} onDelete={() => removeKnowledge(k.id)} />
-              ))}
-            </div>
-          )}
-        </>
+        <NoteWorkspace
+          openId={openId}
+          onOpenNote={(id) => {
+            setOpenId(id);
+            setWsMode("preview");
+          }}
+          mode={wsMode}
+          onModeChange={setWsMode}
+        />
       )}
 
       {tab === "graph" && (
         <Card className="p-3">
-          <GraphView notes={knowledge} onOpen={(id) => setOpenId(id)} />
+          <GraphView
+            notes={knowledge}
+            onOpen={(id) => {
+              setOpenId(id);
+              setWsMode("preview");
+            }}
+          />
           <p className="mt-3 text-center text-xs text-ink-dim">
             拖动节点整理布局 · 点击节点打开笔记 · 连线随内容增长而生长
           </p>
         </Card>
       )}
-
-      {/* 笔记详情 */}
-      <NoteModal note={openNote} notes={knowledge} onClose={() => setOpenId(null)} onOpenNote={(id) => setOpenId(id)} />
 
       {/* 复习弹窗 */}
       <Modal open={reviewQueue.length > 0} onClose={() => setReviewQueue([])} title="间隔复习" wide>
@@ -379,339 +322,6 @@ export default function BrainPage() {
   );
 }
 
-/* ================= 笔记卡片 ================= */
-function NoteCard({
-  note,
-  onOpen,
-  onDelete,
-}: {
-  note: KnowledgeItem;
-  onOpen: () => void;
-  onDelete: () => void;
-}) {
-  const notes = useAppStore((s) => s.knowledge);
-  const linkedTitles = note.links
-    .map((l) => notes.find((n) => n.id === l)?.title)
-    .filter(Boolean)
-    .slice(0, 3);
-  return (
-    <Card className="group card-lift cursor-pointer transition hover:border-accent/50 hover:bg-surface-2/70" onClick={onOpen}>
-      <div className="flex items-start justify-between gap-2">
-        <p className="font-semibold text-ink">{note.title}</p>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="rounded-lg p-1 text-ink-dim/60 transition hover:text-bad cursor-pointer"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
-      </div>
-      {note.body && (
-        <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-ink-dim">
-          {note.body.replace(/\[\[([^\[\]]+)\]\]/g, "$1").replace(/[#*`>-]/g, "").slice(0, 120)}
-        </p>
-      )}
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-        <Badge tone="accent">{note.domain}</Badge>
-        <Badge tone="dim">
-          <SourceTag source={note.source} />
-          · {note.sourceTitle}
-        </Badge>
-        {note.nextReviewAt ? (
-          <Badge tone={note.nextReviewAt <= todayISO() ? "warn" : "default"}>
-            复习：{formatDate(note.nextReviewAt)}
-          </Badge>
-        ) : (
-          <Badge tone="ok">记忆已固化</Badge>
-        )}
-        <span className="ml-auto flex items-center gap-1" title="复习轮次">
-          {REVIEW_INTERVALS.map((_, i) => (
-            <span
-              key={i}
-              className={cn("inline-block size-1.5 rounded-full", i < note.reviewStage ? "bg-ok" : "bg-black/[0.12]")}
-            />
-          ))}
-        </span>
-      </div>
-      {linkedTitles.length > 0 && (
-        <p className="mt-2 flex items-center gap-1 truncate text-[11px] text-accent/80">
-          <Link2 className="size-3 shrink-0" /> {linkedTitles.join(" · ")}
-          {note.links.length > 3 ? " …" : ""}
-        </p>
-      )}
-    </Card>
-  );
-}
-
-/* ================= 笔记详情弹窗（查看/编辑/反链/AI 建联） ================= */
-function NoteModal({
-  note,
-  notes,
-  onClose,
-  onOpenNote,
-}: {
-  note: KnowledgeItem | null;
-  notes: KnowledgeItem[];
-  onClose: () => void;
-  onOpenNote: (id: string) => void;
-}) {
-  const updateKnowledge = useAppStore((s) => s.updateKnowledge);
-  const linkNotes = useAppStore((s) => s.linkNotes);
-  const unlinkNotes = useAppStore((s) => s.unlinkNotes);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<{ title: string; body: string } | null>(null);
-  const [linkSearch, setLinkSearch] = useState("");
-  const [linking, setLinking] = useState(false);
-  const [suggests, setSuggests] = useState<{ targetId: string; reason: string }[]>([]);
-
-  if (!note) return null;
-  const backlinks = notes.filter((n) => n.links.includes(note.id));
-  const linked = note.links.map((l) => notes.find((n) => n.id === l)).filter(Boolean) as KnowledgeItem[];
-
-  const startEdit = () => {
-    setDraft({ title: note.title, body: note.body });
-    setEditing(true);
-  };
-
-  const saveEdit = () => {
-    if (!draft?.title.trim()) return;
-    updateKnowledge(note.id, { title: draft.title.trim(), body: draft.body });
-    setEditing(false);
-    toast.success("已保存");
-  };
-
-  /* AI 建联：为当前笔记找有思想联系的笔记 */
-  const autoLink = async () => {
-    if (notes.length < 2) {
-      toast.error("笔记太少，先攒几条再来连线");
-      return;
-    }
-    setLinking(true);
-    setSuggests([]);
-    try {
-      const { streamChat } = await import("@/lib/ai/client");
-      const candidates = notes
-        .filter((n) => n.id !== note.id)
-        .slice(0, 40)
-        .map((n) => `(${n.id}) ${n.title}：${n.body.replace(/\[\[|\]\]/g, "").slice(0, 60)}`)
-        .join("\n");
-      const full = await streamChat({
-        task: "autolink",
-        system: AUTOLINK({
-          note: `${note.title}\n${note.body.slice(0, 300)}`,
-          candidates,
-        }),
-        messages: [{ role: "user", content: "建立联系。" }],
-        temperature: 0.3,
-        onDelta: () => {},
-      });
-      const parsed = autolinkSchema.parse(extractJson(full));
-      if (parsed.links.length === 0) {
-        toast("暂时没有真正有联系的笔记——宁缺毋滥。");
-      } else {
-        setSuggests(parsed.links);
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "建联失败");
-    } finally {
-      setLinking(false);
-    }
-  };
-
-  return (
-    <Modal
-      open={!!note}
-      onClose={() => {
-        onClose();
-        setEditing(false);
-        setSuggests([]);
-      }}
-      title={note.title}
-      wide
-    >
-      {editing ? (
-        <div className="space-y-3">
-          <Input value={draft?.title ?? ""} onChange={(e) => setDraft({ ...draft!, title: e.target.value })} placeholder="标题" />
-          <Textarea
-            rows={8}
-            value={draft?.body ?? ""}
-            onChange={(e) => setDraft({ ...draft!, body: e.target.value })}
-            placeholder="Markdown 正文，用 [[标题]] 链接其他笔记"
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setEditing(false)}>取消</Button>
-            <Button onClick={saveEdit}>保存</Button>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {/* 元信息 */}
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge tone="accent">{note.domain}</Badge>
-            <Badge tone="dim">
-              <SourceTag source={note.source} />
-              · {note.sourceTitle}
-            </Badge>
-            <span className="text-ink-dim">{formatDate(note.masteredAt)} 掌握</span>
-            <div className="ml-auto flex gap-2">
-              <Button size="sm" variant="outline" onClick={autoLink} loading={linking}>
-                <Link2 className="size-3.5" /> 发现联系
-              </Button>
-              <Button size="sm" variant="outline" onClick={startEdit}>
-                <Pencil className="size-3.5" /> 编辑
-              </Button>
-            </div>
-          </div>
-
-          {/* 正文（双链可点） */}
-          {note.body ? (
-            <WikiMarkdown body={note.body} notes={notes} onOpen={onOpenNote} />
-          ) : (
-            <p className="text-sm text-ink-dim/70">（无正文——点击编辑补充，用 [[标题]] 链接其他笔记）</p>
-          )}
-
-          {/* AI 建联建议 */}
-          {suggests.length > 0 && (
-            <Card className="border-accent/25 bg-accent/[0.04]">
-              <p className="mb-2 flex items-center gap-1.5 text-sm font-bold text-accent">
-                <Link2 className="size-4" /> 找到了这些联系（点击采纳）
-              </p>
-              <div className="space-y-2">
-                {suggests
-                  .filter((s) => !note.links.includes(s.targetId))
-                  .map((s) => {
-                    const target = notes.find((n) => n.id === s.targetId);
-                    return (
-                      <button
-                        key={s.targetId}
-                        onClick={() => {
-                          linkNotes(note.id, s.targetId);
-                          setSuggests((prev) => prev.filter((x) => x.targetId !== s.targetId));
-                          toast.success("已建立连接");
-                        }}
-                        className="w-full rounded-xl border border-border bg-surface-2/70 p-3 text-left transition hover:border-accent/40 cursor-pointer"
-                      >
-                        <p className="text-sm font-semibold text-ink">
-                          <GitBranch className="mr-1.5 inline size-3.5 text-accent/70" />
-                          {target?.title ?? "未知笔记"}
-                        </p>
-                        <p className="mt-1 text-xs text-ink-dim">{s.reason}</p>
-                      </button>
-                    );
-                  })}
-                {suggests.filter((s) => !note.links.includes(s.targetId)).length === 0 && (
-                  <p className="text-xs text-ink-dim">建议的联系均已存在。</p>
-                )}
-              </div>
-            </Card>
-          )}
-
-          {/* 出链 */}
-          <div>
-            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-ink-dim">
-              <Link2 className="size-3.5" /> 出链（{linked.length}）— 自己建立联系
-            </p>
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {linked.map((l) => (
-                <span key={l.id} className="inline-flex items-center gap-1 rounded-lg border border-accent/25 bg-accent/[0.06] px-2 py-1 text-xs text-accent">
-                  <button onClick={() => onOpenNote(l.id)} className="cursor-pointer hover:underline">
-                    {l.title}
-                  </button>
-                  <button
-                    onClick={() => unlinkNotes(note.id, l.id)}
-                    className="text-ink-dim/60 hover:text-bad cursor-pointer"
-                    title="断开连接"
-                  >
-                    ✕
-                  </button>
-                </span>
-              ))}
-              {linked.length === 0 && <span className="text-xs text-ink-dim/60">还没有连接</span>}
-            </div>
-            <Input
-              className="h-8 text-xs"
-              placeholder="搜索笔记标题并连接…"
-              value={linkSearch}
-              onChange={(e) => setLinkSearch(e.target.value)}
-            />
-            {linkSearch.trim() && (
-              <div className="mt-2 max-h-36 space-y-1 overflow-y-auto">
-                {notes
-                  .filter(
-                    (n) =>
-                      n.id !== note.id &&
-                      !note.links.includes(n.id) &&
-                      n.title.includes(linkSearch.trim())
-                  )
-                  .slice(0, 6)
-                  .map((n) => (
-                    <button
-                      key={n.id}
-                      onClick={() => {
-                        linkNotes(note.id, n.id);
-                        setLinkSearch("");
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg border border-border bg-white px-2.5 py-1.5 text-left text-xs text-ink-dim hover:border-accent/40 hover:text-ink cursor-pointer"
-                    >
-                      <Link2 className="size-3" /> {n.title}
-                      <span className="ml-auto text-[10px] text-ink-dim/60">{n.domain}</span>
-                    </button>
-                  ))}
-              </div>
-            )}
-          </div>
-
-          {/* 反向链接 */}
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-dim">
-              反向链接（{backlinks.length}）
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {backlinks.map((b) => (
-                <button
-                  key={b.id}
-                  onClick={() => onOpenNote(b.id)}
-                  className="rounded-lg border border-border bg-surface-2/70 px-2 py-1 text-xs text-ink-dim hover:text-ink cursor-pointer"
-                >
-                  {b.title}
-                </button>
-              ))}
-              {backlinks.length === 0 && (
-                <span className="text-xs text-ink-dim/60">暂无——当其他笔记链接到这条时会出现在这里</span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function FilterChip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "rounded-full border px-3 py-1.5 text-xs transition cursor-pointer",
-        active
-          ? "border-accent/30 bg-accent/[0.08] font-medium text-accent"
-          : "border-border bg-white text-ink-dim hover:text-ink hover:border-[#d4d4d8]"
-      )}
-    >
-      {children}
-    </button>
-  );
-}
 
 function daysAgo(iso: string) {
   return Math.round((Date.now() - new Date(iso + "T00:00:00").getTime()) / 86400000);

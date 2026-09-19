@@ -5,16 +5,18 @@ import remarkGfm from "remark-gfm";
 import type { KnowledgeItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-/** 把 [[标题]] 渲染成可点击的双链；未解析的显示为虚线待建笔记 */
+/** 把 [[标题]] 渲染成可点击的双链；未解析的显示为虚线待建笔记（可点击创建） */
 export function WikiMarkdown({
   body,
   notes,
   onOpen,
+  onCreate,
   className,
 }: {
   body: string;
   notes: KnowledgeItem[];
   onOpen: (id: string) => void;
+  onCreate?: (title: string) => void;
   className?: string;
 }) {
   const byTitle = new Map(notes.map((n) => [n.title.toLowerCase(), n]));
@@ -35,13 +37,17 @@ export function WikiMarkdown({
         if (part.startsWith("wikilink-new:")) {
           const title = part.slice("wikilink-new:".length);
           return (
-            <span
+            <button
               key={i}
-              className="mx-0.5 inline-flex items-center rounded-md border border-dashed border-accent/35 bg-accent/[0.05] px-1.5 py-0.5 text-[0.85em] text-accent"
-              title="该笔记还不存在"
+              onClick={() => onCreate?.(title)}
+              className={cn(
+                "mx-0.5 inline-flex items-center rounded-md border border-dashed border-accent/35 bg-accent/[0.05] px-1.5 py-0.5 text-[0.85em] text-accent",
+                onCreate && "cursor-pointer hover:bg-accent/[0.12]"
+              )}
+              title={onCreate ? "笔记不存在，点击创建" : "该笔记还不存在"}
             >
               {title} ⋯
-            </span>
+            </button>
           );
         }
         if (!part) return null;

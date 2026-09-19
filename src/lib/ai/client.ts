@@ -11,7 +11,8 @@ export type ChatTask =
   | "intake" | "plan" | "lesson" | "quiz-grade"
   | "review-ask" | "review-grade"
   | "reading-plan" | "reading-chat" | "council"
-  | "autolink" | "persona-distill" | "coach-qa";
+  | "autolink" | "persona-distill" | "coach-qa"
+  | "verify-score";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：

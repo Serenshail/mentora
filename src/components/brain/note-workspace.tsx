@@ -1,0 +1,940 @@
+"use client";
+
+/* ============================================================
+ * NoteWorkspace — 第二大脑的 Obsidian 式工作台
+ * 左栏：搜索 / 标签筛选 / 笔记列表 / 新建
+ * 中栏：标题 + 工具栏 + [[双链]] 自动补全的编辑器 / 预览（点击双链跳转或建新笔记）
+ * 右栏：反向链接 · 出链 · 大纲 · 标签（Obsidian 右侧面板四件套）
+ * Ctrl+K 快速切换器；自动保存（改动即写入，无需手动保存）
+ * ============================================================ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, Card, Empty } from "@/components/ui";
+import { WikiMarkdown } from "@/components/brain/wiki-markdown";
+import { useAppStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
+import type { KnowledgeItem } from "@/lib/types";
+import { toast } from "sonner";
+import {
+  ArrowDownUp, Bold, Braces, Eye, FileText, Heading2, Heading3, Link2, List, ListOrdered,
+  Minus, Pencil, Plus, Quote, Search, Sparkles, Tag, Trash2, Type, X,
+} from "lucide-react";
+
+type RightTab = "backlinks" | "outgoing" | "outline" | "tags";
+
+/* ---- 小工具 ---- */
+
+function normTitle(t: string) {
+  return t.trim().toLowerCase();
+}
+
+/** 大纲：解析正文 1-3 级标题 */
+function outlineOf(body: string): { level: number; text: string }[] {
+  const out: { level: number; text: string }[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const m = line.match(/^(#{1,3})\s+(.+?)\s*#*$/);
+    if (m && m[2].trim()) out.push({ level: m[1].length, text: m[2].trim() });
+  }
+  return out;
+}
+
+/** 行内 #标签（排除标题行）；配合 tags 字段一起展示 */
+function inlineTags(body: string): string[] {
+  const out = new Set<string>();
+  const re = /(?:^|\s)#([^\s#`~!@#$%^&*()=+{\}[\]|\\:;"'<>,.?/，。！？：（）【】]{2,24})/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) {
+    if (/^#{1,6}\s/.test(m[0].trim())) continue; // 标题行不算
+    const t = m[1].replace(/[.,;:!?，。：；！？]+$/, "");
+    if (t && !/^\d+$/.test(t)) out.add(t);
+  }
+  return [...out];
+}
+
+const TAGS_OF = (k: KnowledgeItem) => [...new Set([...(k.tags ?? []), ...inlineTags(k.body)])];
+
+/* ============================================================ */
+
+/* 编辑器工具栏：事件在点击时才触达 ref */
+interface ToolbarHandlers {
+  note: KnowledgeItem | null;
+  setBody: (b: string) => void;
+  onTaChange: (b: string, caret: number) => void;
+  taRef: React.RefObject<HTMLTextAreaElement | null>;
+  surround: (before: string, after?: string, placeholder?: string) => void;
+  autoLink: () => void | Promise<void>;
+  linking: boolean;
+}
+
+const TOOLBAR: {
+  id: string;
+  icon: typeof Bold;
+  title: string;
+  run: (h: ToolbarHandlers) => void;
+}[] = [
+  { id: "bold", icon: Bold, title: "粗体", run: (h) => h.surround("**", "**", "粗体") },
+  { id: "italic", icon: Type, title: "斜体", run: (h) => h.surround("*", "*", "斜体") },
+  { id: "h2", icon: Heading2, title: "二级标题", run: (h) => h.surround("\n## ", "", "标题") },
+  { id: "h3", icon: Heading3, title: "三级标题", run: (h) => h.surround("\n### ", "", "标题") },
+  { id: "code", icon: Braces, title: "行内代码", run: (h) => h.surround("`", "`", "代码") },
+  { id: "quote", icon: Quote, title: "引用", run: (h) => h.surround("\n> ", "", "引用的话") },
+  { id: "ul", icon: List, title: "无序列表", run: (h) => h.surround("\n- ", "", "条目") },
+  { id: "ol", icon: ListOrdered, title: "有序列表", run: (h) => h.surround("\n1. ", "", "条目") },
+  { id: "hr", icon: Minus, title: "分割线", run: (h) => h.surround("\n\n---\n\n", "", "") },
+  {
+    id: "wikilink",
+    icon: Link2,
+    title: "[[双链]]",
+    run: (h) => {
+      const ta = h.taRef.current;
+      if (!ta || !h.note) return;
+      const pos = ta.selectionStart;
+      const body2 = h.note.body.slice(0, pos) + "[[" + h.note.body.slice(pos);
+      h.setBody(body2);
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(pos + 2, pos + 2);
+        h.onTaChange(body2, pos + 2);
+      });
+    },
+  },
+  { id: "autolink", icon: Sparkles, title: "AI 建联：找出有思想联系的笔记", run: (h) => void h.autoLink() },
+];
+
+export function NoteWorkspace({
+  openId,
+  onOpenNote,
+  mode,
+  onModeChange,
+}: {
+  openId: string | null;
+  onOpenNote: (id: string | null) => void;
+  mode: "preview" | "edit";
+  onModeChange: (m: "preview" | "edit") => void;
+}) {
+  const knowledge = useAppStore((s) => s.knowledge);
+  const createKnowledge = useAppStore((s) => s.createKnowledge);
+  const updateKnowledge = useAppStore((s) => s.updateKnowledge);
+  const removeKnowledge = useAppStore((s) => s.removeKnowledge);
+  const linkNotes = useAppStore((s) => s.linkNotes);
+
+  const [query, setQuery] = useState("");
+  const [domain, setDomain] = useState("all");
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [rightTab, setRightTab] = useState<RightTab>("backlinks");
+  const [tagEdit, setTagEdit] = useState(false);
+  const [newTag, setNewTag] = useState("");
+  const [switcher, setSwitcher] = useState(false);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  /* [[ 自动补全状态：fragment 为 [[ 之后到光标的文本 */
+  const [suggest, setSuggest] = useState<{ fragment: string; index: number } | null>(null);
+  const [suggestIdx, setSuggestIdx] = useState(0);
+
+  const note = knowledge.find((k) => k.id === openId) ?? null;
+
+  /* ---- 派生 ---- */
+  const domains = useMemo(() => Array.from(new Set(knowledge.map((k) => k.domain))), [knowledge]);
+
+  const allTags = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const k of knowledge) for (const t of TAGS_OF(k)) m.set(t, (m.get(t) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 24);
+  }, [knowledge]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return knowledge.filter((k) => {
+      if (domain !== "all" && k.domain !== domain) return false;
+      if (activeTag && !TAGS_OF(k).some((t) => t.toLowerCase() === activeTag.toLowerCase())) return false;
+      if (!q) return true;
+      return k.title.toLowerCase().includes(q) || k.body.toLowerCase().includes(q);
+    });
+  }, [knowledge, query, domain, activeTag]);
+
+  const backlinks = useMemo(
+    () => (note ? knowledge.filter((k) => k.id !== note.id && k.links.includes(note.id)) : []),
+    [knowledge, note]
+  );
+  const outgoing = useMemo(
+    () =>
+      note
+        ? note.links
+            .map((id) => knowledge.find((k) => k.id === id))
+            .filter((k): k is KnowledgeItem => !!k)
+        : [],
+    [knowledge, note]
+  );
+  const outline = useMemo(() => (note && mode === "preview" ? outlineOf(note.body) : []), [note, mode]);
+  const noteTags = note ? TAGS_OF(note) : [];
+
+  /* 未链接提及：正文里写了 [[当前标题]] 但还没建立 id 链接的笔记 */
+  const unlinkedMentions = useMemo(() => {
+    if (!note) return [];
+    const t = note.title.toLowerCase();
+    return knowledge.filter(
+      (k) => k.id !== note.id && !k.links.includes(note.id) && k.body.toLowerCase().includes(`[[${t}`)
+    );
+  }, [knowledge, note]);
+
+  /* ---- 打开 / 新建 ---- */
+  const openByTitle = useCallback(
+    (title: string, edit = false) => {
+      const found = knowledge.find((k) => normTitle(k.title) === normTitle(title));
+      if (found) {
+        onOpenNote(found.id);
+        if (edit) onModeChange("edit");
+        return found;
+      }
+      /* 点双链的新目标：建一篇同名笔记并进入编辑 */
+      const id = createKnowledge({ title: title.trim(), domain: "笔记" });
+      onOpenNote(id);
+      onModeChange("edit");
+      return null;
+    },
+    [knowledge, createKnowledge, onOpenNote]
+  );
+
+  const createNote = () => {
+    const id = createKnowledge({ domain: "笔记" });
+    onOpenNote(id);
+    onModeChange("edit");
+    toast.success("已新建，标题点一下就能改。");
+  };
+
+  /* Ctrl+K 快速切换器 */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setSwitcher((v) => !v);
+      }
+      if (e.key === "Escape") setSwitcher(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+
+  /* ---- 编辑器：自动保存 + [[ 补全 + 工具栏 ---- */
+  const setBody = (body: string) => {
+    if (!note) return;
+    /* 敲 [[标题]] 时自动把双链解析进 links（标题→id），反链/图谱即时生效；
+       保留手动/AI 建立的 id 链接 */
+    const byTitle = new Map(knowledge.map((k) => [normTitle(k.title), k.id]));
+    const resolved: string[] = [];
+    const re = /!?\\?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(body))) {
+      const id = byTitle.get(m[1].trim().toLowerCase());
+      if (id && id !== note.id) resolved.push(id);
+    }
+    updateKnowledge(note.id, { body, links: [...new Set([...resolved, ...note.links])] });
+  };
+
+  const onTaChange = (body: string, caret: number) => {
+    setBody(body);
+    /* 检测光标前未闭合的 [[ */
+    const before = body.slice(0, caret);
+    const m = before.match(/\[\[([^\]\n]*)$/);
+    if (m) {
+      setSuggest({ fragment: m[1], index: caret });
+      setSuggestIdx(0);
+    } else {
+      setSuggest(null);
+    }
+  };
+
+  const suggestCandidates = useMemo(() => {
+    if (!suggest) return [];
+    const frag = suggest.fragment.toLowerCase();
+    return knowledge
+      .filter((k) => k.id !== note?.id && k.title.toLowerCase().includes(frag))
+      .slice(0, 7);
+  }, [suggest, knowledge, note]);
+
+  const applySuggest = (title: string) => {
+    if (!note || !suggest) return;
+    const ta = taRef.current;
+    const body = note.body;
+    const start = suggest.index - suggest.fragment.length - 2; // [[ 位置
+    const next = body.slice(0, start) + `[[${title}]]` + body.slice(suggest.index);
+    setBody(next);
+    setSuggest(null);
+    requestAnimationFrame(() => {
+      ta?.focus();
+      const pos = start + title.length + 4;
+      ta?.setSelectionRange(pos, pos);
+    });
+  };
+
+  const onTaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (suggest && suggestCandidates.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSuggestIdx((i) => (i + 1) % suggestCandidates.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSuggestIdx((i) => (i - 1 + suggestCandidates.length) % suggestCandidates.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        applySuggest(suggestCandidates[suggestIdx].title);
+        return;
+      }
+      if (e.key === "Escape") {
+        setSuggest(null);
+        return;
+      }
+    }
+  };
+
+  /** 工具栏：对选区包裹或在光标处插入 */
+  const surround = (before: string, after = before, placeholder = "文本") => {
+    const ta = taRef.current;
+    if (!ta || !note) return;
+    const { selectionStart: s, selectionEnd: e, value } = ta;
+    const sel = value.slice(s, e) || placeholder;
+    const next = value.slice(0, s) + before + sel + after + value.slice(e);
+    setBody(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(s + before.length, s + before.length + sel.length);
+    });
+  };
+
+  const renameNote = (title: string) => {
+    if (!note) return;
+    const t = title.trim();
+    if (!t) return;
+    if (knowledge.some((k) => k.id !== note.id && normTitle(k.title) === normTitle(t))) {
+      toast.error("已有同名笔记");
+      return;
+    }
+    updateKnowledge(note.id, { title: t });
+  };
+
+  const deleteNote = () => {
+    if (!note) return;
+    if (!confirm(`删除《${note.title}》？此操作不可撤销。`)) return;
+    removeKnowledge(note.id);
+    onOpenNote(null);
+    toast.success("已删除");
+  };
+
+  const addTag = () => {
+    const t = newTag.trim().replace(/^#/, "");
+    if (!note || !t) return;
+    const merged = [...new Set([...(note.tags ?? []), t])];
+    updateKnowledge(note.id, { tags: merged });
+    setNewTag("");
+  };
+
+  const removeTag = (t: string) => {
+    if (!note) return;
+    updateKnowledge(note.id, { tags: (note.tags ?? []).filter((x) => x !== t) });
+  };
+
+  /* AI 建联（沿 brain 页原有 AUTOLINK 能力）：为当前笔记找有思想联系的笔记 */
+  const [linking, setLinking] = useState(false);
+  const [suggests, setSuggests] = useState<{ targetId: string; reason: string }[] | null>(null);
+
+  const autoLink = async () => {
+    if (!note) return;
+    if (knowledge.length < 2) {
+      toast.error("笔记太少，先攒几篇再来连线");
+      return;
+    }
+    setLinking(true);
+    setSuggests(null);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const { AUTOLINK } = await import("@/lib/ai/prompts");
+      const { extractJson, autolinkSchema } = await import("@/lib/ai/client");
+      const candidates = knowledge
+        .filter((k) => k.id !== note.id)
+        .slice(0, 40)
+        .map((k) => `(${k.id}) ${k.title}：${k.body.replace(/\[\[|\]\]/g, "").slice(0, 60)}`)
+        .join("\n");
+      const full = await streamChat({
+        task: "autolink",
+        system: AUTOLINK({
+          note: `${note.title}\n${note.body.slice(0, 300)}`,
+          candidates,
+        }),
+        messages: [{ role: "user", content: "建立联系。" }],
+        temperature: 0.3,
+        onDelta: () => {},
+      });
+      const parsed = autolinkSchema.parse(extractJson(full));
+      if (parsed.links.length === 0) toast("暂时没有真正有联系的笔记——宁缺毋滥。");
+      else setSuggests(parsed.links);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "建联失败");
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const h = {
+    note,
+    setBody,
+    onTaChange,
+    taRef,
+    surround,
+    autoLink,
+    linking,
+  };
+
+  /* ---- 渲染 ---- */
+
+  const leftPane = (
+    <div className="flex h-full flex-col">
+      <Button size="sm" onClick={createNote} className="mb-2 w-full">
+        <Plus className="size-4" /> 新笔记
+      </Button>
+      <div className="relative mb-2">
+        <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-dim" />
+        <input
+          className="w-full rounded-lg border border-border bg-white py-1.5 pl-8 pr-2 text-[13px] outline-none transition focus:border-accent/50"
+          placeholder="搜索笔记…  (Ctrl+K)"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+      {/* 标签筛选 */}
+      {allTags.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1">
+          {allTags.map(([t, n]) => (
+            <button
+              key={t}
+              onClick={() => setActiveTag(activeTag === t ? null : t)}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[10.5px] transition cursor-pointer",
+                activeTag === t
+                  ? "border-accent/40 bg-accent/[0.1] font-semibold text-accent"
+                  : "border-border bg-white text-ink-dim hover:text-ink"
+              )}
+            >
+              #{t} <span className="tabular opacity-60">{n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {/* 目录（domain）筛选 */}
+      <div className="mb-2 flex flex-wrap gap-1">
+        <button
+          onClick={() => setDomain("all")}
+          className={cn(
+            "rounded-md px-1.5 py-0.5 text-[10.5px] cursor-pointer",
+            domain === "all" ? "bg-ink text-white" : "text-ink-dim hover:text-ink"
+          )}
+        >
+          全部
+        </button>
+        {domains.map((d) => (
+          <button
+            key={d}
+            onClick={() => setDomain(d)}
+            className={cn(
+              "rounded-md px-1.5 py-0.5 text-[10.5px] cursor-pointer",
+              domain === d ? "bg-ink text-white" : "text-ink-dim hover:text-ink"
+            )}
+          >
+            {d}
+          </button>
+        ))}
+      </div>
+      {/* 笔记列表 */}
+      <div className="-mr-1 flex-1 space-y-0.5 overflow-y-auto pr-1">
+        {filtered.length === 0 && (
+          <p className="px-2 py-6 text-center text-xs text-ink-dim">
+            {knowledge.length === 0 ? "还没有笔记" : "没有匹配的笔记"}
+          </p>
+        )}
+        {filtered.map((k) => {
+          const active = k.id === openId;
+          return (
+            <button
+              key={k.id}
+              onClick={() => {
+                onOpenNote(k.id);
+                onModeChange("preview");
+              }}
+              className={cn(
+                "w-full rounded-lg px-2.5 py-2 text-left transition cursor-pointer",
+                active ? "bg-accent/[0.09]" : "hover:bg-black/[0.035]"
+              )}
+            >
+              <p className={cn("truncate text-[13px]", active ? "font-semibold text-accent" : "font-medium text-ink")}>
+                {k.title}
+              </p>
+              <p className="mt-0.5 truncate text-[11px] text-ink-dim/80">
+                {k.body.replace(/\[\[([^\[\]]+)\]\]/g, "$1").replace(/[#*`>-]/g, "").slice(0, 46) || "（空笔记）"}
+              </p>
+              {TAGS_OF(k).length > 0 && (
+                <p className="mt-0.5 truncate text-[10px] text-accent/60">
+                  {TAGS_OF(k).slice(0, 3).map((t) => `#${t}`).join(" ")}
+                </p>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <p className="pt-2 text-[10px] text-ink-dim/60">
+        {knowledge.length} 篇 · {filtered.length} 篇可见
+      </p>
+    </div>
+  );
+
+  const rightPane = (
+    <div className="flex h-full flex-col">
+      <div className="mb-2 flex gap-1 border-b border-border pb-1.5">
+        {(
+          [
+            ["backlinks", "反链"],
+            ["outgoing", "出链"],
+            ["outline", "大纲"],
+            ["tags", "标签"],
+          ] as [RightTab, string][]
+        ).map(([t, label]) => (
+          <button
+            key={t}
+            onClick={() => setRightTab(t)}
+            className={cn(
+              "rounded-md px-2 py-1 text-[11px] font-medium transition cursor-pointer",
+              rightTab === t ? "bg-ink/[0.06] font-semibold text-ink" : "text-ink-dim hover:text-ink"
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="-mr-1 flex-1 overflow-y-auto pr-1 text-[12.5px]">
+        {!note && <p className="py-6 text-center text-ink-dim/70">先选一篇笔记</p>}
+        {note && rightTab === "backlinks" && (
+          <div className="space-y-1.5">
+            {backlinks.length === 0 && unlinkedMentions.length === 0 && (
+              <p className="py-4 text-center text-ink-dim/70">还没有笔记链到这里</p>
+            )}
+            {backlinks.map((k) => (
+              <button
+                key={k.id}
+                onClick={() => onOpenNote(k.id)}
+                className="block w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-left transition hover:border-accent/40 cursor-pointer"
+              >
+                <span className="font-medium text-ink">{k.title}</span>
+                <span className="mt-0.5 block truncate text-[10.5px] text-ink-dim/70">
+                  {k.body.replace(/\[\[([^\[\]]+)\]\]/g, "$1").slice(0, 50)}
+                </span>
+              </button>
+            ))}
+            {unlinkedMentions.length > 0 && (
+              <>
+                <p className="pt-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim/70">
+                  未链接提及
+                </p>
+                {unlinkedMentions.map((k) => (
+                  <button
+                    key={k.id}
+                    onClick={() => onOpenNote(k.id)}
+                    className="block w-full rounded-lg px-2.5 py-1.5 text-left text-ink-dim transition hover:bg-black/[0.03] cursor-pointer"
+                  >
+                    {k.title}
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+        {note && rightTab === "outgoing" && (
+          <div className="space-y-1.5">
+            {outgoing.length === 0 && <p className="py-4 text-center text-ink-dim/70">这篇还没有出链</p>}
+            {outgoing.map((k) => (
+              <button
+                key={k.id}
+                onClick={() => onOpenNote(k.id)}
+                className="block w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-left font-medium text-ink transition hover:border-accent/40 cursor-pointer"
+              >
+                {k.title}
+              </button>
+            ))}
+          </div>
+        )}
+        {note && rightTab === "outline" && (
+          <div className="space-y-0.5">
+            {outline.length === 0 ? (
+              <p className="py-4 text-center text-ink-dim/70">正文里写几个标题（## 二级）就会有大纲</p>
+            ) : (
+              outline.map((h, i) => (
+                <p
+                  key={i}
+                  className={cn(
+                    "truncate rounded px-1.5 py-0.5 text-ink",
+                    h.level === 1 && "font-semibold",
+                    h.level === 2 && "pl-4",
+                    h.level === 3 && "pl-7 text-ink-dim"
+                  )}
+                >
+                  {h.text}
+                </p>
+              ))
+            )}
+          </div>
+        )}
+        {note && rightTab === "tags" && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-1">
+              {noteTags.length === 0 && <p className="py-2 text-ink-dim/70">还没有标签，正文里写 #标签 或在下面添加</p>}
+              {noteTags.map((t) => (
+                <span
+                  key={t}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-white px-2 py-0.5 text-[11px] text-ink"
+                >
+                  #{t}
+                  {(note.tags ?? []).includes(t) && (
+                    <button onClick={() => removeTag(t)} className="text-ink-dim/60 hover:text-bad cursor-pointer">
+                      <X className="size-3" />
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+            {tagEdit ? (
+              <div className="flex gap-1">
+                <input
+                  autoFocus
+                  className="w-full rounded-lg border border-border bg-white px-2 py-1 text-[12px] outline-none focus:border-accent/50"
+                  placeholder="标签名，回车添加"
+                  value={newTag}
+                  onChange={(e) => setNewTag(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addTag();
+                    if (e.key === "Escape") setTagEdit(false);
+                  }}
+                />
+                <Button size="sm" onClick={addTag}>
+                  加
+                </Button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setTagEdit(true)}
+                className="flex items-center gap-1 text-[11.5px] text-accent hover:underline cursor-pointer"
+              >
+                <Tag className="size-3" /> 添加标签
+              </button>
+            )}
+            <p className="text-[10.5px] leading-relaxed text-ink-dim/60">
+              标签可筛选左侧列表；正文里的 #标签 也会被自动识别。
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* 工作台三栏 */}
+      <div className="grid gap-3 lg:grid-cols-[250px_1fr_260px]">
+        {/* 左栏 */}
+        <Card className="h-[calc(100vh-190px)] min-h-[480px] overflow-hidden p-3">{leftPane}</Card>
+
+        {/* 中栏：编辑器 / 预览 */}
+        <Card className="h-[calc(100vh-190px)] min-h-[480px] overflow-hidden p-0">
+          {!note ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+              <Empty
+                icon={<FileText className="size-7" />}
+                title="选一篇笔记，或新建一篇"
+                desc="双链 [[]]、#标签、反向链接、大纲——都在这套工作台里。Ctrl+K 快速跳转。"
+              />
+              <Button size="sm" onClick={createNote}>
+                <Plus className="size-4" /> 新笔记
+              </Button>
+            </div>
+          ) : (
+            <div className="flex h-full flex-col">
+              {/* 标题行 + 模式切换 */}
+              <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+                <input
+                  className="min-w-0 flex-1 bg-transparent text-[17px] font-bold tracking-[-0.01em] text-ink outline-none"
+                  value={note.title}
+                  onChange={(e) => renameNote(e.target.value)}
+                  spellCheck={false}
+                />
+                <div className="flex shrink-0 gap-0.5 rounded-lg border border-border bg-white p-0.5">
+                  <button
+                    onClick={() => onModeChange("preview")}
+                    className={cn(
+                      "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] cursor-pointer",
+                      mode === "preview" ? "bg-ink/[0.07] font-semibold text-ink" : "text-ink-dim"
+                    )}
+                  >
+                    <Eye className="size-3.5" /> 阅读
+                  </button>
+                  <button
+                    onClick={() => {
+                      onModeChange("edit");
+                      setSuggest(null);
+                    }}
+                    className={cn(
+                      "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] cursor-pointer",
+                      mode === "edit" ? "bg-ink/[0.07] font-semibold text-ink" : "text-ink-dim"
+                    )}
+                  >
+                    <Pencil className="size-3.5" /> 编辑
+                  </button>
+                </div>
+                <button
+                  onClick={deleteNote}
+                  title="删除这篇笔记"
+                  className="shrink-0 rounded-md p-1 text-ink-dim/50 transition hover:text-bad cursor-pointer"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+
+              {/* 工具栏（编辑态） */}
+              {mode === "edit" && (
+                <div className="flex flex-wrap items-center gap-0.5 border-b border-border bg-surface-2/60 px-3 py-1.5">
+                  {TOOLBAR.map((b) => (
+                    <button
+                      key={b.title}
+                      title={b.title}
+                      onClick={() => b.run(h)}
+                      disabled={b.id === "autolink" && linking}
+                      className="rounded-md p-1.5 text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
+                    >
+                      <b.icon className="size-3.5" />
+                    </button>
+                  ))}
+                  <span className="ml-auto flex items-center gap-1 pr-1 text-[10px] text-ink-dim/50">
+                    <ArrowDownUp className="size-3" /> 改动即存
+                  </span>
+                </div>
+              )}
+
+              {/* AI 建联建议 */}
+              {mode === "edit" && suggests && suggests.length > 0 && (
+                <div className="border-b border-accent/20 bg-accent/[0.04] px-4 py-2">
+                  <div className="mb-1 flex items-center justify-between">
+                    <p className="text-[11px] font-semibold text-accent">AI 觉得这些笔记和本篇有联系</p>
+                    <button onClick={() => setSuggests(null)} className="text-ink-dim/60 hover:text-ink cursor-pointer">
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                  <div className="space-y-1">
+                    {suggests.map((s) => {
+                      const target = knowledge.find((k) => k.id === s.targetId);
+                      if (!target || !note) return null;
+                      const already = note.links.includes(s.targetId);
+                      return (
+                        <div key={s.targetId} className="flex items-center gap-2 text-[12.5px]">
+                          <button
+                            disabled={already}
+                            onClick={() => {
+                              linkNotes(note.id, s.targetId);
+                              setSuggests((p) => (p ? p.filter((x) => x.targetId !== s.targetId) : null));
+                            }}
+                            className={cn(
+                              "rounded-md border px-1.5 py-0.5 text-[11px] cursor-pointer",
+                              already
+                                ? "border-border text-ink-dim/50"
+                                : "border-accent/40 bg-white text-accent hover:bg-accent/[0.08]"
+                            )}
+                          >
+                            {already ? "已链接" : "＋ 连接"}
+                          </button>
+                          <span className="font-medium text-ink">{target.title}</span>
+                          <span className="truncate text-[11px] text-ink-dim">{s.reason}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 正文：编辑 / 预览 */}
+              <div className="relative flex-1 overflow-y-auto">
+                {mode === "edit" ? (
+                  <div className="relative h-full">
+                    <textarea
+                      ref={taRef}
+                      className="h-full w-full resize-none bg-transparent px-5 py-4 font-mono text-[13.5px] leading-relaxed text-ink outline-none"
+                      value={note.body}
+                      spellCheck={false}
+                      placeholder="用 Markdown 写。输入 [[ 可以链接到其他笔记…"
+                      onChange={(e) => onTaChange(e.target.value, e.target.selectionStart ?? 0)}
+                      onClick={(e) => onTaChange(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
+                      onKeyDown={onTaKeyDown}
+                    />
+                    {/* [[ 补全下拉 */}
+                    {suggest && (
+                      <div className="absolute left-5 right-5 top-16 z-10 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
+                        <p className="border-b border-border bg-surface-2 px-3 py-1 text-[10px] text-ink-dim">
+                          ↑↓ 选择 · Enter 插入 · Esc 关闭
+                        </p>
+                        {suggestCandidates.map((k, i) => (
+                          <button
+                            key={k.id}
+                            onClick={() => applySuggest(k.title)}
+                            className={cn(
+                              "block w-full px-3 py-1.5 text-left text-[13px] cursor-pointer",
+                              i === suggestIdx ? "bg-accent/[0.09] text-accent" : "text-ink hover:bg-black/[0.03]"
+                            )}
+                          >
+                            {k.title}
+                            <span className="ml-2 text-[10px] text-ink-dim/60">{k.domain}</span>
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => {
+                            const t = suggest.fragment.trim();
+                            if (t) applySuggest(t);
+                          }}
+                          className={cn(
+                            "block w-full border-t border-border px-3 py-1.5 text-left text-[13px] cursor-pointer",
+                            suggestCandidates.length === 0 && suggestIdx === 0 ? "bg-accent/[0.09] text-accent" : "text-ink-dim hover:text-ink"
+                          )}
+                        >
+                          ＋ 新建「{suggest.fragment.trim() || "…"}」并链接
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="px-5 py-4">
+                    {note.body.trim() ? (
+                      <WikiMarkdown
+                        body={note.body}
+                        notes={knowledge}
+                        onOpen={(id) => onOpenNote(id)}
+                        onCreate={(title) => openByTitle(title, true)}
+                      />
+                    ) : (
+                      <p className="py-10 text-center text-sm text-ink-dim">
+                        空笔记。切到「编辑」开始写，或用工具栏里的 [[双链]] 建立连接。
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </Card>
+
+        {/* 右栏 */}
+        <Card className="h-[calc(100vh-190px)] min-h-[480px] overflow-hidden p-3">{rightPane}</Card>
+      </div>
+
+      {/* Ctrl+K 快速切换器 */}
+      {switcher && (
+        <QuickSwitcher
+          onClose={() => setSwitcher(false)}
+          onPick={(id) => {
+            onOpenNote(id);
+            onModeChange("preview");
+            setSwitcher(false);
+          }}
+          onCreate={(title) => {
+            openByTitle(title, true);
+            setSwitcher(false);
+          }}
+        />
+      )}
+    </div>
+  );
+
+  /* AI 建联建议面板见上方编辑区 */
+}
+
+/* ================= 快速切换器 ================= */
+function QuickSwitcher({
+  onClose,
+  onPick,
+  onCreate,
+}: {
+  onClose: () => void;
+  onPick: (id: string) => void;
+  onCreate: (title: string) => void;
+}) {
+  const knowledge = useAppStore((s) => s.knowledge);
+  const [q, setQ] = useState("");
+  const [idx, setIdx] = useState(0);
+  const list = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return knowledge.slice(0, 8);
+    return knowledge.filter((k) => k.title.toLowerCase().includes(query)).slice(0, 8);
+  }, [knowledge, q]);
+  const exact = knowledge.find((k) => normTitle(k.title) === normTitle(q.trim()));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[12vh] backdrop-blur-[2px]" onClick={onClose}>
+      <div
+        className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          autoFocus
+          className="w-full border-b border-border px-4 py-3 text-sm outline-none"
+          placeholder="跳到笔记…（输入标题，回车打开）"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setIdx(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setIdx((i) => (i + 1) % Math.max(1, list.length));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setIdx((i) => (i - 1 + list.length) % Math.max(1, list.length));
+            } else if (e.key === "Enter") {
+              if (list[idx]) onPick(list[idx].id);
+              else if (q.trim() && !exact) onCreate(q.trim());
+            } else if (e.key === "Escape") {
+              onClose();
+            }
+          }}
+        />
+        <div className="max-h-72 overflow-y-auto p-1.5">
+          {list.map((k, i) => (
+            <button
+              key={k.id}
+              onClick={() => onPick(k.id)}
+              className={cn(
+                "block w-full rounded-lg px-3 py-2 text-left cursor-pointer",
+                i === idx ? "bg-accent/[0.09]" : "hover:bg-black/[0.03]"
+              )}
+            >
+              <span className="text-[13px] font-medium text-ink">{k.title}</span>
+              <span className="ml-2 text-[10.5px] text-ink-dim/60">{k.domain}</span>
+            </button>
+          ))}
+          {q.trim() && !exact && (
+            <button
+              onClick={() => onCreate(q.trim())}
+              className="block w-full rounded-lg px-3 py-2 text-left text-[13px] text-accent hover:bg-accent/[0.06] cursor-pointer"
+            >
+              ＋ 新建「{q.trim()}」
+            </button>
+          )}
+          {list.length === 0 && exact && (
+            <button onClick={() => onPick(exact.id)} className="block w-full rounded-lg px-3 py-2 text-left text-[13px] cursor-pointer">
+              {exact.title}
+            </button>
+          )}
+        </div>
+        <p className="border-t border-border bg-surface-2 px-3 py-1.5 text-[10px] text-ink-dim/60">
+          ↑↓ 选择 · Enter 打开 · Esc 关闭
+        </p>
+      </div>
+    </div>
+  );
+}

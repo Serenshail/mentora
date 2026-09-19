@@ -6,11 +6,12 @@ import { Badge, Button, Card, Input, PageHeader, StatusDot } from "@/components/
 import { Markdown } from "@/components/markdown";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
-import { INSIGHT_EXTRACT, READING_CHAT } from "@/lib/ai/prompts";
+import { INSIGHT_EXTRACT, READING_CHAT, VERIFY_SCORE } from "@/lib/ai/prompts";
 import { extractJson, insightsSchema } from "@/lib/ai/client";
+import { heuristicVerify } from "@/lib/verify-heuristic";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Lightbulb } from "lucide-react";
+import { ArrowLeft, Check, Lightbulb, ShieldCheck } from "lucide-react";
 
 export default function BookPage() {
   const hydrated = useHydrated();
@@ -28,6 +29,10 @@ export default function BookPage() {
   const [currentChapter, setCurrentChapter] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
+  /* 三重验收（迁移自 CogniRead）：当前验收的单元 + 三题作答 + 评分中 */
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<string[]>(["", "", ""]);
+  const [grading, setGrading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -84,6 +89,82 @@ export default function BookPage() {
         addBookMsg(book.id, { id: uid("m"), role: "assistant", content: full, at: new Date().toISOString() });
       },
     });
+  };
+
+  /* ---- 三重验收（迁移自用户 CogniRead 项目：举例 30% + 迁移 30% + 贴合 40%） ---- */
+  const openVerify = (chapterId: string) => {
+    setVerifyingId(chapterId);
+    setAnswers(["", "", ""]);
+  };
+
+  const submitVerify = async (chapter: (typeof book.chapters)[number]) => {
+    if (answers.some((a) => !a.trim())) {
+      toast.error("三题都要写，验收才算数。");
+      return;
+    }
+    setGrading(true);
+    try {
+      const qs = [
+        { q: "用自己的话复述本章核心论点", a: answers[0] },
+        { q: "举一个你生活或工作里的真实例子", a: answers[1] },
+        { q: "这个观点能用到你哪件正在做的事上", a: answers[2] },
+      ];
+      let raw: { example?: number; transfer?: number; similarity?: number; level?: string; suggestion?: string };
+      try {
+        const { streamChat } = await import("@/lib/ai/client");
+        const full = await streamChat({
+          task: "verify-score",
+          system: VERIFY_SCORE({
+            chapter: chapter.title,
+            coreIdea: chapter.coreIdea ?? "",
+            focusQuestion: chapter.focusQuestion,
+            book: book.title,
+            answers: qs,
+          }),
+          messages: [{ role: "user", content: "评分。" }],
+          temperature: 0.2,
+          onDelta: () => {},
+        });
+        raw = extractJson(full);
+      } catch {
+        raw = heuristicVerify({
+          answers,
+          coreIdea: chapter.coreIdea ?? "",
+          focusQuestion: chapter.focusQuestion,
+        });
+        toast("演示模式：用启发式规则评分");
+      }
+      const clamp = (n: unknown) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
+      const scores = {
+        example: clamp(raw.example),
+        transfer: clamp(raw.transfer),
+        similarity: clamp(raw.similarity),
+      };
+      const total = Math.round(scores.example * 0.3 + scores.transfer * 0.3 + scores.similarity * 0.4);
+      const level = raw.level === "understood" ? "understood" : raw.level === "not" ? "not" : "partial";
+      const verification = {
+        scores,
+        total,
+        level: level as "understood" | "partial" | "not",
+        suggestion: String(raw.suggestion || "继续推进。"),
+        at: new Date().toISOString(),
+      };
+      updateBook(book.id, {
+        chapters: book.chapters.map((ch) =>
+          ch.id === chapter.id
+            ? { ...ch, verification, status: total >= 60 ? "done" : ch.status }
+            : ch
+        ),
+      });
+      if (total >= 60) toast.success(`验收通过（${total} 分），单元已完成。`);
+      else toast(`本次 ${total} 分——${verification.suggestion}`);
+      setVerifyingId(null);
+      setAnswers(["", "", ""]);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "验收失败");
+    } finally {
+      setGrading(false);
+    }
   };
 
   const extract = async () => {
@@ -219,13 +300,120 @@ export default function BookPage() {
                           值得记：{c.capture.join(" / ")}
                         </p>
                       )}
+
+                      {/* 三重验收（举例 30% + 迁移 30% + 贴合 40%，通过 ≥60 分自动完成单元） */}
+                      {verifyingId === c.id ? (
+                        <div className="space-y-2 rounded-lg border border-accent/25 bg-white p-2.5">
+                          <p className="flex items-center gap-1 text-[11px] font-semibold text-accent">
+                            <ShieldCheck className="size-3.5" /> 三重验收 · 三题都要答
+                          </p>
+                          {[
+                            "① 用自己的话复述本章核心论点",
+                            "② 举一个你生活或工作里的真实例子",
+                            "③ 这个观点能用到你哪件正在做的事上",
+                          ].map((q, i) => (
+                            <div key={i}>
+                              <p className="text-[11px] text-ink">{q}</p>
+                              <textarea
+                                rows={2}
+                                className="mt-1 w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-[12px] outline-none focus:border-accent/50"
+                                value={answers[i]}
+                                onChange={(e) =>
+                                  setAnswers((p) => p.map((v, j) => (j === i ? e.target.value : v)))
+                                }
+                                placeholder="写你自己的话…"
+                              />
+                            </div>
+                          ))}
+                          <div className="flex justify-end gap-1.5">
+                            <Button variant="outline" size="sm" onClick={() => setVerifyingId(null)} disabled={grading}>
+                              取消
+                            </Button>
+                            <Button size="sm" onClick={() => void submitVerify(c)} loading={grading}>
+                              提交验收
+                            </Button>
+                          </div>
+                        </div>
+                      ) : c.verification ? (
+                        <div
+                          className={cn(
+                            "space-y-1.5 rounded-lg border p-2.5",
+                            c.verification.level === "understood"
+                              ? "border-ok/30 bg-ok/[0.05]"
+                              : c.verification.level === "partial"
+                                ? "border-warn/30 bg-warn/[0.05]"
+                                : "border-bad/25 bg-bad/[0.04]"
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <ShieldCheck className="size-3.5 text-accent" />
+                            <p className="text-[11.5px] font-semibold text-ink">
+                              验收 {c.verification.total} 分
+                            </p>
+                            <Badge
+                              tone={
+                                c.verification.level === "understood"
+                                  ? "ok"
+                                  : c.verification.level === "partial"
+                                    ? "warn"
+                                    : "bad"
+                              }
+                            >
+                              {c.verification.level === "understood"
+                                ? "真懂了"
+                                : c.verification.level === "partial"
+                                  ? "半懂"
+                                  : "没懂"}
+                            </Badge>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5 text-[10.5px] text-ink-dim">
+                            {([
+                              ["举例", c.verification.scores.example],
+                              ["迁移", c.verification.scores.transfer],
+                              ["贴合", c.verification.scores.similarity],
+                            ] as [string, number][]).map(([label, v]) => (
+                              <div key={label}>
+                                <div className="flex justify-between">
+                                  <span>{label}</span>
+                                  <span className="tabular">{v}</span>
+                                </div>
+                                <div className="mt-0.5 h-1 rounded-full bg-black/[0.08]">
+                                  <div
+                                    className="h-full rounded-full bg-accent/70"
+                                    style={{ width: `${Math.max(3, v)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-[11px] leading-relaxed text-ink-dim">{c.verification.suggestion}</p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full"
+                            onClick={() => openVerify(c.id)}
+                          >
+                            重新验收
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full"
+                          onClick={() => openVerify(c.id)}
+                        >
+                          <ShieldCheck className="size-3.5" /> 三重验收（通过即完成）
+                        </Button>
+                      )}
+
                       <Button
                         variant="outline"
                         size="sm"
                         className="w-full"
                         onClick={() => toggleChapter(book.id, c.id)}
                       >
-                        {c.status === "done" ? "标记为未读" : "标记此单元已读完"}
+                        {c.status === "done" ? "标记为未读" : "直接标记已读完（不验收）"}
                       </Button>
                     </div>
                   )}

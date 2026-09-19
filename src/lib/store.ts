@@ -51,6 +51,12 @@ interface AppState {
     source: KnowledgeSource,
     sourceTitle: string
   ) => void;
+  /** 新建空笔记并返回真实 id（标题自动唯一，保证重名不冲突） */
+  createKnowledge: (init?: { title?: string; domain?: string }) => string;
+  /** Obsidian 批量导入：按标题去重，双链自动解析为 id；返回新增/跳过数 */
+  importKnowledge: (
+    items: { title: string; body: string; domain: string; sourceTitle: string; linkTitles: string[]; tags?: string[] }[]
+  ) => { added: number; skipped: number };
   updateKnowledge: (id: string, patch: Partial<KnowledgeItem>) => void;
   removeKnowledge: (id: string) => void;
   recordReview: (id: string, ok: boolean) => void;
@@ -203,6 +209,73 @@ export const useAppStore = create<AppState>()(
             links: [],
           }));
         set((s) => ({ knowledge: [...fresh, ...s.knowledge] }));
+      },
+
+      createKnowledge: (init) => {
+        const base = (init?.title ?? "无标题").trim() || "无标题";
+        const titles = new Set(get().knowledge.map((k) => k.title));
+        let title = base;
+        let n = 2;
+        while (titles.has(title)) title = `${base} ${n++}`;
+        const id = uid("k");
+        set((s) => ({
+          knowledge: [
+            {
+              id,
+              title,
+              body: "",
+              domain: init?.domain ?? "笔记",
+              source: "manual",
+              sourceTitle: "手动记录",
+              masteredAt: todayISO(),
+              reviewStage: 0,
+              links: [],
+            },
+            ...s.knowledge,
+          ],
+        }));
+        return id;
+      },
+
+      importKnowledge: (items) => {
+        const norm = (t: string) => t.trim().toLowerCase();
+        const existing = new Set(get().knowledge.map((k) => norm(k.title)));
+        const fresh: KnowledgeItem[] = [];
+        const freshLinks: string[][] = [];
+        const seen = new Set<string>();
+        for (const i of items) {
+          const t = norm(i.title);
+          if (!i.title || !t || existing.has(t) || seen.has(t)) continue;
+          seen.add(t);
+          fresh.push({
+            id: uid("k"),
+            title: i.title,
+            body: i.body,
+            domain: i.domain,
+            source: "obsidian",
+            sourceTitle: i.sourceTitle,
+            masteredAt: todayISO(),
+            reviewStage: 0,
+            /* Obsidian 参考类笔记不自动进复习队列（938 篇全进会把复习塞爆） */
+            nextReviewAt: undefined,
+            links: [],
+            tags: i.tags && i.tags.length > 0 ? i.tags : undefined,
+          });
+          freshLinks.push(i.linkTitles ?? []);
+        }
+        /* 双链两遍解析：标题（大小写不敏感）→ 笔记 id */
+        const byTitle = new Map<string, string>();
+        for (const k of [...get().knowledge, ...fresh]) byTitle.set(norm(k.title), k.id);
+        fresh.forEach((f, i) => {
+          const ids = new Set<string>();
+          for (const lt of freshLinks[i]) {
+            const id = byTitle.get(norm(lt));
+            if (id && id !== f.id) ids.add(id);
+          }
+          f.links = [...ids];
+        });
+        set((s) => ({ knowledge: [...fresh, ...s.knowledge] }));
+        return { added: fresh.length, skipped: items.length - fresh.length };
       },
       updateKnowledge: (id, patch) =>
         set((s) => ({

@@ -126,7 +126,7 @@ export interface Goal {
 }
 
 /* ========= 第二大脑（Obsidian 式双链笔记） ========= */
-export type KnowledgeSource = "learn" | "read" | "council" | "manual";
+export type KnowledgeSource = "learn" | "read" | "council" | "manual" | "obsidian";
 
 export interface KnowledgeItem {
   id: string;
@@ -140,6 +140,7 @@ export interface KnowledgeItem {
   nextReviewAt?: string; // ISO date，间隔重复 1/3/7/15
   lastReviewOk?: boolean;
   links: string[]; // 出链：指向其他笔记的 id（用户/AI 建立）
+  tags?: string[]; // 标签（frontmatter/正文 #标签/手动添加）— Obsidian 式
 }
 
 /* ========= 读书伙伴 ========= */
@@ -151,6 +152,14 @@ export interface BookChapter {
   perspectives?: string[]; // 其他思想家/作者对该观点的看法（人名+一句话）
   capture?: string[]; // 值得随手记进第二大脑的笔记标题建议
   status: "todo" | "done";
+  /** 三重验收结果（通俗举例/知识迁移/贴合度，源自 CogniRead 的设计） */
+  verification?: {
+    scores: { example: number; transfer: number; similarity: number };
+    total: number;
+    level: "understood" | "partial" | "not";
+    suggestion: string;
+    at: string;
+  };
 }
 
 export interface BookInsight {
