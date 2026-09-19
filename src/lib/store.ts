@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { fsrs, generatorParameters, createEmptyCard, Rating, State } from "ts-fsrs";
 import { useShallow } from "zustand/react/shallow";
 import type {
   Book,
@@ -24,6 +25,42 @@ export const DEFAULT_SETTINGS: Settings = {
   baseUrl: "",
   userName: "",
 };
+
+/* ---- FSRS 自适应间隔调度（目标记忆率 90%；开源算法 ts-fsrs） ---- */
+const FSRS = fsrs(generatorParameters({ request_retention: 0.9 }));
+
+function toFsrsCard(k: KnowledgeItem) {
+  if (k.fsrs) {
+    return {
+      ...createEmptyCard(),
+      due: new Date(k.fsrs.due),
+      stability: k.fsrs.stb,
+      difficulty: k.fsrs.dif,
+      elapsed_days: k.fsrs.elapsed,
+      scheduled_days: k.fsrs.scheduled,
+      reps: k.fsrs.reps,
+      lapses: k.fsrs.lapses,
+      state: k.fsrs.st as State,
+      last_review: k.fsrs.last ? new Date(k.fsrs.last) : null,
+    };
+  }
+  const card = createEmptyCard();
+  /* 兼容旧数据：reviewStage 0-4 → 预热 reps，让老笔记延续原有进度感 */
+  for (let i = 0; i < k.reviewStage; i++) {
+    const r = FSRS.repeat(card, new Date())[Rating.Good];
+    Object.assign(card, r.card);
+  }
+  return card;
+}
+
+function stageOf(scheduled: number): number {
+  /* 展示用 0-4：把 FSRS 天数映射回间隔轮次（1/3/7/15 的近似分档） */
+  if (scheduled <= 1) return 0;
+  if (scheduled <= 3) return 1;
+  if (scheduled <= 7) return 2;
+  if (scheduled <= 15) return 3;
+  return 4;
+}
 
 interface AppState {
   goals: Goal[];
@@ -298,20 +335,45 @@ export const useAppStore = create<AppState>()(
             .filter((k) => k.id !== id)
             .map((k) => ({ ...k, links: k.links.filter((l) => l !== id) })),
         })),
-      recordReview: (id, ok) =>
-        set((s) => ({
-          knowledge: s.knowledge.map((k) => {
-            if (k.id !== id) return k;
-            const stage = ok ? k.reviewStage + 1 : Math.max(0, k.reviewStage - 1);
-            const done = ok && stage >= 4;
-            return {
-              ...k,
-              reviewStage: stage,
-              lastReviewOk: ok,
-              nextReviewAt: done ? undefined : nextReviewDate(stage),
-            };
-          }),
-        })),
+      recordReview: (id, ok) => {
+        const done = (next: string | undefined, info: Partial<KnowledgeItem>) =>
+          set((s) => ({
+            knowledge: s.knowledge.map((k) =>
+              k.id === id
+                ? {
+                    ...k,
+                    ...info,
+                    lastReviewOk: ok,
+                    nextReviewAt: next,
+                  }
+                : k
+            ),
+          }));
+        const k = get().knowledge.find((x) => x.id === id);
+        if (!k) return;
+        const card = toFsrsCard(k);
+        const result = FSRS.repeat(card, new Date())[ok ? Rating.Good : Rating.Again];
+        const c = result.card;
+        const fsrsState = {
+          st: c.state as number,
+          dif: c.difficulty,
+          stb: c.stability,
+          elapsed: c.elapsed_days,
+          scheduled: c.scheduled_days,
+          reps: c.reps,
+          lapses: c.lapses,
+          due: c.due.toISOString(),
+          last: c.last_review ? c.last_review.toISOString() : null,
+        };
+        /* FSRS 新卡/重学的当日到期 → 顺延到明天（我们按天复习，不做分钟级） */
+        const dueDate = new Date(c.due);
+        const tomorrow = new Date(Date.now() + 86400000);
+        const next = c.scheduled_days < 1 ? tomorrow : dueDate;
+        done(next.toISOString().slice(0, 10), {
+          fsrs: fsrsState,
+          reviewStage: stageOf(c.scheduled_days),
+        });
+      },
       linkNotes: (fromId, toId) =>
         set((s) => ({
           knowledge: s.knowledge.map((k) => {

@@ -141,6 +141,20 @@ export interface KnowledgeItem {
   lastReviewOk?: boolean;
   links: string[]; // 出链：指向其他笔记的 id（用户/AI 建立）
   tags?: string[]; // 标签（frontmatter/正文 #标签/手动添加）— Obsidian 式
+  /** FSRS 自适应调度状态（ts-fsrs；缺省时按 reviewStage 兼容旧数据） */
+  fsrs?: FsrsState;
+}
+
+export interface FsrsState {
+  st: number; // State: 0=New 1=Learning 2=Review 3=Relearning
+  dif: number; // difficulty 1-10
+  stb: number; // stability（天数）
+  elapsed: number;
+  scheduled: number;
+  reps: number;
+  lapses: number;
+  due: string; // ISO
+  last: string | null; // ISO
 }
 
 /* ========= 读书伙伴 ========= */

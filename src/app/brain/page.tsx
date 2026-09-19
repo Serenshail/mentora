@@ -29,6 +29,10 @@ export default function BrainPage() {
 
   // 复习会话
   const [reviewQueue, setReviewQueue] = useState<string[]>([]);
+  const [sessionTotal, setSessionTotal] = useState(0);
+  const [correctCount, setCorrectCount] = useState(0);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [summary, setSummary] = useState<null | { total: number; correct: number; minutes: number; nextDate: string }>(null);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [phase, setPhase] = useState<"ask" | "answer" | "graded">("ask");
@@ -37,19 +41,41 @@ export default function BrainPage() {
 
 
   /* ---- 复习流程 ---- */
+  const DAILY_REVIEW_CAP = 20;
   const startReview = async () => {
     if (due.length === 0) return;
-    setReviewQueue(due.map((k) => k.id));
+    /* 每日上限：一次 20 条以内——复习是Daily习惯，不是义务劳动（防淹没=防流失） */
+    const queue = due.slice(0, DAILY_REVIEW_CAP).map((k) => k.id);
+    setReviewQueue(queue);
+    setSessionTotal(queue.length);
+    setCorrectCount(0);
+    // eslint-disable-next-line react-hooks/purity -- 事件处理器里取时间戳，非渲染期
+    setStartedAt(Date.now());
+    setSummary(null);
     setOpenId(null);
-    await askNext(due.map((k) => k.id));
+    if (due.length > DAILY_REVIEW_CAP) {
+      toast(`今天复习 ${DAILY_REVIEW_CAP} 条，剩下的 ${due.length - DAILY_REVIEW_CAP} 条明天来——贪多必忘。`);
+    }
+    await askNext(queue);
   };
 
   const askNext = async (queue: string[]) => {
     const store = useAppStore.getState();
     const nextId = queue[0];
     if (!nextId) {
+      const minutes = startedAt ? Math.max(1, Math.round((Date.now() - startedAt) / 60000)) : 1;
+      const nextDates = useAppStore
+        .getState()
+        .knowledge.filter((k) => k.nextReviewAt)
+        .map((k) => k.nextReviewAt as string)
+        .sort();
       setReviewQueue([]);
-      toast.success("今日复习完成！记忆曲线又稳了一格。");
+      setSummary({
+        total: sessionTotal,
+        correct: correctCount,
+        minutes,
+        nextDate: nextDates[0] ?? "",
+      });
       return;
     }
     const item = store.knowledge.find((k) => k.id === nextId);
@@ -105,6 +131,7 @@ export default function BrainPage() {
       const g = reviewGradeSchema.parse(extractJson(full));
       setVerdict(g);
       setPhase("graded");
+      if (g.verdict === "pass") setCorrectCount((c) => c + 1);
       useAppStore.getState().recordReview(id, g.verdict === "pass");
     } catch {
       useAppStore.getState().recordReview(id, true);
@@ -196,12 +223,55 @@ export default function BrainPage() {
       )}
 
       {/* 复习弹窗 */}
-      <Modal open={reviewQueue.length > 0} onClose={() => setReviewQueue([])} title="间隔复习" wide>
+      <Modal
+        open={reviewQueue.length > 0 || !!summary}
+        onClose={() => {
+          setReviewQueue([]);
+          setSummary(null);
+        }}
+        title="间隔复习"
+        wide
+      >
         <div className="space-y-4">
-          <div className="flex items-center justify-between text-xs text-ink-dim">
-            <span>剩余 {reviewQueue.length} 条</span>
-            <span>1 → 3 → 7 → 15 天</span>
-          </div>
+          {reviewQueue.length > 0 && !summary && (
+            <div className="flex items-center gap-3 text-xs text-ink-dim">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/[0.08]">
+                <div
+                  className="h-full rounded-full bg-accent transition-all"
+                  style={{ width: `${sessionTotal ? ((sessionTotal - reviewQueue.length) / sessionTotal) * 100 : 0}%` }}
+                />
+              </div>
+              <span className="tabular">
+                {sessionTotal - reviewQueue.length + 1}/{sessionTotal}
+              </span>
+            </div>
+          )}
+          {summary && (
+            <div className="space-y-3 py-2 text-center">
+              <p className="text-3xl font-extrabold text-accent">
+                {summary.total ? Math.round((correctCount / summary.total) * 100) : 100}%
+              </p>
+              <p className="text-sm font-semibold text-ink">
+                {correctCount}/{summary.total} 条回忆成功 · 用时 {summary.minutes} 分钟
+              </p>
+              <p className="text-xs leading-relaxed text-ink-dim">
+                {summary.correct === summary.total
+                  ? "全对。记忆曲线正在给你复利——明天见。"
+                  : "记住的那部分已经存稳了，忘掉的部分明天会再来找你。"}
+              </p>
+              {summary.nextDate && (
+                <p className="text-xs text-ink-dim">下一次复习到期：{summary.nextDate}</p>
+              )}
+              <Button
+                onClick={() => {
+                  setSummary(null);
+                  setReviewQueue([]);
+                }}
+              >
+                完成本轮
+              </Button>
+            </div>
+          )}
           {phase === "ask" && (
             <div className="py-8 text-center text-sm text-ink-dim">
               <RefreshCcw className="mx-auto mb-3 size-6 animate-spin text-accent" />
