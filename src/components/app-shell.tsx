@@ -41,6 +41,22 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, logout, checking } = useAuth();
   useAutoPush(!!user);
 
+  /* 管理员：侧栏（桌面）与底栏（移动端）都给出后台入口，登上账号就能直达 */
+  /* 侧栏可收起（图标条模式），用户自己决定宽窄，选择记住 */
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("mentora-sidebar-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("mentora-sidebar-collapsed", collapsed ? "1" : "0");
+    } catch {}
+  }, [collapsed]);
+
   /* /admin 自带独立密码门，不需要登录态，也不参与登录跳转（否则和登录页互相弹） */
   const isPublicPath = pathname === "/" || pathname === "/login" || pathname === "/admin";
   useEffect(() => {
@@ -60,23 +76,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
-  /* 管理员：侧栏（桌面）与底栏（移动端）都给出后台入口，登上账号就能直达 */
+
   const isAdmin = isAdminEmail(user.email, process.env.NEXT_PUBLIC_ADMIN_EMAILS);
 
-  /* 侧栏可收起（图标条模式），用户自己决定宽窄，选择记住 */
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return window.localStorage.getItem("mentora-sidebar-collapsed") === "1";
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      window.localStorage.setItem("mentora-sidebar-collapsed", collapsed ? "1" : "0");
-    } catch {}
-  }, [collapsed]);
 
   return (
     <div className="flex min-h-screen w-full">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { Badge, Button, Card, Input, PageHeader } from "@/components/ui";
 import { useAppStore, DEFAULT_SETTINGS } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
@@ -9,7 +10,7 @@ import type { ProviderId } from "@/lib/types";
 import { useAuth } from "@/lib/auth-client";
 import { cn, downloadJson } from "@/lib/utils";
 import { toast } from "sonner";
-import {
+import { QrCode, 
   Camera, Database, Download, KeyRound, LogOut, Save, Trash2, Upload, UserRound, X,
 } from "lucide-react";
 
@@ -438,6 +439,7 @@ const TABS = [
   { id: "account", label: "账户", icon: UserRound },
   { id: "model", label: "模型", icon: KeyRound },
   { id: "data", label: "数据", icon: Database },
+  { id: "invite", label: "推荐", icon: QrCode },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -477,8 +479,46 @@ export default function SettingsPage() {
           {tab === "account" && <AccountSection />}
           {tab === "model" && <ModelSection />}
           {tab === "data" && <DataSection />}
+          {tab === "invite" && <InviteSection />}
         </div>
       </div>
     </div>
+  );
+}
+
+/* ================= 推荐有礼：扫码在手机上打开 Mentora ================= */
+function InviteSection() {
+  const [origin, setOrigin] = useState("");
+  const [copied, setCopied] = useState(false);
+  useEffect(() => setOrigin(window.location.origin), []);
+  return (
+    <Card className="p-6">
+      <p className="text-sm font-bold text-ink">把 Mentora 装到手机</p>
+      <p className="mt-1.5 text-[13px] leading-relaxed text-ink-dim">
+        用手机扫这个码，直接打开 Mentora——注册同一账号，学习进度自动跟着走。
+        推荐给朋友也一样：他们扫的是你正在用的这个产品。
+      </p>
+      <div className="mt-5 flex items-center gap-6">
+        <div className="rounded-2xl border border-border bg-white p-3">
+          {origin ? <QRCodeSVG value={origin} size={132} /> : <div className="size-[132px]" />}
+        </div>
+        <div className="space-y-2 text-[13px] text-ink-dim">
+          <p className="font-mono text-[12px] text-ink">{origin || "…"}</p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(origin);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              } catch {}
+            }}
+          >
+            {copied ? "已复制" : "复制链接"}
+          </Button>
+        </div>
+      </div>
+    </Card>
   );
 }

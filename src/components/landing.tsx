@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useTypewriter } from "@/lib/use-typewriter";
 import { usePopText } from "@/lib/use-poptext";
+import { QRCodeSVG } from "qrcode.react";
 import { ArrowRight, BookOpen, Brain, Check, Compass, GraduationCap } from "lucide-react";
 
 /* ================= Mainframe 规格资产 ================= */
@@ -405,10 +406,18 @@ export default function Landing() {
           </Link>
         </section>
 
-        <footer className="border-t border-border px-4 py-8 text-center text-xs text-ink-dim/60">
-          <span className="font-brand mr-1.5 text-[16px] align-middle text-ink">Mentora</span>✳︎
-          <span className="mx-2">·</span>
-          学习教练 × 第二大脑 × 读书伙伴 × 人生伙伴
+        <footer className="border-t border-border px-4 py-10 text-center text-xs text-ink-dim/60">
+          <div className="mx-auto mb-5 inline-flex flex-col items-center gap-2.5">
+            <div className="rounded-xl border border-border bg-white p-2.5">
+              <QRCodeSVG value={typeof window !== "undefined" ? window.location.origin : "https://mentora-orpin.vercel.app"} size={88} />
+            </div>
+            <p>手机扫码，马上开始</p>
+          </div>
+          <div>
+            <span className="font-brand mr-1.5 text-[16px] align-middle text-ink">Mentora</span>✳︎
+            <span className="mx-2">·</span>
+            学习教练 × 第二大脑 × 读书伙伴 × 人生伙伴
+          </div>
         </footer>
       </div>
     </div>
