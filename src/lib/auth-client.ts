@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { create } from "zustand";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, setStoreUser } from "@/lib/store";
 
 export interface AuthUser {
   userId: string;
@@ -39,6 +39,8 @@ export const useAuthStore = create<AuthStore>((set) => ({
     const j = await res.json();
     if (!res.ok) throw new Error(j.error || "登录失败");
     set({ user: j.user });
+    // 切换到该账号的专属仓（同步加载，内存状态随之替换为该账号的数据或空仓）
+    setStoreUser(j.user.userId);
     return j.user as AuthUser;
   },
 
@@ -51,12 +53,16 @@ export const useAuthStore = create<AuthStore>((set) => ({
     const j = await res.json();
     if (!res.ok) throw new Error(j.error || "注册失败");
     set({ user: j.user });
+    setStoreUser(j.user.userId);
     return j.user as AuthUser;
   },
 
   logout: async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     set({ user: null });
+    // 只切回匿名仓（内存状态同步替换），绝不 clear 用户仓——
+    // 曾经的 clearLocalStore 先于切仓执行，会把空状态写进用户仓导致本地快照被毁
+    setStoreUser(null);
     localStorage.removeItem(CHOICE_KEY);
   },
 
@@ -83,9 +89,16 @@ export function useAuth() {
       try {
         const res = await fetch("/api/auth/me", { cache: "no-store" });
         const j = await res.json();
-        useAuthStore.setState({ user: j.user ?? null });
+        const user = j.user ?? null;
+        useAuthStore.setState({ user });
+        // 与当前仓不一致时切仓（setStoreUser 同步加载，无竞态、无破坏性清空）
+        const target = user?.userId ?? null;
+        if (useAppStore.getState()._storeUserId !== target) {
+          setStoreUser(target);
+        }
       } catch {
         useAuthStore.setState({ user: null });
+        setStoreUser(null);
       } finally {
         useAuthStore.setState({ checking: false });
       }
@@ -94,7 +107,20 @@ export function useAuth() {
   return store;
 }
 
-/* ---------------- 云端同步 ---------------- */
+/* ---------------- 云端同步（大负载 gzip 信封，绕开 Vercel 4.5MB body 限制） ---------------- */
+
+const GZIP_THRESHOLD = 1024 * 1024; // 超过 1MB 走 gzip
+
+async function gzipBytes(text: string): Promise<Uint8Array> {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf) as Uint8Array<ArrayBuffer>;
+}
+
+async function gunzipBytes(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Response(stream).text();
+}
 
 function localData() {
   const s = useAppStore.getState();
@@ -116,16 +142,32 @@ function hasLocalData() {
 export async function pullCloud(): Promise<{ data: Record<string, unknown>; updatedAt: string } | null> {
   const res = await fetch("/api/sync", { cache: "no-store" });
   if (!res.ok) return null;
+  if (res.headers.get("content-type") === "application/x-gzip") {
+    const text = await gunzipBytes(new Uint8Array(await res.arrayBuffer()));
+    const j = JSON.parse(text) as { data: Record<string, unknown> | null; updatedAt?: string };
+    return j.data ? { data: j.data, updatedAt: j.updatedAt ?? "" } : null;
+  }
   const j = await res.json();
   return j.data ? { data: j.data, updatedAt: j.updatedAt } : null;
 }
 
 export async function pushCloud(): Promise<boolean> {
-  const res = await fetch("/api/sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ data: localData() }),
-  });
+  const text = JSON.stringify({ data: localData() });
+  let res: Response;
+  if (text.length > GZIP_THRESHOLD) {
+    const gz = await gzipBytes(text);
+    res = await fetch("/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-gzip" },
+      body: gz.buffer as ArrayBuffer,
+    });
+  } else {
+    res = await fetch("/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: text,
+    });
+  }
   if (res.ok) {
     localStorage.setItem(CHOICE_KEY, new Date().toISOString());
     return true;
@@ -138,6 +180,8 @@ export async function syncAfterLogin(
   ask: (cloudUpdatedAt: string) => Promise<"cloud" | "local">
 ): Promise<"cloud" | "local" | "pushed" | "pulled" | "none"> {
   const cloud = await pullCloud();
+  // 串号防护已由 setStoreUser 的同步切仓保证：内存状态始终属于 _storeUserId 对应的仓，
+  // 不再使用破坏性的 clearLocalStore（曾把用户本地快照写空）。
   if (!cloud) {
     // 云端为空：本地有数据就推上去
     if (hasLocalData()) {

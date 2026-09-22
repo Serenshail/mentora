@@ -1,5 +1,6 @@
 ﻿import "server-only";
 import crypto from "node:crypto";
+import zlib from "node:zlib";
 
 /* ============================================================
  * 存储层（已收口：上层只见 dbGet/dbPut/dbList/dbDelete）
@@ -13,7 +14,7 @@ import crypto from "node:crypto";
  * AES-256-GCM 加密，可随时平滑迁移、互为备份。
  * ============================================================ */
 
-/* ---------------- 通用：加密（两通道共用） ---------------- */
+/* ---------------- 通用：加密（两通道共用，gzip 压缩向后兼容） ---------------- */
 
 function encKey(): Buffer {
   const secret = process.env.AUTH_SECRET || "";
@@ -21,22 +22,30 @@ function encKey(): Buffer {
   return crypto.scryptSync(secret, "mentora-db-v1", 32);
 }
 
+const GZ_PREFIX = "GZ1.";
+
 export function encrypt(obj: unknown): string {
+  // 大库（如几百条笔记的 vault）明文 JSON 可达 9MB+，先 gzip 再加密
+  const gz = zlib.gzipSync(Buffer.from(JSON.stringify(obj), "utf8"), { level: 9 });
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", encKey(), iv);
-  const ct = Buffer.concat([cipher.update(JSON.stringify(obj), "utf8"), cipher.final()]);
+  const ct = Buffer.concat([cipher.update(gz), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, ct]).toString("base64");
+  return GZ_PREFIX + Buffer.concat([iv, tag, ct]).toString("base64");
 }
 
 export function decrypt<T>(payload: string): T {
-  const raw = Buffer.from(payload, "base64");
+  const gzipped = payload.startsWith(GZ_PREFIX);
+  const body = gzipped ? payload.slice(GZ_PREFIX.length) : payload;
+  const raw = Buffer.from(body, "base64");
   const iv = raw.subarray(0, 12);
   const tag = raw.subarray(12, 28);
   const ct = raw.subarray(28);
   const decipher = crypto.createDecipheriv("aes-256-gcm", encKey(), iv);
   decipher.setAuthTag(tag);
-  return JSON.parse(Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8")) as T;
+  const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
+  const json = gzipped ? zlib.gunzipSync(plain) : plain;
+  return JSON.parse(json.toString("utf8")) as T;
 }
 
 /* ---------------- 通用：重试（指数退避） ---------------- */
@@ -135,29 +144,70 @@ async function d1Raw<T = { k?: string; v?: string }>(sql: string, params: (strin
   return j.result?.[0]?.results ?? [];
 }
 
+/* D1 单条 SQL 有 1MB 上限，大值按块拆存：主行存 {"__chunks__":N}，块存 <path>#p0..#p(N-1) */
+const D1_CHUNK_SIZE = 380_000;
+
 async function d1Get(path: string): Promise<string | null> {
   await d1Init();
   const rows = await d1Raw<{ v?: string }>("SELECT v FROM kv WHERE k = ?", [path]);
-  return rows[0]?.v ?? null;
+  const v = rows[0]?.v;
+  if (v == null) return null;
+  const m = /^\{"__chunks__":(\d+)\}$/.exec(v);
+  if (!m) return v;
+  const n = Number(m[1]);
+  const parts = await d1Raw<{ k?: string; v?: string }>(
+    "SELECT k, v FROM kv WHERE k LIKE ? ORDER BY k",
+    [`${path}#p%`]
+  );
+  const byIdx = new Map<number, string>();
+  for (const p of parts) {
+    const idx = Number((p.k ?? "").split("#p")[1]);
+    if (p.v != null && !Number.isNaN(idx)) byIdx.set(idx, p.v);
+  }
+  let out = "";
+  for (let i = 0; i < n; i++) out += byIdx.get(i) ?? "";
+  return out;
 }
 
 async function d1Put(path: string, content: string): Promise<void> {
   await d1Init();
+  if (content.length <= D1_CHUNK_SIZE) {
+    // 若此前是分块存储，先清理旧块
+    await d1Raw("DELETE FROM kv WHERE k LIKE ?", [`${path}#p%`]);
+    await d1Raw(
+      "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+      [path, content]
+    );
+    return;
+  }
+  const parts: string[] = [];
+  for (let i = 0; i < content.length; i += D1_CHUNK_SIZE) {
+    parts.push(content.slice(i, i + D1_CHUNK_SIZE));
+  }
+  // 主行写块数；再逐块 upsert（每条 SQL 均低于 1MB 限制）
   await d1Raw(
     "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
-    [path, content]
+    [path, `{"__chunks__":${parts.length}}`]
   );
+  for (let i = 0; i < parts.length; i++) {
+    await d1Raw(
+      "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+      [`${path}#p${i}`, parts[i]]
+    );
+  }
 }
 
 async function d1List(dir: string): Promise<string[]> {
   await d1Init();
   const rows = await d1Raw<{ k?: string }>("SELECT k FROM kv WHERE k LIKE ?", [`${dir}/%`]);
-  return (rows.map((r) => r.k ?? "").filter(Boolean) as string[]).map((k) => k.slice(dir.length + 1));
+  return (rows.map((r) => r.k ?? "").filter(Boolean) as string[])
+    .filter((k) => !k.includes("#")) // 分块行不属于任何文件名
+    .map((k) => k.slice(dir.length + 1));
 }
 
 async function d1Delete(path: string): Promise<void> {
   await d1Init();
-  await d1Raw("DELETE FROM kv WHERE k = ?", [path]);
+  await d1Raw("DELETE FROM kv WHERE k = ? OR k LIKE ?", [path, `${path}#p%`]);
 }
 
 /* ---------------- 回退通道：GitHub Contents API ---------------- */

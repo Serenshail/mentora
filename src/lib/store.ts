@@ -654,8 +654,37 @@ export function setStoreUser(userId: string | null) {
   }
 
   useAppStore.persist.setOptions({ name: key });
-  useAppStore.persist.rehydrate();
-  useAppStore.setState({ _storeUserId: userId });
+
+  // 同步加载目标仓（替代 persist.rehydrate 的异步加载）：
+  // rehydrate 是异步的，期间任何 clearLocalStore/写入都会把空状态写进刚切换的仓，
+  // 曾导致用户本地快照被清空（数据"消失"事故）。localStorage 读取是同步的，无竞态。
+  const defaults = {
+    goals: [] as Goal[],
+    knowledge: [] as KnowledgeItem[],
+    books: [] as Book[],
+    sessions: [] as CouncilSession[],
+    customPersonas: [] as CustomPersona[],
+    folders: [] as string[],
+    settings: DEFAULT_SETTINGS,
+  };
+  let loaded: Partial<AppState> = {};
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { state?: Record<string, unknown>; version?: number };
+      const st = (parsed?.state ?? {}) as Partial<AppState> & { knowledge?: unknown[] };
+      loaded = (parsed?.version ?? 2) < 2
+        ? { ...st, knowledge: migrateKnowledge(st.knowledge ?? []) }
+        : st;
+    }
+  } catch {
+    /* 损坏的仓按空仓处理，绝不写入破坏 */
+  }
+  useAppStore.setState({
+    ...defaults,
+    ...loaded,
+    _storeUserId: userId,
+  } as Partial<AppState>);
 }
 
 export function clearLocalStore() {
