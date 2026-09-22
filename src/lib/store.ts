@@ -70,6 +70,7 @@ interface AppState {
   customPersonas: CustomPersona[];
   folders: string[]; // 第二大脑的文件夹（Obsidian 式目录树）
   settings: Settings;
+  _storeUserId: string | null; // 内部：当前 localStorage 仓所属用户
 
   addGoal: (g: Goal) => void;
   updateGoal: (id: string, patch: Partial<Goal>) => void;
@@ -97,6 +98,7 @@ interface AppState {
   importKnowledge: (
     items: { title: string; body: string; domain: string; sourceTitle: string; linkTitles: string[]; tags?: string[] }[]
   ) => { added: number; skipped: number };
+  rebuildLinks: () => { touched: number; placeholders: number };
   updateKnowledge: (id: string, patch: Partial<KnowledgeItem>) => void;
   removeKnowledge: (id: string) => void;
   recordReview: (id: string, ok: boolean) => void;
@@ -169,6 +171,7 @@ export const useAppStore = create<AppState>()(
       customPersonas: [],
       folders: [],
       settings: DEFAULT_SETTINGS,
+      _storeUserId: null as string | null,
 
       addGoal: (g) => set((s) => ({ goals: [g, ...s.goals] })),
       updateGoal: (id, patch) =>
@@ -309,19 +312,141 @@ export const useAppStore = create<AppState>()(
           });
           freshLinks.push(i.linkTitles ?? []);
         }
-        /* 双链两遍解析：标题（大小写不敏感）→ 笔记 id */
+        /* 双链解析：标题（大小写不敏感）→ 笔记 id；
+           解析不到的目标 = Obsidian「未解析链接」→ 建灰色占位笔记（unresolved），
+           关系链绝不丢弃；之后真笔记导入时原位合并（见下方 upgrade 逻辑） */
+        const placeholders: KnowledgeItem[] = [];
+        const placeholderIds = new Map<string, string>(); // norm(title) -> id
         const byTitle = new Map<string, string>();
-        for (const k of [...get().knowledge, ...fresh]) byTitle.set(norm(k.title), k.id);
+        for (const k of get().knowledge) byTitle.set(norm(k.title), k.id);
+        for (const k of fresh) byTitle.set(norm(k.title), k.id);
+        const resolveOrPlaceholder = (lt: string): string | null => {
+          const t = norm(lt);
+          if (!t) return null;
+          const hit = byTitle.get(t);
+          if (hit) return hit;
+          let pid = placeholderIds.get(t);
+          if (!pid) {
+            pid = uid("k");
+            placeholderIds.set(t, pid);
+            byTitle.set(t, pid);
+            placeholders.push({
+              id: pid,
+              title: lt.trim(),
+              body: "",
+              domain: "未解析链接",
+              source: "obsidian",
+              sourceTitle: "",
+              masteredAt: todayISO(),
+              reviewStage: 0,
+              nextReviewAt: undefined,
+              links: [],
+              unresolved: true,
+            });
+          }
+          return pid;
+        };
         fresh.forEach((f, i) => {
           const ids = new Set<string>();
           for (const lt of freshLinks[i]) {
-            const id = byTitle.get(norm(lt));
+            const id = resolveOrPlaceholder(lt);
             if (id && id !== f.id) ids.add(id);
           }
           f.links = [...ids];
         });
-        set((s) => ({ knowledge: [...fresh, ...s.knowledge] }));
+        /* 真笔记升级占位：同标题 unresolved 占位 → 原位替换（保留 id 与入链），不占去重名额 */
+        let knowledge = get().knowledge;
+        if (placeholders.length > 0) {
+          const upgraded = new Set<string>(); // 占位 id -> 已被真笔记替换
+          for (const f of fresh) {
+            const pid = placeholderIds.get(norm(f.title));
+            if (!pid) continue;
+            const ph = knowledge.find((k) => k.id === pid);
+            if (!ph?.unresolved) continue;
+            upgraded.add(pid);
+            knowledge = knowledge.map((k) =>
+              k.id === pid
+                ? { ...f, id: k.id, links: [...new Set([...f.links, ...k.links])] }
+                : k
+            );
+          }
+          if (upgraded.size > 0) {
+            /* 占位 id 原位保留 → 所有指向它的链接天然有效，无需清理 */
+            const keptFresh = fresh.filter((f) => !upgraded.has(f.id));
+            const newPlaceholders = placeholders.filter((p) => !upgraded.has(p.id));
+            set((s) => ({ knowledge: [...newPlaceholders, ...keptFresh, ...s.knowledge] }));
+            const added = keptFresh.length + upgraded.size;
+            return { added, skipped: items.length - added };
+          }
+        }
+        set((s) => ({ knowledge: [...placeholders, ...fresh, ...s.knowledge] }));
         return { added: fresh.length, skipped: items.length - fresh.length };
+      },
+
+      /** 重建全库关系链：扫描每篇正文的 [[标题]]，补齐导入时丢失的链接；
+          保留现有人工/AI 建立的链接，解析不到的目标建「未解析链接」占位 */
+      rebuildLinks: () => {
+        const norm = (t: string) => t.trim().toLowerCase();
+        const re = /!?\\?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+        const knowledge = get().knowledge;
+        const byTitle = new Map<string, string>();
+        for (const k of knowledge) if (!k.unresolved) byTitle.set(norm(k.title), k.id);
+        const placeholders: KnowledgeItem[] = [];
+        const phIds = new Map<string, string>();
+        const resolve = (lt: string, selfId: string): string | null => {
+          const t = norm(lt);
+          if (!t) return null;
+          const hit = byTitle.get(t);
+          if (hit && hit !== selfId) return hit;
+          if (hit === selfId) return null;
+          let pid = phIds.get(t);
+          if (!pid) {
+            const existed = knowledge.find((k) => k.unresolved && norm(k.title) === t);
+            if (existed) {
+              pid = existed.id;
+            } else {
+              pid = uid("k");
+              placeholders.push({
+                id: pid,
+                title: lt.trim(),
+                body: "",
+                domain: "未解析链接",
+                source: "obsidian",
+                sourceTitle: "",
+                masteredAt: todayISO(),
+                reviewStage: 0,
+                nextReviewAt: undefined,
+                links: [],
+                unresolved: true,
+              });
+            }
+            phIds.set(t, pid);
+            byTitle.set(t, pid);
+          }
+          return pid !== selfId ? pid : null;
+        };
+        let rebuilt = 0;
+        const next = knowledge.map((k) => {
+          const oldValid = new Set(
+            k.links.filter((l) => knowledge.some((t) => t.id === l && !t.unresolved))
+          );
+          const ids = new Set<string>(oldValid);
+          if (!k.unresolved) {
+            let m: RegExpExecArray | null;
+            re.lastIndex = 0;
+            while ((m = re.exec(k.body))) {
+              const id = resolve(m[1].trim(), k.id);
+              if (id) ids.add(id);
+            }
+          }
+          if (ids.size !== k.links.length || [...ids].sort().join() !== [...k.links].sort().join()) {
+            rebuilt += 1;
+            return { ...k, links: [...ids] };
+          }
+          return k;
+        });
+        set((s) => ({ knowledge: [...placeholders, ...next] }));
+        return { touched: rebuilt, placeholders: placeholders.length };
       },
       updateKnowledge: (id, patch) =>
         set((s) => ({
@@ -475,12 +600,24 @@ export const useAppStore = create<AppState>()(
           books: [],
           sessions: [],
           customPersonas: [],
-          settings: get().settings,
+          folders: [],
+          settings: DEFAULT_SETTINGS,
+          _storeUserId: get()._storeUserId,
         }),
     }),
     {
-      name: "mentora-store-v1",
+      name: "mentora-store-anon",
       version: 2,
+      partialize: (state) => ({
+        goals: state.goals,
+        knowledge: state.knowledge,
+        books: state.books,
+        sessions: state.sessions,
+        customPersonas: state.customPersonas,
+        folders: state.folders,
+        settings: state.settings,
+        _storeUserId: state._storeUserId,
+      }),
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Partial<AppState> & { knowledge?: unknown[] };
         if (version < 2) {
@@ -495,6 +632,44 @@ export const useAppStore = create<AppState>()(
     }
   )
 );
+
+const LEGACY_STORE_KEY = "mentora-store-v1";
+
+/** 切换用户时更换 persist key，防止同一浏览器多账号数据串仓 */
+export function setStoreUser(userId: string | null) {
+  const key = userId ? `mentora-store-${userId}` : "mentora-store-anon";
+
+  // 一次性迁移：旧固定 key -> 当前登录用户的专属 key（只迁一次，防止老用户丢数据）
+  if (userId && typeof window !== "undefined") {
+    try {
+      const oldRaw = localStorage.getItem(LEGACY_STORE_KEY);
+      const newRaw = localStorage.getItem(key);
+      if (oldRaw && !newRaw) {
+        localStorage.setItem(key, oldRaw);
+        localStorage.removeItem(LEGACY_STORE_KEY);
+      }
+    } catch {
+      /* 私密模式/localStorage 满时忽略 */
+    }
+  }
+
+  useAppStore.persist.setOptions({ name: key });
+  useAppStore.persist.rehydrate();
+  useAppStore.setState({ _storeUserId: userId });
+}
+
+export function clearLocalStore() {
+  useAppStore.setState({
+    goals: [],
+    knowledge: [],
+    books: [],
+    sessions: [],
+    customPersonas: [],
+    folders: [],
+    settings: DEFAULT_SETTINGS,
+    _storeUserId: useAppStore.getState()._storeUserId,
+  });
+}
 
 /* ------- 派生选择器 ------- */
 export function useActiveGoal(): Goal | undefined {

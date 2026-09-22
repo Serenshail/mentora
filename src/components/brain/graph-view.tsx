@@ -1,7 +1,22 @@
 "use client";
 
+/* ============================================================
+ * Obsidian 式力导向关系图谱（Canvas 版）
+ *
+ * 相比旧 SVG 版的关键升级：
+ *   1. 滚轮缩放（以鼠标为中心）+ 空白拖拽平移 + 右下角缩放按钮 + 一键适应
+ *   2. 网格分桶斥力（O(n·邻域)）+ alpha 冷却 —— 930+ 节点流畅，
+ *      旧版 O(n²)/帧 + 每帧全量重渲是截图里「网格状卡死」的根因
+ *   3. 标签随缩放级别显隐（zoom ≥ 0.75 全显，hover 邻居常显）
+ *   4. 未解析链接（unresolved）画灰色虚线虚影，与 Obsidian 一致
+ *   5. 稳定后停止重绘（CPU 归零），交互/数据变化自动唤醒
+ * ============================================================ */
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useAppStore } from "@/lib/store";
+import { toast } from "sonner";
+import { Link2 } from "lucide-react";
 import type { KnowledgeItem } from "@/lib/types";
 
 interface SimNode {
@@ -9,24 +24,22 @@ interface SimNode {
   title: string;
   domain: string;
   degree: number;
+  unresolved: boolean;
   x: number;
   y: number;
   vx: number;
   vy: number;
 }
 
-const W = 920;
-const H = 560;
+const WORLD = 1400; // 初始布局半径参考（世界坐标无边界，可无限平移）
 
 function domainColor(domain: string): string {
-  /* 沉稳编辑级色板：去品红/亮紫（AI 感），统一低饱和 */
   const palette = ["#5b54e6", "#0e7490", "#047857", "#b45309", "#9f1239", "#475569"];
   let h = 0;
   for (let i = 0; i < domain.length; i++) h = (h * 31 + domain.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 }
 
-/** Obsidian 风格力导向关系图谱 */
 export function GraphView({
   notes,
   onOpen,
@@ -34,13 +47,11 @@ export function GraphView({
   notes: KnowledgeItem[];
   onOpen: (id: string) => void;
 }) {
-  const [tick, setTick] = useState(0);
-  const [hover, setHover] = useState<string | null>(null);
-  /* Obsidian 右上角控制面板：搜索 / 目录筛选 / 孤立节点 */
   const [gQuery, setGQuery] = useState("");
   const [gDomain, setGDomain] = useState("all");
   const [showOrphans, setShowOrphans] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
 
   const gDomains = useMemo(
     () => Array.from(new Set(notes.map((n) => n.domain.split("/")[0]))).sort(),
@@ -56,116 +67,399 @@ export function GraphView({
     });
   }, [notes, gQuery, gDomain]);
 
-  const orphanIds = useMemo(() => {
-    const linked = new Set<string>();
-    for (const n of notes) for (const l of n.links) linked.add(l);
-    return new Set(notes.filter((n) => n.links.length === 0 && !linked.has(n.id)).map((n) => n.id));
-  }, [notes]);
-  const nodesRef = useRef<SimNode[]>([]);
-  const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
-
-  const edges = useMemo(() => {
-    const ids = new Set(visibleNotes.map((n) => n.id));
-    return visibleNotes.flatMap((n) =>
-      n.links
-        .filter((l) => ids.has(l))
-        .map((l) => ({ from: n.id, to: l }))
-    );
+  const edgeList = useMemo(() => {
+    const idSet = new Set(visibleNotes.map((n) => n.id));
+    const seen = new Set<string>();
+    const out: { a: string; b: string }[] = [];
+    for (const n of visibleNotes) {
+      for (const l of n.links) {
+        if (!idSet.has(l) || l === n.id) continue;
+        const key = n.id < l ? `${n.id}|${l}` : `${l}|${n.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ a: n.id, b: l });
+      }
+    }
+    return out;
   }, [visibleNotes]);
 
-  // 初始化节点
+  const orphanIds = useMemo(() => {
+    const linked = new Set<string>();
+    for (const n of visibleNotes) for (const l of n.links) linked.add(l);
+    return new Set(visibleNotes.filter((n) => n.links.length === 0 && !linked.has(n.id)).map((n) => n.id));
+  }, [visibleNotes]);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const nodesRef = useRef<SimNode[]>([]);
+  const edgesRef = useRef<{ a: string; b: string }[]>([]);
+  const camRef = useRef({ x: 0, y: 0, zoom: 1 }); // 相机：世界坐标偏移 + 缩放
+  const hoverRef = useRef<string | null>(null);
+  const dragNodeRef = useRef<string | null>(null);
+  const panRef = useRef<{ sx: number; sy: number; cx: number; cy: number } | null>(null);
+  const alphaRef = useRef(1);
+  const dirtyRef = useRef(true);
+  const sizeRef = useRef({ w: 920, h: 560 });
+  const countsRef = useRef({ nodes: 0, edges: 0 });
+  const [, forceRender] = useState(0);
+
+  /* ---- 数据 → 仿真节点（保留旧位置，新增节点螺旋散布） ---- */
   useEffect(() => {
+    edgesRef.current = edgeList;
     const prev = new Map(nodesRef.current.map((n) => [n.id, n]));
-    nodesRef.current = visibleNotes.map((n, i) => {
+    const degree = new Map<string, number>();
+    for (const e of edgeList) {
+      degree.set(e.a, (degree.get(e.a) ?? 0) + 1);
+      degree.set(e.b, (degree.get(e.b) ?? 0) + 1);
+    }
+    let i = 0;
+    nodesRef.current = visibleNotes.map((n) => {
       const old = prev.get(n.id);
-      const angle = (i / Math.max(1, visibleNotes.length)) * Math.PI * 2;
+      i += 1;
+      const angle = i * 2.399963; // 黄金角螺旋，初始散布均匀
+      const rad = 30 + Math.sqrt(i) * 14;
       return {
         id: n.id,
         title: n.title,
         domain: n.domain,
-        degree: n.links.length,
-        x: old?.x ?? W / 2 + Math.cos(angle) * 180,
-        y: old?.y ?? H / 2 + Math.sin(angle) * 180,
+        unresolved: Boolean(n.unresolved),
+        degree: degree.get(n.id) ?? 0,
+        x: old?.x ?? WORLD / 2 + Math.cos(angle) * rad,
+        y: old?.y ?? WORLD / 2 + Math.sin(angle) * rad,
         vx: 0,
         vy: 0,
       };
     });
-    setTick((t) => t + 1);
-  }, [visibleNotes]);
+    countsRef.current = { nodes: nodesRef.current.length, edges: edgeList.length };
+    alphaRef.current = 1;
+    dirtyRef.current = true;
+    forceRender((t) => t + 1);
+  }, [visibleNotes, edgeList]);
 
-  // 力模拟
+  /* ---- 主循环：物理（网格分桶）+ 按需渲染 ---- */
   useEffect(() => {
+    const canvas = canvasRef.current!;
+    const ctx = canvas.getContext("2d")!;
     let raf = 0;
     let running = true;
-    const nodes = nodesRef.current;
-    const idMap = new Map(nodes.map((n) => [n.id, n]));
 
-    const step = () => {
-      if (!running) return;
-      // 斥力
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const a = nodes[i], b = nodes[j];
-          let dx = a.x - b.x, dy = a.y - b.y;
-          let d2 = dx * dx + dy * dy;
-          if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
-          const d = Math.sqrt(d2);
-          const f = Math.min(2200 / d2, 4);
-          const fx = (dx / d) * f, fy = (dy / d) * f;
-          a.vx += fx; a.vy += fy;
-          b.vx -= fx; b.vy -= fy;
+    const byId = () => {
+      const m = new Map<string, SimNode>();
+      for (const n of nodesRef.current) m.set(n.id, n);
+      return m;
+    };
+
+    const physics = () => {
+      const nodes = nodesRef.current;
+      const edges = edgesRef.current;
+      if (nodes.length === 0) return;
+      const alpha = alphaRef.current;
+
+      /* 斥力：网格分桶，只和邻近格子里的节点相互作用 */
+      const CELL = 130;
+      const grid = new Map<string, SimNode[]>();
+      for (const n of nodes) {
+        const key = `${Math.floor(n.x / CELL)},${Math.floor(n.y / CELL)}`;
+        const bucket = grid.get(key);
+        if (bucket) bucket.push(n);
+        else grid.set(key, [n]);
+      }
+      const REP = 1400 * alpha;
+      for (const n of nodes) {
+        const cx = Math.floor(n.x / CELL);
+        const cy = Math.floor(n.y / CELL);
+        for (let gx = cx - 1; gx <= cx + 1; gx++) {
+          for (let gy = cy - 1; gy <= cy + 1; gy++) {
+            const bucket = grid.get(`${gx},${gy}`);
+            if (!bucket) continue;
+            for (const o of bucket) {
+              if (o.id <= n.id) continue;
+              let dx = n.x - o.x, dy = n.y - o.y;
+              let d2 = dx * dx + dy * dy;
+              if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+              if (d2 > CELL * CELL * 2) continue;
+              const d = Math.sqrt(d2);
+              const f = Math.min(REP / d2, 3) / d;
+              const fx = dx * f, fy = dy * f;
+              n.vx += fx; n.vy += fy;
+              o.vx -= fx; o.vy -= fy;
+            }
+          }
         }
       }
-      // 弹簧（边）
+
+      /* 弹簧：相连节点靠拢 */
+      const map = byId();
       for (const e of edges) {
-        const a = idMap.get(e.from), b = idMap.get(e.to);
+        const a = map.get(e.a), b = map.get(e.b);
         if (!a || !b) continue;
         const dx = b.x - a.x, dy = b.y - a.y;
         const d = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-        const f = ((d - 110) / d) * 0.04;
-        a.vx += dx * f; a.vy += dy * f;
-        b.vx -= dx * f; b.vy -= dy * f;
+        const rest = 95;
+        const f = ((d - rest) / d) * 0.055 * alpha;
+        const fx = dx * f, fy = dy * f;
+        a.vx += fx; a.vy += fy;
+        b.vx -= fx; b.vy -= fy;
       }
-      // 向心 + 阻尼 + 积分
+
+      /* 向心 + 阻尼 + 积分（无边界夹持——世界无限，靠缩放看全貌） */
+      const cx = WORLD / 2, cy = WORLD / 2;
       for (const n of nodes) {
-        n.vx += (W / 2 - n.x) * 0.0035;
-        n.vy += (H / 2 - n.y) * 0.0035;
-        if (dragRef.current?.id === n.id) { n.vx = 0; n.vy = 0; continue; }
-        n.vx *= 0.82; n.vy *= 0.82;
-        n.x += Math.max(-6, Math.min(6, n.vx));
-        n.y += Math.max(-6, Math.min(6, n.vy));
-        n.x = Math.max(46, Math.min(W - 46, n.x));
-        n.y = Math.max(30, Math.min(H - 30, n.y));
+        if (dragNodeRef.current === n.id) { n.vx = 0; n.vy = 0; continue; }
+        n.vx += (cx - n.x) * 0.002 * alpha;
+        n.vy += (cy - n.y) * 0.002 * alpha;
+        n.vx *= 0.85; n.vy *= 0.85;
+        n.x += Math.max(-9, Math.min(9, n.vx));
+        n.y += Math.max(-9, Math.min(9, n.vy));
       }
-      setTick((t) => t + 1);
-      raf = requestAnimationFrame(step);
+      alphaRef.current = alpha * 0.99;
     };
-    raf = requestAnimationFrame(step);
+
+    const render = () => {
+      const { w, h } = sizeRef.current;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#fcfcfd";
+      ctx.fillRect(0, 0, w, h);
+
+      const cam = camRef.current;
+      const zoom = cam.zoom;
+      const toScreen = (x: number, y: number): [number, number] => [
+        (x - cam.x) * zoom + w / 2,
+        (y - cam.y) * zoom + h / 2,
+      ];
+
+      const hover = hoverRef.current;
+      let neighborSet: Set<string> | null = null;
+      if (hover) {
+        neighborSet = new Set([hover]);
+        for (const e of edgesRef.current) {
+          if (e.a === hover) neighborSet.add(e.b);
+          if (e.b === hover) neighborSet.add(e.a);
+        }
+      }
+
+      /* 边 */
+      const map = new Map(nodesRef.current.map((n) => [n.id, n]));
+      for (const e of edgesRef.current) {
+        const a = map.get(e.a), b = map.get(e.b);
+        if (!a || !b) continue;
+        const active = !neighborSet || (neighborSet.has(e.a) && neighborSet.has(e.b));
+        ctx.beginPath();
+        ctx.moveTo(...toScreen(a.x, a.y));
+        ctx.lineTo(...toScreen(b.x, b.y));
+        ctx.strokeStyle = active ? (hover ? "#b9b4ee" : "#c9c5f2") : "#ebebf0";
+        ctx.lineWidth = (active ? 1.3 : 0.8) * Math.max(0.5, zoom);
+        ctx.stroke();
+      }
+
+      /* 节点 */
+      const showLabels = zoom >= 0.75 || nodesRef.current.length < 80;
+      for (const n of nodesRef.current) {
+        if (dragNodeRef.current && dragNodeRef.current !== n.id) { /* 拖拽中仍全量绘制 */ }
+        const active = !neighborSet || neighborSet.has(n.id);
+        const [sx, sy] = toScreen(n.x, n.y);
+        if (sx < -40 || sy < -40 || sx > w + 40 || sy > h + 40) continue; // 视口裁剪
+        const r = (n.unresolved ? 4.5 : 6 + Math.min(13, Math.sqrt(n.degree) * 2.6)) * zoom;
+        const x = sx, y = sy;
+        ctx.globalAlpha = active ? 1 : 0.15;
+        if (n.unresolved) {
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.strokeStyle = "#b6b6bd";
+          ctx.setLineDash([2.5, 2.5]);
+          ctx.lineWidth = 1.2 * Math.max(0.5, zoom);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else {
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fillStyle = domainColor(n.domain);
+          ctx.fill();
+          if (hover === n.id) {
+            ctx.strokeStyle = "#1a1a1a";
+            ctx.lineWidth = 1.6;
+            ctx.stroke();
+          }
+        }
+        /* 标签：缩放足够大，或 hover/邻居时 */
+        if (showLabels || (neighborSet && neighborSet.has(n.id))) {
+          const label = n.title.length > 14 ? n.title.slice(0, 14) + "…" : n.title;
+          ctx.font = `${11 * Math.max(0.85, zoom)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.fillStyle = hover === n.id ? "#1a1a1a" : active ? "#77777d" : "#c4c4ca";
+          ctx.fillText(label, x, y + r + 12 * Math.max(0.85, zoom));
+        }
+        ctx.globalAlpha = 1;
+      }
+    };
+
+    const loop = () => {
+      if (!running) return;
+      const needsPhysics = alphaRef.current > 0.02 || dragNodeRef.current;
+      if (needsPhysics) {
+        physics();
+        physics(); // 每帧两步，收敛更快
+        dirtyRef.current = true;
+      }
+      if (dirtyRef.current) {
+        dirtyRef.current = false;
+        render();
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
     return () => { running = false; cancelAnimationFrame(raf); };
-  }, [edges]);
+  }, []);
 
-  const neighborSet = useMemo(() => {
-    if (!hover) return null;
-    const set = new Set<string>([hover]);
-    for (const e of edges) {
-      if (e.from === hover) set.add(e.to);
-      if (e.to === hover) set.add(e.from);
-    }
-    return set;
-  }, [hover, edges]);
+  /* ---- 尺寸自适应 ---- */
+  useEffect(() => {
+    const wrap = wrapRef.current!;
+    const ro = new ResizeObserver(() => {
+      const r = wrap.getBoundingClientRect();
+      sizeRef.current = { w: r.width, h: r.height };
+      canvasRef.current!.style.width = `${r.width}px`;
+      canvasRef.current!.style.height = `${r.height}px`;
+      dirtyRef.current = true;
+    });
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, []);
 
-  const toLocal = (e: React.PointerEvent) => {
-    const rect = svgRef.current!.getBoundingClientRect();
-    return { x: ((e.clientX - rect.left) / rect.width) * W, y: ((e.clientY - rect.top) / rect.height) * H };
+  /* ---- 相机与交互 ---- */
+  const screenToWorld = (sx: number, sy: number) => {
+    const { w, h } = sizeRef.current;
+    const cam = camRef.current;
+    return { x: (sx - w / 2) / cam.zoom + cam.x, y: (sy - h / 2) / cam.zoom + cam.y };
   };
 
-  void tick; // 触发重渲
+  const pickNode = (sx: number, sy: number): SimNode | null => {
+    const { x, y } = screenToWorld(sx, sy);
+    const pad = 8 / camRef.current.zoom;
+    for (let i = nodesRef.current.length - 1; i >= 0; i--) {
+      const n = nodesRef.current[i];
+      const r = n.unresolved ? 4.5 : 6 + Math.min(13, Math.sqrt(n.degree) * 2.6);
+      const dx = n.x - x, dy = n.y - y;
+      if (dx * dx + dy * dy <= (r + pad) * (r + pad)) return n;
+    }
+    return null;
+  };
 
-  const shownNodes = nodesRef.current.filter((n) => showOrphans || !orphanIds.has(n.id));
+  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const node = pickNode(sx, sy);
+    if (node) {
+      dragNodeRef.current = node.id;
+      alphaRef.current = Math.max(alphaRef.current, 0.35);
+    } else {
+      panRef.current = { sx, sy, cx: camRef.current.x, cy: camRef.current.y };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+    if (panRef.current) {
+      camRef.current.x = panRef.current.cx - (sx - panRef.current.sx) / camRef.current.zoom;
+      camRef.current.y = panRef.current.cy - (sy - panRef.current.sy) / camRef.current.zoom;
+      dirtyRef.current = true;
+      return;
+    }
+    if (dragNodeRef.current) {
+      const n = nodesRef.current.find((nn) => nn.id === dragNodeRef.current);
+      if (n) {
+        const { x, y } = screenToWorld(sx, sy);
+        n.x = x; n.y = y;
+        dirtyRef.current = true;
+      }
+      return;
+    }
+    const node = pickNode(sx, sy);
+    if (node?.id !== hoverRef.current) {
+      hoverRef.current = node?.id ?? null;
+      e.currentTarget.style.cursor = node ? "grab" : "default";
+      dirtyRef.current = true;
+    }
+  };
+
+  const onPointerUp = () => {
+    dragNodeRef.current = null;
+    panRef.current = null;
+    alphaRef.current = Math.max(alphaRef.current, 0.12);
+  };
+
+  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const cam = camRef.current;
+    const world = screenToWorld(sx, sy);
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    cam.zoom = Math.max(0.06, Math.min(5, cam.zoom * factor));
+    /* 保证鼠标下的世界点不动 */
+    cam.x = world.x - (sx - sizeRef.current.w / 2) / cam.zoom;
+    cam.y = world.y - (sy - sizeRef.current.h / 2) / cam.zoom;
+    dirtyRef.current = true;
+  };
+
+  const zoomBy = (factor: number) => {
+    const cam = camRef.current;
+    cam.zoom = Math.max(0.06, Math.min(5, cam.zoom * factor));
+    dirtyRef.current = true;
+  };
+
+  const fitView = () => {
+    const nodes = nodesRef.current;
+    if (nodes.length === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of nodes) {
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y);
+    }
+    const { w, h } = sizeRef.current;
+    const pad = 60;
+    camRef.current.zoom = Math.max(0.06, Math.min(2.5,
+      Math.min((w - pad * 2) / Math.max(1, maxX - minX), (h - pad * 2) / Math.max(1, maxY - minY))
+    ));
+    camRef.current.x = (minX + maxX) / 2;
+    camRef.current.y = (minY + maxY) / 2;
+    dirtyRef.current = true;
+  };
+
+  const onClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const node = pickNode(e.clientX - rect.left, e.clientY - rect.top);
+    if (node) onOpen(node.id);
+  };
+
+  const rebuild = () => {
+    if (rebuilding) return;
+    if (!confirm("扫描全部笔记正文，重建 [[双链]] 关系？\n\n解析不到目标标题的链接会建成「未解析链接」占位笔记（Obsidian 同款行为）；已有人工/AI 建立的链接保留。")) return;
+    setRebuilding(true);
+    try {
+      const r = useAppStore.getState().rebuildLinks();
+      toast.success(`关系链重建完成：更新 ${r.touched} 篇，新建未解析占位 ${r.placeholders} 篇`);
+      alphaRef.current = 1;
+      dirtyRef.current = true;
+    } catch {
+      toast.error("重建失败，稍后再试");
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
+  const shownCount = showOrphans ? countsRef.current.nodes : nodesRef.current.filter((n) => !orphanIds.has(n.id)).length;
 
   return (
-    <div className="relative">
+    <div className="relative" ref={wrapRef}>
       {/* Obsidian 式右上角控制面板 */}
       <div className="absolute right-3 top-3 z-10 w-56 rounded-xl border border-border bg-white/95 p-2.5 shadow-sm backdrop-blur">
         <div className="mb-1.5 flex items-center justify-between">
@@ -221,79 +515,52 @@ export function GraphView({
               />
               显示孤立节点（无连接）
             </label>
+            <button
+              onClick={rebuild}
+              disabled={rebuilding}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1.5 text-[11.5px] text-ink-dim transition hover:border-accent/40 hover:text-accent cursor-pointer disabled:opacity-50"
+              title="扫描全部笔记正文里的 [[双链]]，重建导入时丢失的关系；解析不到的目标建成灰色占位笔记"
+            >
+              <Link2 className="size-3.5" />
+              {rebuilding ? "重建中…" : "重建关系链（修复导入丢失）"}
+            </button>
           </div>
         ) : (
           <p className="text-[10.5px] text-ink-dim/70">
-            {shownNodes.length} 节点 · {edges.length} 连接
+            {shownCount} 节点 · {countsRef.current.edges} 连接
           </p>
         )}
       </div>
-    <svg
-      ref={svgRef}
-      viewBox={`0 0 ${W} ${H}`}
-      className="w-full rounded-2xl border border-border bg-[#fcfcfd] touch-none"
-      style={{ height: 560 }}
-      onPointerMove={(e) => {
-        if (!dragRef.current) return;
-        const { x, y } = toLocal(e);
-        const n = nodesRef.current.find((nn) => nn.id === dragRef.current!.id);
-        if (n) { n.x = x; n.y = y; }
-      }}
-      onPointerUp={() => { dragRef.current = null; }}
-      onPointerLeave={() => { dragRef.current = null; }}
-    >
-      {/* 边 */}
-      {edges.map((e, i) => {
-        const a = nodesRef.current.find((n) => n.id === e.from);
-        const b = nodesRef.current.find((n) => n.id === e.to);
-        if (!a || !b) return null;
-        const active = !neighborSet || (neighborSet.has(e.from) && neighborSet.has(e.to));
-        return (
-          <line
-            key={i}
-            x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-            stroke={active ? "#b9b4ee" : "#e9e9ec"}
-            strokeWidth={active ? 1.4 : 1}
-          />
-        );
-      })}
-      {/* 节点 */}
-      {shownNodes.map((n) => {
-        const r = 7 + Math.min(10, n.degree * 2.4);
-        const active = !neighborSet || neighborSet.has(n.id);
-        return (
-          <g
-            key={n.id}
-            transform={`translate(${n.x},${n.y})`}
-            style={{ cursor: "grab", opacity: active ? 1 : 0.25 }}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              const { x, y } = toLocal(e);
-              dragRef.current = { id: n.id, offsetX: n.x - x, offsetY: n.y - y };
-            }}
-            onClick={() => onOpen(n.id)}
-            onPointerEnter={() => setHover(n.id)}
-            onPointerLeave={() => setHover(null)}
-          >
-            <circle r={r} fill={domainColor(n.domain)} stroke={hover === n.id ? "#1a1a1a" : "none"} strokeWidth={2} />
-            <text
-              y={r + 13}
-              textAnchor="middle"
-              fontSize={11}
-              fill={hover === n.id ? "#1a1a1a" : "#6e6e73"}
-              style={{ pointerEvents: "none", userSelect: "none" }}
-            >
-              {n.title.length > 12 ? n.title.slice(0, 12) + "…" : n.title}
-            </text>
-          </g>
-        );
-      })}
+
+      {/* 右下角缩放控件（Obsidian 同款） */}
+      <div className="absolute bottom-3 right-3 z-10 flex overflow-hidden rounded-lg border border-border bg-white/95 shadow-sm backdrop-blur">
+        <button onClick={() => zoomBy(1 / 1.3)} title="缩小" className="px-2.5 py-1.5 text-sm text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">−</button>
+        <button onClick={() => { camRef.current.zoom = 1; dirtyRef.current = true; }} title="重置缩放" className="border-x border-border px-2.5 py-1.5 text-[11px] tabular text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">
+          {Math.round(camRef.current.zoom * 100)}%
+        </button>
+        <button onClick={() => zoomBy(1.3)} title="放大" className="px-2.5 py-1.5 text-sm text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">+</button>
+        <button onClick={fitView} title="适应全图" className="border-l border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">适应</button>
+      </div>
+
+      <canvas
+        ref={canvasRef}
+        className="block w-full cursor-default touch-none rounded-2xl border border-border bg-[#fcfcfd]"
+        style={{ height: 560 }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={() => { hoverRef.current = null; onPointerUp(); }}
+        onClick={onClick}
+        onWheel={onWheel}
+        onDoubleClick={fitView}
+      />
       {visibleNotes.length === 0 && (
-        <text x={W / 2} y={H / 2} textAnchor="middle" fill="#a1a1aa" fontSize={14}>
-          {notes.length === 0 ? "笔记还不够多——先积累几条，图谱会长出来" : "没有匹配的笔记"}
-        </text>
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <p className="text-sm text-ink-dim/60">
+            {notes.length === 0 ? "笔记还不够多——先积累几条，图谱会长出来" : "没有匹配的笔记"}
+          </p>
+        </div>
       )}
-    </svg>
     </div>
   );
 }

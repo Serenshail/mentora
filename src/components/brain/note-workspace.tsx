@@ -537,31 +537,48 @@ export function NoteWorkspace({
       for (const k of [...dir.notes].sort((a, b) => a.title.localeCompare(b.title, "zh"))) {
         const active = k.id === openId;
         rows.push(
-          <button
+          <div
             key={k.id}
             draggable
             onDragStart={(e) => {
               e.dataTransfer.setData("text/mentora-note", k.id);
               e.dataTransfer.effectAllowed = "move";
             }}
-            onClick={() => {
-              onOpenNote(k.id);
-              onModeChange("preview");
-            }}
             className={cn(
-              "w-full cursor-grab rounded-lg px-2 py-1.5 text-left transition active:cursor-grabbing",
+              "group relative flex w-full items-start rounded-lg transition",
               active ? "bg-accent/[0.09]" : "hover:bg-black/[0.035]"
             )}
             style={{ marginLeft: depth > 0 ? 12 : 0 }}
           >
-            <p className={cn("truncate text-[12.5px]", active ? "font-semibold text-accent" : "text-ink")}>
-              {k.title}
-            </p>
-            <p className="mt-0.5 truncate text-[10.5px] text-ink-dim/70">
-              {k.body.replace(/\[\[([^\[\]]+)\]\]/g, "$1").replace(/[#*`>-]/g, "").slice(0, 40) ||
-                (TAGS_OF(k).length ? TAGS_OF(k).slice(0, 3).map((t) => "#" + t).join(" ") : "（空笔记）")}
-            </p>
-          </button>
+            <button
+              onClick={() => {
+                onOpenNote(k.id);
+                onModeChange("preview");
+              }}
+              className="min-w-0 flex-1 cursor-grab px-2 py-1.5 text-left active:cursor-grabbing"
+            >
+              <p className={cn("truncate text-[12.5px]", active ? "font-semibold text-accent" : "text-ink")}>
+                {k.title}
+              </p>
+              <p className="mt-0.5 truncate text-[10.5px] text-ink-dim/70">
+                {k.body.replace(/\[\[([^\[\]]+)\]\]/g, "$1").replace(/[#*`>-]/g, "").slice(0, 40) ||
+                  (TAGS_OF(k).length ? TAGS_OF(k).slice(0, 3).map((t) => "#" + t).join(" ") : "（空笔记）")}
+              </p>
+            </button>
+            <button
+              title="删除这篇笔记"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!confirm(`删除《${k.title}》？此操作不可撤销。`)) return;
+                removeKnowledge(k.id);
+                if (openId === k.id) onOpenNote(null);
+                toast.success("已删除");
+              }}
+              className="mr-1 mt-1.5 hidden shrink-0 rounded p-1 text-ink-dim/50 transition hover:text-bad group-hover:block cursor-pointer"
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </div>
         );
       }
       if (depth > 0 && dir.notes.length === 0 && dir.dirs.size === 0) {
@@ -656,23 +673,40 @@ export function NoteWorkspace({
           renderDir(child, 1)
         )}
         {dirTree.notes.map((k) => (
-          <button
+          <div
             key={k.id}
             draggable
             onDragStart={(e) => e.dataTransfer.setData("text/mentora-note", k.id)}
-            onClick={() => {
-              onOpenNote(k.id);
-              onModeChange("preview");
-            }}
             className={cn(
-              "w-full cursor-grab rounded-lg px-2 py-1.5 text-left transition active:cursor-grabbing",
+              "group relative flex w-full items-start rounded-lg transition",
               k.id === openId ? "bg-accent/[0.09]" : "hover:bg-black/[0.035]"
             )}
           >
-            <p className={cn("truncate text-[12.5px]", k.id === openId ? "font-semibold text-accent" : "text-ink")}>
-              {k.title}
-            </p>
-          </button>
+            <button
+              onClick={() => {
+                onOpenNote(k.id);
+                onModeChange("preview");
+              }}
+              className="min-w-0 flex-1 cursor-grab px-2 py-1.5 text-left active:cursor-grabbing"
+            >
+              <p className={cn("truncate text-[12.5px]", k.id === openId ? "font-semibold text-accent" : "text-ink")}>
+                {k.title}
+              </p>
+            </button>
+            <button
+              title="删除这篇笔记"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!confirm(`删除《${k.title}》？此操作不可撤销。`)) return;
+                removeKnowledge(k.id);
+                if (openId === k.id) onOpenNote(null);
+                toast.success("已删除");
+              }}
+              className="mr-1 mt-1 hidden shrink-0 rounded p-1 text-ink-dim/50 transition hover:text-bad group-hover:block cursor-pointer"
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </div>
         ))}
       </div>
       <p className="pt-1.5 text-[10px] text-ink-dim/60">
