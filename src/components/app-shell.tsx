@@ -12,7 +12,6 @@ import {
   GraduationCap,
   Settings2,
   LogOut,
-  PanelLeftClose,
   PanelLeftOpen,
   ShieldCheck,
 } from "lucide-react";
@@ -89,10 +88,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           collapsed ? "w-14" : "w-64"
         )}
       >
-        {!collapsed && (
+        {!collapsed ? (
           <div className="flex items-center px-3 pb-4 pt-5">
             <Link href="/" className="flex items-baseline px-2">
               <span className="font-brand text-[30px] leading-none text-ink">Mentora</span>
+            </Link>
+          </div>
+        ) : (
+          /* 收起态：M 居中，字号压在栏宽（56px）以内不越界 */
+          <div className="flex items-center justify-center pb-3 pt-4">
+            <Link href="/" className="font-brand text-[18px] leading-none text-ink">
+              M
             </Link>
           </div>
         )}
@@ -163,17 +169,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className={cn("mt-auto pb-4 pt-2", collapsed ? "px-1.5" : "px-3")}>
-          {/* 收起/展开按钮：放底部（反馈上方），收起态只剩图标 */}
+          {/* 收起/展开按钮：纯图标、箭头朝外，位于底部（反馈/账号上方） */}
           <button
             onClick={() => setCollapsed((v) => !v)}
             title={collapsed ? "展开侧栏" : "收起侧栏"}
-            className={cn(
-              "mb-1.5 flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink cursor-pointer",
-              collapsed ? "justify-center" : "w-full"
-            )}
+            className="mb-1.5 flex items-center justify-center rounded-lg p-1.5 text-ink-dim/60 transition hover:bg-black/[0.04] hover:text-ink cursor-pointer"
           >
-            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-            {!collapsed && "收起侧栏"}
+            <PanelLeftOpen className="size-4" />
           </button>
           {!collapsed && <FeedbackWidget />}
           {user ? (

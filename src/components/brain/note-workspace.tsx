@@ -147,6 +147,7 @@ export function NoteWorkspace({
   const [menuFor, setMenuFor] = useState<string | null>(null); // 当前打开 ⋮ 菜单的文件夹
   const [showTags, setShowTags] = useState(false); // 标签筛选默认收起
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null); // 标题栏：编辑态失焦豁免区
 
   /* 点击空白处关闭文件夹菜单 */
   useEffect(() => {
@@ -968,7 +969,7 @@ export function NoteWorkspace({
           ) : (
             <div className="flex h-full flex-col">
               {/* 标题行 + 模式切换 */}
-              <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+              <div ref={headerRef} className="flex items-center gap-2 border-b border-border px-4 py-2.5">
                 <input
                   className="min-w-0 flex-1 bg-transparent text-[17px] font-bold tracking-[-0.01em] text-ink outline-none"
                   value={note.title}
@@ -1014,6 +1015,7 @@ export function NoteWorkspace({
                     <button
                       key={b.title}
                       title={b.title}
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => b.run(h)}
                       disabled={b.id === "autolink" && linking}
                       className="rounded-md p-1.5 text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
@@ -1044,6 +1046,7 @@ export function NoteWorkspace({
                       return (
                         <div key={s.targetId} className="flex items-center gap-2 text-[12.5px]">
                           <button
+                            onMouseDown={(e) => e.preventDefault()}
                             disabled={already}
                             onClick={() => {
                               linkNotes(note.id, s.targetId);
@@ -1067,71 +1070,69 @@ export function NoteWorkspace({
                 </div>
               )}
 
-              {/* 正文：编辑（左写右实时渲染，Obsidian 式所见即所得）/ 预览 */}
+              {/* 正文：编辑（单栏沉浸写，写完点别处自动转排版文档）/ 预览 */}
               <div className="relative flex-1 overflow-hidden">
                 {mode === "edit" ? (
-                  <div className="grid h-full grid-cols-1 overflow-hidden lg:grid-cols-2">
-                    <div className="relative h-full overflow-y-auto border-r border-border">
-                      <textarea
-                        ref={taRef}
-                        className="h-full w-full resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-relaxed text-ink outline-none"
-                        value={note.body}
-                        spellCheck={false}
-                        placeholder="用 Markdown 写。输入 [[ 可以链接到其他笔记…"
-                        onChange={(e) => onTaChange(e.target.value, e.target.selectionStart ?? 0)}
-                        onClick={(e) => onTaChange(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
-                        onKeyDown={onTaKeyDown}
-                      />
-                      {/* [[ 补全下拉 */}
-                      {suggest && (
-                        <div className="absolute left-4 right-4 top-16 z-10 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
-                          <p className="border-b border-border bg-surface-2 px-3 py-1 text-[10px] text-ink-dim">
-                            ↑↓ 选择 · Enter 插入 · Esc 关闭
-                          </p>
-                          {suggestCandidates.map((k, i) => (
-                            <button
-                              key={k.id}
-                              onClick={() => applySuggest(k.title)}
-                              className={cn(
-                                "block w-full px-3 py-1.5 text-left text-[13px] cursor-pointer",
-                                i === suggestIdx ? "bg-accent/[0.09] text-accent" : "text-ink hover:bg-black/[0.03]"
-                              )}
-                            >
-                              {k.title}
-                              <span className="ml-2 text-[10px] text-ink-dim/60">{k.domain}</span>
-                            </button>
-                          ))}
+                  <div className="relative h-full overflow-y-auto">
+                    <textarea
+                      ref={taRef}
+                      className="min-h-full w-full resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-relaxed text-ink outline-none"
+                      value={note.body}
+                      spellCheck={false}
+                      placeholder="像聊天一样写就行——写完点一下别处，自动变成排版好的文档。输入 [[ 可以链接其他笔记…"
+                      onChange={(e) => onTaChange(e.target.value, e.target.selectionStart ?? 0)}
+                      onClick={(e) => onTaChange(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
+                      onKeyDown={onTaKeyDown}
+                      onBlur={(e) => {
+                        /* [[ 补全未关闭时先留在编辑态，避免误跳预览 */
+                        if (suggest) {
+                          setSuggest(null);
+                          return;
+                        }
+                        /* 焦点移到标题栏/模式切换（页头）时留在编辑态 */
+                        const next = e.relatedTarget as Node | null;
+                        if (next && headerRef.current?.contains(next)) return;
+                        onModeChange("preview");
+                      }}
+                    />
+                    {/* [[ 补全下拉 */}
+                    {suggest && (
+                      <div className="absolute left-4 right-4 top-16 z-10 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
+                        <p className="border-b border-border bg-surface-2 px-3 py-1 text-[10px] text-ink-dim">
+                          ↑↓ 选择 · Enter 插入 · Esc 关闭
+                        </p>
+                        {suggestCandidates.map((k, i) => (
                           <button
-                            onClick={() => {
-                              const t = suggest.fragment.trim();
-                              if (t) applySuggest(t);
-                            }}
+                            key={k.id}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => applySuggest(k.title)}
                             className={cn(
-                              "block w-full border-t border-border px-3 py-1.5 text-left text-[13px] cursor-pointer",
-                              suggestCandidates.length === 0 && suggestIdx === 0 ? "bg-accent/[0.09] text-accent" : "text-ink-dim hover:text-ink"
+                              "block w-full px-3 py-1.5 text-left text-[13px] cursor-pointer",
+                              i === suggestIdx ? "bg-accent/[0.09] text-accent" : "text-ink hover:bg-black/[0.03]"
                             )}
                           >
-                            ＋ 新建「{suggest.fragment.trim() || "…"}」并链接
+                            {k.title}
+                            <span className="ml-2 text-[10px] text-ink-dim/60">{k.domain}</span>
                           </button>
-                        </div>
-                      )}
-                    </div>
-                    {/* 右半：实时渲染（跟着输入即时变） */}
-                    <div className="hidden h-full overflow-y-auto px-4 py-4 lg:block">
-                      {note.body.trim() ? (
-                        <WikiMarkdown
-                          body={note.body}
-                          notes={knowledge}
-                          onOpen={(id) => onOpenNote(id)}
-                          onCreate={(title) => openByTitle(title, true)}
-                        />
-                      ) : (
-                        <p className="pt-10 text-center text-sm text-ink-dim">左侧写，右侧即时成型。</p>
-                      )}
-                    </div>
+                        ))}
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            const t = suggest.fragment.trim();
+                            if (t) applySuggest(t);
+                          }}
+                          className={cn(
+                            "block w-full border-t border-border px-3 py-1.5 text-left text-[13px] cursor-pointer",
+                            suggestCandidates.length === 0 && suggestIdx === 0 ? "bg-accent/[0.09] text-accent" : "text-ink-dim hover:text-ink"
+                          )}
+                        >
+                          ＋ 新建「{suggest.fragment.trim() || "…"}」并链接
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  <div className="px-5 py-4">
+                  <div className="h-full overflow-y-auto px-5 py-4">
                     {note.body.trim() ? (
                       <WikiMarkdown
                         body={note.body}
