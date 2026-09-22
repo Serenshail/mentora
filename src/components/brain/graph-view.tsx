@@ -39,6 +39,7 @@ function domainColor(domain: string): string {
   for (let i = 0; i < domain.length; i++) h = (h * 31 + domain.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 }
+void domainColor; // 已改为 Obsidian 单色系，保留以防后续需要
 
 export function GraphView({
   notes,
@@ -253,7 +254,7 @@ export function GraphView({
         ctx.beginPath();
         ctx.moveTo(...toScreen(a.x, a.y));
         ctx.lineTo(...toScreen(b.x, b.y));
-        ctx.strokeStyle = active ? (hover ? "#b9b4ee" : "#c9c5f2") : "#ebebf0";
+        ctx.strokeStyle = active ? (hover ? "#8a8a92" : "#c9c9cf") : "#e4e4e9";
         ctx.lineWidth = (active ? 1.3 : 0.8) * Math.max(0.5, zoom);
         ctx.stroke();
       }
@@ -277,9 +278,11 @@ export function GraphView({
           ctx.stroke();
           ctx.setLineDash([]);
         } else {
+          /* Obsidian 单色系：连接越多越黑，无彩色 */
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
-          ctx.fillStyle = domainColor(n.domain);
+          const t = Math.min(1, n.degree / 8); // 0 孤立 → 1枢纽
+          ctx.fillStyle = t > 0.5 ? "#232326" : t > 0.15 ? "#55555c" : "#8f8f96";
           ctx.fill();
           if (hover === n.id) {
             ctx.strokeStyle = "#1a1a1a";
@@ -545,7 +548,7 @@ export function GraphView({
       <canvas
         ref={canvasRef}
         className="block w-full cursor-default touch-none rounded-2xl border border-border bg-[#fcfcfd]"
-        style={{ height: 560 }}
+        style={{ height: "calc(100vh - 170px)", minHeight: 480 }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

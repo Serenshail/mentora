@@ -89,27 +89,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           collapsed ? "w-14" : "w-64"
         )}
       >
-        <div className="flex items-center justify-between px-3 pb-4 pt-5">
-          {collapsed ? (
-            <Link href="/" className="mx-auto font-brand text-[22px] leading-none text-ink">
-              M
-            </Link>
-          ) : (
+        {!collapsed && (
+          <div className="flex items-center px-3 pb-4 pt-5">
             <Link href="/" className="flex items-baseline px-2">
               <span className="font-brand text-[30px] leading-none text-ink">Mentora</span>
             </Link>
-          )}
-          <button
-            onClick={() => setCollapsed((v) => !v)}
-            title={collapsed ? "展开侧栏" : "收起侧栏"}
-            className={cn(
-              "rounded-md p-1 text-ink-dim/60 transition hover:text-ink cursor-pointer",
-              collapsed && "mx-auto"
-            )}
-          >
-            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-          </button>
-        </div>
+          </div>
+        )}
 
         <div>
           <nav className={cn("space-y-0.5", collapsed ? "px-1.5" : "px-3")}>
@@ -177,6 +163,18 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className={cn("mt-auto pb-4 pt-2", collapsed ? "px-1.5" : "px-3")}>
+          {/* 收起/展开按钮：放底部（反馈上方），收起态只剩图标 */}
+          <button
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? "展开侧栏" : "收起侧栏"}
+            className={cn(
+              "mb-1.5 flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink cursor-pointer",
+              collapsed ? "justify-center" : "w-full"
+            )}
+          >
+            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            {!collapsed && "收起侧栏"}
+          </button>
           {!collapsed && <FeedbackWidget />}
           {user ? (
             <div className="mt-1 flex items-center gap-2 rounded-xl px-2.5 py-2">

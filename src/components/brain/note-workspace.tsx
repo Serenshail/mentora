@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import {
   ArrowDownUp, Bold, Braces, ChevronRight, Eye, FileText, FolderPlus, Heading2, Heading3,
   PanelRight,
-  Link2, List, ListOrdered, Minus, Pencil, Plus, Quote, RefreshCcw, Search, Sparkles, Tag,
+  Link2, List, ListOrdered, Minus, MoreVertical, Pencil, Plus, Quote, RefreshCcw, Search, Sparkles, Tag,
   Trash2, Type, X, Zap,
 } from "lucide-react";
 
@@ -144,7 +144,17 @@ export function NoteWorkspace({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null); // 当前打开 ⋮ 菜单的文件夹
+  const [showTags, setShowTags] = useState(false); // 标签筛选默认收起
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  /* 点击空白处关闭文件夹菜单 */
+  useEffect(() => {
+    if (!menuFor) return;
+    const close = () => setMenuFor(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [menuFor]);
 
   /* [[ 自动补全状态：fragment 为 [[ 之后到光标的文本 */
   const [suggest, setSuggest] = useState<{ fragment: string; index: number } | null>(null);
@@ -462,7 +472,6 @@ export function NoteWorkspace({
   const renderDir = (dir: TreeDir, depth: number): React.ReactNode => {
     const isOpen = expanded.has(dir.path) || depth === 0;
     const subCount = countNotes(dir);
-    const isCustomEmpty = folders.includes(dir.path) && subCount === 0 && dir.dirs.size === 0;
     const rows: React.ReactNode[] = [];
     if (depth > 0) {
       rows.push(
@@ -480,7 +489,7 @@ export function NoteWorkspace({
             setDragOverPath(null);
           }}
           className={cn(
-            "group flex items-center gap-1 rounded-lg px-1.5 py-1.5 transition",
+            "group relative flex items-center gap-1 rounded-lg px-1.5 py-1.5 transition",
             dragOverPath === dir.path
               ? "bg-accent/[0.14] ring-1 ring-accent/40"
               : isOpen
@@ -505,27 +514,58 @@ export function NoteWorkspace({
             <span className="tabular shrink-0 text-[10px] text-ink-dim/60">{subCount}</span>
           </button>
           <button
-            title="在这个文件夹里新建笔记"
-            onClick={() => createNote(dir.path)}
+            title="文件夹操作"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuFor(menuFor === dir.path ? null : dir.path);
+            }}
             className="hidden shrink-0 rounded p-0.5 text-ink-dim/60 transition hover:text-ink group-hover:block cursor-pointer"
           >
-            <Plus className="size-3.5" />
+            <MoreVertical className="size-3.5" />
           </button>
-          {isCustomEmpty && (
-            <button
-              title="删除这个空文件夹"
-              onClick={() => {
-                removeFolder(dir.path);
-                setExpanded((s) => {
-                  const next = new Set(s);
-                  next.delete(dir.path);
-                  return next;
-                });
-              }}
-              className="hidden shrink-0 rounded p-0.5 text-ink-dim/60 transition hover:text-bad group-hover:block cursor-pointer"
+          {menuFor === dir.path && (
+            <div
+              className="absolute z-20 w-36 overflow-hidden rounded-lg border border-border bg-white py-1 shadow-lg"
+              style={{ top: "100%", left: 6 + depth * 12 }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <Trash2 className="size-3" />
-            </button>
+              <button
+                onClick={() => {
+                  createNote(dir.path);
+                  setMenuFor(null);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-ink hover:bg-black/[0.04] cursor-pointer"
+              >
+                <Plus className="size-3.5" /> 新建笔记
+              </button>
+              <button
+                onClick={() => {
+                  const total = countNotes(dir);
+                  const msg = total > 0
+                    ? `删除文件夹「${dir.name}」及其中的 ${total} 篇笔记？此操作不可撤销。`
+                    : `删除空文件夹「${dir.name}」？`;
+                  if (!confirm(msg)) return;
+                  // 先删光里面的笔记（含子文件夹），再移除文件夹本身
+                  const delAll = (d: TreeDir) => {
+                    for (const k of d.notes) removeKnowledge(k.id);
+                    for (const c of d.dirs.values()) delAll(c);
+                  };
+                  delAll(dir);
+                  removeFolder(dir.path);
+                  setExpanded((s) => {
+                    const next = new Set(s);
+                    next.delete(dir.path);
+                    return next;
+                  });
+                  setMenuFor(null);
+                  if (openId && dir.notes.some((k) => k.id === openId)) onOpenNote(null);
+                  toast.success("已删除文件夹");
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-bad hover:bg-bad/[0.06] cursor-pointer"
+              >
+                <Trash2 className="size-3.5" /> 删除文件夹
+              </button>
+            </div>
           )}
         </div>
       );
@@ -608,23 +648,34 @@ export function NoteWorkspace({
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      {/* 标签筛选 */}
+      {/* 标签筛选（默认收起：导入大库时标签会堆成一片，展开才显示） */}
       {allTags.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1">
-          {allTags.map(([t, n]) => (
-            <button
-              key={t}
-              onClick={() => setActiveTag(activeTag === t ? null : t)}
-              className={cn(
-                "rounded-full border px-2 py-0.5 text-[10.5px] transition cursor-pointer",
-                activeTag === t
-                  ? "border-accent/40 bg-accent/[0.1] font-semibold text-accent"
-                  : "border-border bg-white text-ink-dim hover:text-ink"
-              )}
-            >
-              #{t} <span className="tabular opacity-60">{n}</span>
-            </button>
-          ))}
+        <div className="mb-1.5">
+          <button
+            onClick={() => setShowTags((v) => !v)}
+            className="flex w-full items-center gap-1 text-left text-[10.5px] font-semibold uppercase tracking-[0.12em] text-ink-dim/70 hover:text-ink cursor-pointer"
+          >
+            <ChevronRight className={cn("size-3 transition", showTags && "rotate-90")} />
+            标签筛选 · {allTags.length}
+          </button>
+          {showTags && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {allTags.map(([t, n]) => (
+                <button
+                  key={t}
+                  onClick={() => setActiveTag(activeTag === t ? null : t)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10.5px] transition cursor-pointer",
+                    activeTag === t
+                      ? "border-accent/40 bg-accent/[0.1] font-semibold text-accent"
+                      : "border-border bg-white text-ink-dim hover:text-ink"
+                  )}
+                >
+                  #{t} <span className="tabular opacity-60">{n}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -868,7 +919,7 @@ export function NoteWorkspace({
       {/* 工作台：左缘 ribbon + 文件夹树 + 编辑器 + 功能面板（可收起） */}
       <div
         className={cn(
-          "flex h-[calc(100vh-118px)] min-h-[500px] overflow-hidden rounded-2xl border border-border bg-white",
+          "flex h-[calc(100vh-104px)] min-h-[500px] overflow-hidden rounded-2xl border border-border bg-white",
           rightOpen ? "" : ""
         )}
       >
