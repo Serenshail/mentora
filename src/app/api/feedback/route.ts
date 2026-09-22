@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { dbFeedbackSave } from "@/lib/server/db";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -65,6 +66,8 @@ export async function POST(req: NextRequest) {
       );
     }
     const issue = await res.json();
+    /* 双写：D1 也存一份（冗余备份，失败不影响主流程） */
+    await dbFeedbackSave({ number: issue.number, type, content, contact, page });
     return Response.json({ ok: true, url: issue.html_url, number: issue.number });
   } catch {
     return Response.json({ error: "网络错误，反馈未送达" }, { status: 502 });

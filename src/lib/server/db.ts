@@ -1,4 +1,4 @@
-import "server-only";
+﻿import "server-only";
 import crypto from "node:crypto";
 
 /* ============================================================
@@ -6,9 +6,10 @@ import crypto from "node:crypto";
  *
  * 双通道设计（大厂 serverless 标配）：
  *   主通道  Upstash Redis REST —— <10ms、原子写、无限流焦虑
- *   回退   GitHub Contents API —— 无 Upstash 环境变量时使用
+ *   通道 2  Cloudflare D1（HTTP API）—— 无 Upstash 时使用（当前生产主通道）
+ *   回退   GitHub Contents API —— 两者都未配置时的兜底
  *
- * 两者共用同一套 key（users/xxx.json、sync/yyy.json）与
+ * 三者共用同一套 key（users/xxx.json、data/yyy.json）与
  * AES-256-GCM 加密，可随时平滑迁移、互为备份。
  * ============================================================ */
 
@@ -66,7 +67,7 @@ async function withRetry<T>(fn: () => Promise<Response>): Promise<Response> {
 
 const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || "";
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
-const useUpstash = () => UPSTASH_URL && UPSTASH_TOKEN;
+const hasUpstash = () => Boolean(UPSTASH_URL && UPSTASH_TOKEN);
 
 async function upstash<T = unknown>(
   command: (string | number)[]
@@ -102,6 +103,63 @@ async function upstashDelete(path: string): Promise<void> {
   await upstash(["DEL", path]);
 }
 
+/* ---------------- 通道 2：Cloudflare D1（HTTP API，免费额度：5M 读/天、100k 写/天） ---------------- */
+
+const CF_ACCOUNT = process.env.CLOUDFLARE_ACCOUNT_ID || "";
+const CF_DB_ID = process.env.CLOUDFLARE_D1_DATABASE_ID || "";
+const CF_TOKEN = process.env.CLOUDFLARE_D1_API_TOKEN || "";
+const hasD1 = () => Boolean(CF_ACCOUNT && CF_DB_ID && CF_TOKEN);
+
+/** 冷启动懒建表：每个 isolate 只跑一次 */
+let d1Ready: Promise<void> | null = null;
+function d1Init(): Promise<void> {
+  d1Ready ??= (async () => {
+    await d1Raw("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)", []);
+  })();
+  return d1Ready;
+}
+
+async function d1Raw<T = { k?: string; v?: string }>(sql: string, params: (string | number | null)[]): Promise<T[]> {
+  const res = await withRetry(() =>
+    fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/d1/database/${CF_DB_ID}/query`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${CF_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ sql, params }),
+      cache: "no-store",
+    })
+  );
+  const j = (await res.json().catch(() => null)) as
+    | { success?: boolean; result?: { results?: T[] }[] }
+    | null;
+  if (!res.ok || !j?.success) throw new Error(`D1 请求失败（${res.status}）`);
+  return j.result?.[0]?.results ?? [];
+}
+
+async function d1Get(path: string): Promise<string | null> {
+  await d1Init();
+  const rows = await d1Raw<{ v?: string }>("SELECT v FROM kv WHERE k = ?", [path]);
+  return rows[0]?.v ?? null;
+}
+
+async function d1Put(path: string, content: string): Promise<void> {
+  await d1Init();
+  await d1Raw(
+    "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+    [path, content]
+  );
+}
+
+async function d1List(dir: string): Promise<string[]> {
+  await d1Init();
+  const rows = await d1Raw<{ k?: string }>("SELECT k FROM kv WHERE k LIKE ?", [`${dir}/%`]);
+  return (rows.map((r) => r.k ?? "").filter(Boolean) as string[]).map((k) => k.slice(dir.length + 1));
+}
+
+async function d1Delete(path: string): Promise<void> {
+  await d1Init();
+  await d1Raw("DELETE FROM kv WHERE k = ?", [path]);
+}
+
 /* ---------------- 回退通道：GitHub Contents API ---------------- */
 
 const REPO = process.env.GITHUB_DB_REPO || "";
@@ -132,8 +190,15 @@ async function ghApi(path: string, method: string, body?: unknown): Promise<{ st
 
 /** 读（404/null 返回 null）；加密内容自动解密 */
 export async function dbGet<T>(path: string, opts: { encrypted?: boolean } = {}): Promise<(T & { _sha?: string }) | null> {
-  if (useUpstash()) {
+  if (hasUpstash()) {
     const raw = await upstashGet(path);
+    if (raw == null) return null;
+    const value = opts.encrypted ? decrypt<T>(raw) : (JSON.parse(raw) as T);
+    return value as T & { _sha?: string };
+  }
+
+  if (hasD1()) {
+    const raw = await d1Get(path);
     if (raw == null) return null;
     const value = opts.encrypted ? decrypt<T>(raw) : (JSON.parse(raw) as T);
     return value as T & { _sha?: string };
@@ -156,9 +221,14 @@ export async function dbPut<T>(
 ): Promise<{ sha: string }> {
   const content = opts.encrypted ? encrypt(value) : JSON.stringify(value, null, 1);
 
-  if (useUpstash()) {
+  if (hasUpstash()) {
     await upstashSet(path, content);
     return { sha: "upstash" };
+  }
+
+  if (hasD1()) {
+    await d1Put(path, content);
+    return { sha: "d1" };
   }
 
   let res = await ghApi(path, "PUT", {
@@ -181,9 +251,16 @@ export async function dbPut<T>(
 
 /** 列目录，返回 [{name, sha}]（sha 在 Upstash 通道为占位） */
 export async function dbList(dir: string): Promise<{ name: string; sha: string }[]> {
-  if (useUpstash()) {
+  if (hasUpstash()) {
     const names = await upstashList(dir);
     return names.map((name) => ({ name, sha: "upstash" }));
+  }
+
+  if (hasD1()) {
+    const names = await d1List(dir);
+    return names
+      .filter((n) => n.endsWith(".json"))
+      .map((name) => ({ name, sha: "d1" }));
   }
 
   const { status, json } = await ghApi(dir, "GET");
@@ -196,8 +273,13 @@ export async function dbList(dir: string): Promise<{ name: string; sha: string }
 
 /** 删（404/不存在视为成功） */
 export async function dbDelete(path: string, sha: string | null): Promise<void> {
-  if (useUpstash()) {
+  if (hasUpstash()) {
     await upstashDelete(path);
+    return;
+  }
+
+  if (hasD1()) {
+    await d1Delete(path);
     return;
   }
 
@@ -217,4 +299,26 @@ export async function dbDelete(path: string, sha: string | null): Promise<void> 
 
 export function emailHash(email: string): string {
   return crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 24);
+}
+
+/** 反馈双写（GitHub Issues 为主通道，D1 存一份冗余；任何失败都不抛出） */
+export async function dbFeedbackSave(rec: {
+  number: number;
+  type: string;
+  content: string;
+  contact: string;
+  page: string;
+}): Promise<void> {
+  if (!hasD1()) return;
+  try {
+    await d1Init();
+    await d1Raw(
+      "CREATE TABLE IF NOT EXISTS feedback (number INTEGER PRIMARY KEY, type TEXT, content TEXT, contact TEXT, page TEXT, created_at TEXT DEFAULT (datetime('now')))",
+      []
+    );
+    await d1Raw(
+      "INSERT INTO feedback (number, type, content, contact, page) VALUES (?, ?, ?, ?, ?) ON CONFLICT(number) DO NOTHING",
+      [rec.number, rec.type, rec.content, rec.contact, rec.page]
+    );
+  } catch { /* 双写失败不影响反馈主流程 */ }
 }
