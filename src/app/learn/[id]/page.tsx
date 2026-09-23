@@ -11,7 +11,7 @@ import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS } from "@/lib/types";
 import type { DayPlan, Goal, QuizItemResult } from "@/lib/types";
 import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
-import { cn, formatDate, uid } from "@/lib/utils";
+import { cn, formatDate, uid, rankResources, KIND_LABEL } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   ArrowLeft, BookMarked, Check, ChevronRight, CircleX, ExternalLink, Flag,
@@ -722,7 +722,7 @@ function DayPanel({
         {/* 资源 */}
         <div className="mt-4 space-y-2">
           <p className="text-xs font-semibold text-ink-dim">学习资源（选一个顺手的）</p>
-          {day.resources.map((r, i) => (
+          {rankResources(day.resources).map((r, i) => (
             <div key={i} className="flex items-center gap-2 text-sm">
               {r.url ? (
                 <a
@@ -737,6 +737,12 @@ function DayPanel({
                 <span className="text-ink">{r.title}</span>
               )}
               <span className="text-xs text-ink-dim">— {r.why}</span>
+              {(r.kind || r.year || r.evergreen) && (
+                <span className="ml-auto shrink-0 rounded bg-surface px-1.5 py-0.5 text-[10px] text-ink-dim">
+                  {r.evergreen ? "经典补充" : (KIND_LABEL[r.kind ?? ""] ?? r.kind)}
+                  {r.year ? ` · ${r.year}` : ""}
+                </span>
+              )}
             </div>
           ))}
         </div>

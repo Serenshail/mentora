@@ -1,8 +1,42 @@
 import { clsx, type ClassValue } from "clsx";
+import type { Resource } from "@/lib/types";
 
 export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
+
+/* 资料"新近+实用优先、经典降权"的确定性排序(工程层,不 trusting 模型单独输出)。
+ * kind 权重:官方/官方文档最高;年份越新分越高;evergreen 经典旧著排到最后作"经典补充"。 */
+const KIND_SCORE: Record<string, number> = {
+  official: 5,
+  doc: 5,
+  course: 4,
+  tutorial: 4,
+  paper: 3,
+  book: 2,
+  classic: 1,
+};
+
+export function rankResources(rs: Resource[]): Resource[] {
+  const nowYear = new Date().getFullYear();
+  const score = (r: Resource) =>
+    (KIND_SCORE[r.kind ?? ""] ?? 3) +
+    Math.max(0, Math.min(2, ((r.year ?? nowYear - 5) - (nowYear - 8)) / 4));
+  return [...rs].sort((a, b) => {
+    if (!!a.evergreen !== !!b.evergreen) return a.evergreen ? 1 : -1;
+    return score(b) - score(a);
+  });
+}
+
+export const KIND_LABEL: Record<string, string> = {
+  official: "官方",
+  doc: "官方文档",
+  course: "视频课",
+  tutorial: "教程",
+  paper: "论文",
+  book: "书",
+  classic: "经典",
+};
 
 export function uid(prefix = ""): string {
   const id = crypto.randomUUID().slice(0, 8);

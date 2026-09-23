@@ -161,7 +161,18 @@ export const phasePlanSchema = z.object({
         title: z.string(),
         knowledgePoints: z.array(z.string()).min(1),
         resources: z.array(
-          z.object({ title: z.string(), url: z.string().optional().nullable(), why: z.string() })
+          z.object({
+            title: z.string(),
+            url: z.string().optional().nullable(),
+            why: z.string(),
+            /* 资料时效/类型元数据:用于"新近+实用优先、经典降权"的确定性排序 */
+            year: z.number().optional().nullable(),
+            kind: z
+              .enum(["official", "doc", "course", "tutorial", "book", "paper", "classic"])
+              .optional()
+              .nullable(),
+            evergreen: z.boolean().optional().nullable(),
+          })
         ),
         method: z.string(),
         example: z
@@ -200,7 +211,18 @@ export const planSchema = z.object({
           title: z.string(),
           knowledgePoints: z.array(z.string()).min(1),
           resources: z.array(
-            z.object({ title: z.string(), url: z.string().optional().nullable(), why: z.string() })
+            z.object({
+            title: z.string(),
+            url: z.string().optional().nullable(),
+            why: z.string(),
+            /* 资料时效/类型元数据:用于"新近+实用优先、经典降权"的确定性排序 */
+            year: z.number().optional().nullable(),
+            kind: z
+              .enum(["official", "doc", "course", "tutorial", "book", "paper", "classic"])
+              .optional()
+              .nullable(),
+            evergreen: z.boolean().optional().nullable(),
+          })
           ),
           method: z.string(),
           example: z

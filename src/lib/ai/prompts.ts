@@ -96,6 +96,7 @@ ${ctx}
    - weakPoints（近期验收暴露的薄弱点）：与本阶段相关的一定要安排回炉（独立小节或强化验收），并在 method 里注明"回炉"。
    - learnerProfile 画像适配：时段碎片→每天拆 2-4 个可独立完成的小块并在 method 注明；视频型→resources 优先视频课；需要外部节奏→每天验收设为明确的打卡物；英文弱→中文资料优先。
 4. **资源铁律**：点开就能学的直接资料（官方文档小节/免费视频课/交互教程/开源讲义），严禁购物清单；URL 只给确信存在的。
+   **时效与质量排序（工程要求,非可选）**：以"最新+最实用"为主。每条资源必须给 year(发布/最近修订年份)与 kind(official=官网/doc=官方文档/course=视频课/tutorial=教程/book=书/paper=论文/classic=经典旧著)；优先当前主版本的官方文档与近 2 年的高质量教程；老旧资料即使经典也只能作补充,标 evergreen:true 且 kind=classic,排到最后,不得占用主资源位。同主题新旧冲突时选新不选旧。
 5. example 仅编程领域（title+description，不写代码）；验收 2-3 条（操作+默写双轨）。
 6. 每阶段 2-8 天（按 estDays 与画像调整；宁可少不可虚胖）。输出务必紧凑，总输出 ≤1200 tokens。
 
@@ -108,7 +109,7 @@ ${ctx}
     {
       "title": "Day 1：xxx",
       "knowledgePoints": ["...（穷尽到形态级）", "..."],
-      "resources": [{"title": "...", "url": "https://...", "why": "..."}],
+      "resources": [{"title": "...", "url": "https://...", "why": "...", "year": 2025, "kind": "doc", "evergreen": false}],
       "method": "...（含画像适配说明）",
       "example": {"title": "...", "description": "..."},
       "acceptance": [{"kind": "explain|apply|build|oral|essay", "question": "...", "hint": "..."}]

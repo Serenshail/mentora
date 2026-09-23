@@ -29,6 +29,9 @@ export function draftToPlan(draft: PlanDraft, card: GoalCard): Plan {
           title: r.title,
           url: r.url || undefined,
           why: r.why,
+          year: r.year ?? undefined,
+          kind: r.kind ?? undefined,
+          evergreen: r.evergreen ?? undefined,
         })),
         method: d.method,
         example: d.example
