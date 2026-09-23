@@ -12,7 +12,7 @@ export type ChatTask =
   | "review-ask" | "review-grade"
   | "reading-plan" | "reading-chat" | "council"
   | "autolink" | "persona-distill" | "coach-qa"
-  | "verify-score" | "app-assistant";
+  | "verify-score" | "app-assistant" | "insight";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：

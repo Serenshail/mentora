@@ -6,7 +6,6 @@ import { Badge, Button, Card, Input, PageHeader, StatusDot } from "@/components/
 import { Markdown } from "@/components/markdown";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
-import { INSIGHT_EXTRACT, READING_CHAT, VERIFY_SCORE } from "@/lib/ai/prompts";
 import { extractJson, insightsSchema } from "@/lib/ai/client";
 import { heuristicVerify } from "@/lib/verify-heuristic";
 import { ragContext, retrieve } from "@/lib/rag";
@@ -93,10 +92,7 @@ export default function BookPage() {
     );
     const ragCtx = ragContext(hits);
     void send({
-      system: READING_CHAT(bookCtx()) + (ragCtx ? `
-
-## 你的主人的第二大脑里有这些相关笔记（聊天时自然引用，别硬塞）
-${ragCtx}` : ""),
+      args: { bookCtx: bookCtx(), ragCtx },
       userText: text,
       task: "reading-chat",
       onDone: (full) => {
@@ -129,13 +125,13 @@ ${ragCtx}` : ""),
         const { streamChat } = await import("@/lib/ai/client");
         const full = await streamChat({
           task: "verify-score",
-          system: VERIFY_SCORE({
+          args: {
             chapter: chapter.title,
             coreIdea: chapter.coreIdea ?? "",
             focusQuestion: chapter.focusQuestion,
             book: book.title,
             answers: qs,
-          }),
+          },
           messages: [{ role: "user", content: "评分。" }],
           temperature: 0.2,
           onDelta: () => {},
@@ -192,7 +188,8 @@ ${ragCtx}` : ""),
       const { streamChat } = await import("@/lib/ai/client");
       const chatText = messages.map((m) => `${m.role === "user" ? "用户" : "伙伴"}：${m.content}`).join("\n\n");
       const full = await streamChat({
-        system: INSIGHT_EXTRACT(chatText.slice(0, 8000)),
+        task: "insight",
+        args: { text: chatText.slice(0, 8000) },
         messages: [{ role: "user", content: "提炼。" }],
         temperature: 0.3,
         onDelta: () => {},

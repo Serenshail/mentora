@@ -6,7 +6,7 @@ import { Markdown } from "@/components/markdown";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
 import {
-  PERSONAS, ROUNDTABLE_TAKE, ROUNDTABLE_HOST, personaById, COUNCIL_BASE, PERSONA_DISTILL,
+  PERSONAS, personaById,
 } from "@/lib/ai/prompts";
 import { extractJson, personaDistillSchema, streamChat } from "@/lib/ai/client";
 import { cn, uid } from "@/lib/utils";
@@ -134,7 +134,7 @@ export default function CouncilPage() {
     setActiveId(sessionId);
     setMessages([]);
     await send({
-      system: p?.system ?? "",
+      args: { mode: "single", personaId: p?.id, customSystem: p && "identityNote" in p ? p.system : undefined },
       userText: "（请用你的风格开场：你是谁、你处理什么问题、以及你会先反问用户什么。50字内，不要列清单。）",
       task: "council",
       onDone: (full) => {
@@ -188,7 +188,7 @@ export default function CouncilPage() {
     const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
     addSessionMsg(active.id, userMsg);
     void send({
-      system: persona?.system ?? "",
+      args: { mode: "single", personaId: persona?.id, customSystem: persona && "identityNote" in persona ? persona.system : undefined },
       userText: text,
       task: "council",
       history: base,
@@ -228,7 +228,7 @@ export default function CouncilPage() {
         try {
           const full = await streamChat({
             task: "council",
-            system: p.system + "\n\n" + ROUNDTABLE_TAKE(p.name),
+            args: { mode: "take", name: p.name, personaId: p.id, customSystem: p.system },
             messages: [{ role: "user", content: text }],
             temperature: 0.8,
             onDelta: (d) => {
@@ -263,7 +263,7 @@ export default function CouncilPage() {
         .join("\n\n");
       const full = await streamChat({
         task: "council",
-        system: ROUNDTABLE_HOST(names) + "\n\n## 各位与会者的发言全文\n" + takes,
+        args: { mode: "host", names, takes },
         messages: [{ role: "user", content: "请写圆桌纪要。" }],
         temperature: 0.4,
         onDelta: (d) => setRtHost((p) => p + d),
@@ -313,7 +313,7 @@ export default function CouncilPage() {
     try {
       const full = await streamChat({
         task: "persona-distill",
-        system: PERSONA_DISTILL(forgeName.trim(), forgeHint.trim()),
+        args: { name: forgeName.trim(), hint: forgeHint.trim() },
         messages: [{ role: "user", content: `蒸馏：${forgeName.trim()}` }],
         temperature: 0.5,
         onDelta: () => {},
@@ -344,7 +344,7 @@ export default function CouncilPage() {
       bio: forged.bio,
       color: forged.color,
       identityNote: forged.identityNote,
-      system: COUNCIL_BASE + forged.system,
+      system: forged.system,
       createdAt: new Date().toISOString(),
     });
     toast.success(`「${forged.name}」已加入你的圆桌`);

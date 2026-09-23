@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Badge, Button, Card, Input, Textarea } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
 import { useChat } from "@/lib/use-chat";
-import { SOCRATIC_INTAKE, PLANNER_MASTER } from "@/lib/ai/prompts";
 import { extractJson, goalCardSchema, planSchema, type GoalCard } from "@/lib/ai/client";
 import { useAppStore } from "@/lib/store";
 import { masterDraftToPlan } from "@/lib/plan";
@@ -72,7 +71,7 @@ function IntakeInner() {
     });
     history.replaceState(null, "", `/learn/new?goal=${goalId}`);
     void send({
-      system: SOCRATIC_INTAKE(t, userName),
+      args: { topic: t, userName },
       userText: `我想学${t}`,
       task: "intake",
     });
@@ -107,7 +106,7 @@ function IntakeInner() {
     if (!text || streaming) return;
     setInput("");
     void send({
-      system: SOCRATIC_INTAKE(topic, userName),
+      args: { topic, userName },
       userText: text,
       task: "intake",
       onDone: handleDone,
@@ -140,7 +139,7 @@ function IntakeInner() {
     });
 
     await send({
-      system: PLANNER_MASTER(JSON.stringify(finalCard, null, 2)),
+      args: { mode: "master", cardJson: JSON.stringify(finalCard, null, 2) },
       userText: "目标卡已确认，请生成总学习纲要（只要 JSON）。",
       task: "plan",
       onDone: async (full) => {
@@ -333,7 +332,7 @@ function IntakeInner() {
             onClick={() => {
               if (streaming) return;
               void send({
-                system: SOCRATIC_INTAKE(topic, userName),
+                args: { topic, userName },
                 userText: "（不想再答了，按已有信息直接给目标卡，缺的写进 assumptions。）",
                 task: "intake",
                 onDone: handleDone,

@@ -10,7 +10,6 @@ import { NoteWorkspace } from "@/components/brain/note-workspace";
 import { Markdown } from "@/components/markdown";
 import { useAppStore, useDueReviews } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
-import { REVIEW_GRADE, REVIEW_PROMPT } from "@/lib/ai/prompts";
 import { extractJson, reviewGradeSchema } from "@/lib/ai/client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -92,13 +91,13 @@ export default function BrainPage() {
       const { streamChat } = await import("@/lib/ai/client");
       await streamChat({
         task: "review-ask",
-        system: REVIEW_PROMPT(
-          JSON.stringify(
+        args: {
+          items: JSON.stringify(
             store.knowledge
               .filter((k) => queue.includes(k.id))
               .map((k) => ({ title: k.title, summary: k.body.slice(0, 120), domain: k.domain }))
-          )
-        ),
+          ),
+        },
         messages: [{ role: "user", content: "出题。" }],
         onDelta: (d) => setQuestion((p) => p + d),
       });
@@ -123,7 +122,7 @@ export default function BrainPage() {
       const { streamChat } = await import("@/lib/ai/client");
       const full = await streamChat({
         task: "review-grade",
-        system: REVIEW_GRADE(`${item.title}${item.body ? "（" + item.body.slice(0, 150) + "）" : ""}`),
+        args: { ctx: `${item.title}${item.body ? "（" + item.body.slice(0, 150) + "）" : ""}` },
         messages: [{ role: "user", content: answer }],
         temperature: 0.2,
         onDelta: () => {},

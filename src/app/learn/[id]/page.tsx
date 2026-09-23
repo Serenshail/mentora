@@ -10,7 +10,6 @@ import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS } from "@/lib/types";
 import type { DayPlan, Goal, QuizItemResult } from "@/lib/types";
-import { DAILY_LESSON, QUIZ_GRADE } from "@/lib/ai/prompts";
 import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
 import { cn, formatDate, uid } from "@/lib/utils";
 import { toast } from "sonner";
@@ -46,7 +45,6 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
     });
     try {
       const { streamChat } = await import("@/lib/ai/client");
-      const { ASK_COACH } = await import("@/lib/ai/prompts");
       const ctx = JSON.stringify({
         topic: goal.topic,
         today: day.title,
@@ -55,7 +53,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
       });
       const full = await streamChat({
         task: "coach-qa",
-        system: ASK_COACH(ctx),
+        args: { ctx },
         messages: newQa.slice(-6).map((m) => ({ role: m.role, content: m.content })),
         onDelta: (d) => setStreamText((p) => p + d),
       });
@@ -272,7 +270,6 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
     setError(null);
     try {
       const { streamChat, phasePlanSchema } = await import("@/lib/ai/client");
-      const { PLANNER_PHASE } = await import("@/lib/ai/prompts");
       const { phaseDraftToDays } = await import("@/lib/plan");
       const plan = goal.plan!;
       // 已掌握：所有已通过/跳过天的知识点
@@ -313,7 +310,7 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
       );
       const full = await streamChat({
         task: "plan",
-        system: PLANNER_PHASE(ctx),
+        args: { mode: "phase", ctx },
         messages: [{ role: "user", content: "生成本阶段的天级计划（只要 JSON）。" }],
         onDelta: () => {},
       });
@@ -397,7 +394,6 @@ function RegeneratePlan({ goal }: { goal: Goal }) {
     setBusy(true);
     try {
       const { streamChat } = await import("@/lib/ai/client");
-      const { PLANNER_MASTER } = await import("@/lib/ai/prompts");
       const { masterPlanSchema } = await import("@/lib/ai/client");
       const { masterDraftToPlan } = await import("@/lib/plan");
       const card = {
@@ -413,7 +409,7 @@ function RegeneratePlan({ goal }: { goal: Goal }) {
       };
       const full = await streamChat({
         task: "plan",
-        system: PLANNER_MASTER(JSON.stringify(card, null, 2)),
+        args: { mode: "master", cardJson: JSON.stringify(card, null, 2) },
         messages: [{ role: "user", content: "请生成总学习纲要（只要 JSON）。" }],
         onDelta: () => {},
       });
@@ -587,7 +583,7 @@ function DayPanel({
         1
       );
       const full = await streamChat({
-        system: DAILY_LESSON(ctx),
+        args: { ctx },
         messages: [{ role: "user", content: "生成今天的学习文档。" }],
         temperature: 0.6,
         task: "lesson",
@@ -626,7 +622,7 @@ function DayPanel({
         answers,
       });
       const full = await streamChat({
-        system: QUIZ_GRADE(ctx),
+        args: { ctx },
         messages: [{ role: "user", content: "开始评分。" }],
         temperature: 0.3,
         task: "quiz-grade",

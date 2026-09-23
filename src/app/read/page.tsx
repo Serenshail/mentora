@@ -5,7 +5,6 @@ import { useState } from "react";
 import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Textarea } from "@/components/ui";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
-import { READING_PLAN } from "@/lib/ai/prompts";
 import { extractJson, readingPlanSchema } from "@/lib/ai/client";
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
@@ -37,7 +36,7 @@ export default function ReadPage() {
       const { streamChat } = await import("@/lib/ai/client");
       let plan: ReturnType<typeof readingPlanSchema.parse> | null = null;
       const full = await streamChat({
-        system: READING_PLAN(desc),
+        args: { desc },
         messages: [{ role: "user", content: "生成阅读计划。" }],
         temperature: 0.5,
         task: "reading-plan",

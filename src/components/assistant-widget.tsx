@@ -7,7 +7,6 @@
 import { useEffect, useRef, useState } from "react";
 import { MessageCircleQuestion, Send, X } from "lucide-react";
 import { useChat } from "@/lib/use-chat";
-import { APP_ASSISTANT } from "@/lib/ai/prompts";
 import { cn } from "@/lib/utils";
 
 const POS_KEY = "mentora-assistant-pos";
@@ -87,7 +86,7 @@ export function AssistantWidget() {
     if (!text || streaming) return;
     setInput("");
     void send({
-      system: APP_ASSISTANT(FEATURE_CTX),
+      args: { ctx: FEATURE_CTX },
       userText: text,
       task: "app-assistant",
       onDone: () => {},

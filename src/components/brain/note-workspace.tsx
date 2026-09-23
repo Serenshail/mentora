@@ -425,7 +425,6 @@ export function NoteWorkspace({
     setSuggests(null);
     try {
       const { streamChat } = await import("@/lib/ai/client");
-      const { AUTOLINK } = await import("@/lib/ai/prompts");
       const { extractJson, autolinkSchema } = await import("@/lib/ai/client");
       const candidates = knowledge
         .filter((k) => k.id !== note.id)
@@ -434,10 +433,10 @@ export function NoteWorkspace({
         .join("\n");
       const full = await streamChat({
         task: "autolink",
-        system: AUTOLINK({
+        args: {
           note: `${note.title}\n${note.body.slice(0, 300)}`,
           candidates,
-        }),
+        },
         messages: [{ role: "user", content: "建立联系。" }],
         temperature: 0.3,
         onDelta: () => {},

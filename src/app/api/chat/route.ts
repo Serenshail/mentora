@@ -44,7 +44,23 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "coach-qa": return P.ASK_COACH(s("ctx"));
     case "app-assistant": return P.APP_ASSISTANT(s("ctx"));
     case "persona-distill": return P.PERSONA_DISTILL(s("name"), s("hint"));
-    case "council": return s("system"); // 内置 persona 的 system 下一步改为服务端按 id 解析
+    case "council": {
+      const mode = s("mode");
+      if (mode === "take") {
+        const base =
+          s("customSystem") || (s("personaId") ? (P.personaById(s("personaId"))?.system ?? "") : "");
+        return base + "\n\n" + P.ROUNDTABLE_TAKE(s("name"));
+      }
+      if (mode === "host") {
+        return P.ROUNDTABLE_HOST(s("names")) + "\n\n## 各位与会者的发言全文\n" + s("takes");
+      }
+      if (mode === "single" || mode === "single-base") {
+        // 自建人物：服务端补 COUNCIL_BASE 前缀；内置人物：按 id 取 system（不再由客户端携带）
+        if (s("customSystem")) return P.COUNCIL_BASE + s("customSystem");
+        return s("personaId") ? (P.personaById(s("personaId"))?.system ?? "") : s("system");
+      }
+      return s("system");
+    }
     default: return s("system");
   }
 }
