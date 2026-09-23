@@ -34,6 +34,9 @@ export async function POST(req: NextRequest) {
     name: record.name,
     ...(record.avatar ? { avatar: record.avatar } : {}),
   };
-  await setSessionCookie(user);
+  // 头像（base64 data-URL，可达数百 KB）绝不能进会话 cookie：cookie 的 name+value 超过 4096 字节
+  // 会被浏览器直接丢弃，造成"登录成功但浏览器没有会话"——内页全被当未登录弹走、/api/sync 全 401。
+  // 头像只通过响应体交给前端展示。
+  await setSessionCookie({ userId: user.userId, email: user.email, name: user.name });
   return Response.json({ user });
 }
