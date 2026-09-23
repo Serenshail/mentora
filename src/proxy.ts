@@ -1,7 +1,18 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { rateLimit } from "@/lib/server/rate-limit";
 
 const COOKIE = "mentora_session";
+
+/* 已知 AI 抓取/训练机器人 UA：直接拒（礼貌机器人遵守 robots，恶意机器人靠这层+限流+鉴权叠加） */
+const AI_SCRAPER_UA =
+  /(gptbot|chatgpt-user|oai-searchbot|ccbot|perplexitybot|claudebot|anthropic-ai|google-extended|applebot-extended|meta-externalagent|bytespider|cohere-ai|diffbot|youbot|scrapy|python-requests|go-http-client)/i;
+
+function clientIpOf(req: NextRequest): string {
+  const fwd = req.headers.get("x-forwarded-for");
+  if (fwd) return fwd.split(",")[0].trim();
+  return req.headers.get("x-real-ip") ?? "unknown";
+}
 
 /* 以下路径无需登录即可访问；其余全部重定向到登录页 */
 const PUBLIC_PATHS = new Set([
@@ -37,8 +48,26 @@ export function proxy(req: NextRequest) {
   // 全站禁止搜索引擎/AI 爬虫索引
   res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
 
-  // API、内部资源不走登录墙
-  if (pathname.startsWith("/api/") || pathname.startsWith("/_next/") || pathname === "/_vercel/insights") return res;
+  // 防火墙第 1 层：已知 AI 抓取/训练机器人 UA 直接拒（静态资源也不给，防整站镜像）
+  const ua = req.headers.get("user-agent") ?? "";
+  if (AI_SCRAPER_UA.test(ua)) {
+    return new NextResponse("Forbidden", { status: 403 });
+  }
+
+  // 防火墙第 2 层：全站 /api 每 IP 限流，防批量扒取/DoS（各路由另有更严的专项限流）
+  if (pathname.startsWith("/api/")) {
+    if (!rateLimit(`api:${clientIpOf(req)}`, { capacity: 120, refillPerSec: 2 })) {
+      return NextResponse.json({ error: "请求过于频繁" }, { status: 429 });
+    }
+  }
+
+  // API 一律 no-store：用户数据/会话信息绝不进任何缓存或中间层
+  if (pathname.startsWith("/api/")) {
+    res.headers.set("Cache-Control", "no-store, max-age=0");
+    return res;
+  }
+  // 内部资源不走登录墙
+  if (pathname.startsWith("/_next/") || pathname === "/_vercel/insights") return res;
 
   // 静态资源、公开页面放行
   if (isPublic(pathname)) return res;

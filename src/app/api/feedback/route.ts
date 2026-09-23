@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { dbFeedbackSave } from "@/lib/server/db";
+import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -10,6 +11,10 @@ export const maxDuration = 30;
  * env: GITHUB_TOKEN（需 repo 权限）、GITHUB_REPO（默认 haow9508-ctrl/mentora）
  */
 export async function POST(req: NextRequest) {
+  // 防刷：每 IP 突发 5 条、每分钟回填 2 条（未登录也可反馈,故必须限流）
+  if (!rateLimit(`feedback:${clientIp(req)}`, { capacity: 5, refillPerSec: 2 / 60 })) {
+    return Response.json({ error: "反馈太频繁，请稍后再试" }, { status: 429 });
+  }
   const body = await req.json().catch(() => null);
   const content = String(body?.content ?? "").trim();
   const type = ["建议", "问题", "其他"].includes(body?.type) ? body.type : "其他";
