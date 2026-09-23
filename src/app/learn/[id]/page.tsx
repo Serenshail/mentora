@@ -182,7 +182,7 @@ function QuickNotes({ goal, day }: { goal: Goal; day: DayPlan }) {
           onKeyDown={(e) => {
             if (e.key !== "Enter" || !text.trim()) return;
             addKnowledge(
-              [{ title: text.trim().slice(0, 40), body: text.trim(), domain: goal.topic }],
+              [{ title: text.trim().slice(0, 40), body: text.trim(), domain: `${goal.topic}/笔记` }],
               "manual",
               `${goal.topic} · ${day.title} · 随手记`
             );
@@ -359,7 +359,7 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
         [{
           title: `${goal.topic} 学习计划 · ${phase.title}`,
           body: `**阶段目标：**${phase.outcome}\n\n**边界：**${draft.boundary ?? phase.boundary ?? "—"}\n\n${daysOverview}\n\n关联：[[${masterNote}]]`,
-          domain: goal.topic,
+          domain: `${goal.topic}/计划`,
         }],
         "learn",
         `${goal.topic} · 阶段计划`
@@ -686,7 +686,7 @@ function DayPanel({
         });
         // 知识点进入第二大脑 + 间隔复习队列
         store.getState().addKnowledge(
-          day.knowledgePoints.map((k) => ({ title: k.text, domain: goal.topic })),
+          day.knowledgePoints.map((k) => ({ title: k.text, domain: `${goal.topic}/笔记` })),
           "learn",
           `${goal.topic} · ${day.title}`
         );

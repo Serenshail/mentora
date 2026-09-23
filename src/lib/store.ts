@@ -195,6 +195,43 @@ const safeStorage: StateStorage = {
   },
 };
 
+/* ========= 科目 MOC(目录)自动维护 =========
+ * 借鉴 Obsidian/wiki 的 Map-of-Content 管理方式:每个科目(顶层文件夹)自动有一张
+ * 「科目 · 目录」笔记,用 [[wikilink]] 索引该科目下所有笔记,形成 hub 关联链,
+ * 笔记不再散落。MOC 不设 nextReviewAt,故不进间隔复习队列。 */
+const mocTitle = (subject: string) => `${subject} · 目录`;
+
+function withMoc(knowledge: KnowledgeItem[], subject: string): KnowledgeItem[] {
+  if (!subject) return knowledge;
+  const title = mocTitle(subject);
+  const members = knowledge.filter((k) => (k.domain || "").split("/")[0] === subject && k.title !== title);
+  const body =
+    `# ${subject} · 目录\n\n> 自动维护的索引（MOC）：本科目下所有笔记都挂在这里,点链接跳转,新笔记自动加入。\n\n` +
+    members.map((m) => `- [[${m.title}]]`).join("\n");
+  const existing = knowledge.find((k) => k.title === title);
+  if (existing) {
+    if (existing.body === body) return knowledge;
+    return knowledge.map((k) =>
+      k.id === existing.id ? { ...k, body, updatedAt: new Date().toISOString() } : k
+    );
+  }
+  const moc: KnowledgeItem = {
+    id: uid("k"),
+    title,
+    body,
+    domain: subject,
+    source: "manual",
+    sourceTitle: "自动目录",
+    masteredAt: todayISO(),
+    reviewStage: 0,
+    links: [],
+    tags: ["MOC"],
+    version: 1,
+    updatedAt: new Date().toISOString(),
+  };
+  return [moc, ...knowledge];
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -292,7 +329,13 @@ export const useAppStore = create<AppState>()(
             version: 1,
             updatedAt: new Date().toISOString(),
           }));
-        set((s) => ({ knowledge: [...fresh, ...s.knowledge] }));
+        set((s) => {
+          let k = [...fresh, ...s.knowledge];
+          for (const subj of new Set(fresh.map((f) => (f.domain || "").split("/")[0]))) {
+            k = withMoc(k, subj);
+          }
+          return { knowledge: k };
+        });
       },
 
 
@@ -485,8 +528,9 @@ export const useAppStore = create<AppState>()(
         return { touched: rebuilt, placeholders: placeholders.length };
       },
       updateKnowledge: (id, patch) =>
-        set((s) => ({
-          knowledge: s.knowledge.map((k) => {
+        set((s) => {
+          const old = s.knowledge.find((k) => k.id === id);
+          let knowledge = s.knowledge.map((k) => {
             if (k.id !== id) return k;
             // 只有内容性修订（标题/正文）才递增版本；复习状态等元数据更新不算改版
             const contentEdit = patch.title !== undefined || patch.body !== undefined;
@@ -497,14 +541,23 @@ export const useAppStore = create<AppState>()(
                 ? { version: (k.version ?? 1) + 1, updatedAt: new Date().toISOString() }
                 : {}),
             };
-          }),
-        })),
+          });
+          // 拖拽换文件夹时,新旧科目的 MOC 目录都要重算
+          if (old && patch.domain !== undefined && patch.domain !== old.domain) {
+            knowledge = withMoc(knowledge, (old.domain || "").split("/")[0]);
+            knowledge = withMoc(knowledge, (patch.domain || "").split("/")[0]);
+          }
+          return { knowledge };
+        }),
       removeKnowledge: (id) =>
-        set((s) => ({
-          knowledge: s.knowledge
-            .filter((k) => k.id !== id)
-            .map((k) => ({ ...k, links: k.links.filter((l) => l !== id) })),
-        })),
+        set((s) => {
+          const target = s.knowledge.find((k) => k.id === id);
+          let k = s.knowledge
+            .filter((x) => x.id !== id)
+            .map((x) => ({ ...x, links: x.links.filter((l) => l !== id) }));
+          if (target) k = withMoc(k, (target.domain || "").split("/")[0]);
+          return { knowledge: k };
+        }),
       recordReview: (id, ok) => {
         const done = (next: string | undefined, info: Partial<KnowledgeItem>) =>
           set((s) => ({

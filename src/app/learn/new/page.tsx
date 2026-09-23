@@ -161,7 +161,7 @@ function IntakeInner() {
             [{
               title: `${planTitle(finalCard.topic)} · 学习总纲要`,
               body: `**方向：**${finalCard.direction}\n\n${plan.summary}\n\n${outlineMd}`,
-              domain: finalCard.topic,
+              domain: `${finalCard.topic}/计划`,
             }],
             "learn",
             `${finalCard.topic} · 总纲要`
