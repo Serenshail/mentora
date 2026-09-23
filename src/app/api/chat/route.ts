@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { PROVIDERS, type AIConfig } from "@/lib/ai/providers";
+import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import {
   demoCouncil, demoIntake, demoLesson, demoPlan, demoQuizGrade,
   demoReadingChat, demoReadingPlan, demoReview, demoReviewGrade,
@@ -183,7 +184,21 @@ async function* upstreamDeltas(cfg: AIConfig, body: Body) {
 }
 
 export async function POST(req: NextRequest) {
-  const body: Body = await req.json().catch(() => ({ messages: [] }));
+  // 防滥用/防打崩：每 IP 突发 30 次、每分钟回填 30 次
+  if (!rateLimit(`chat:${clientIp(req)}`, { capacity: 30, refillPerSec: 30 / 60 })) {
+    return Response.json({ error: "请求太频繁，请稍后再试" }, { status: 429 });
+  }
+  // 请求体上限，防超大 payload 打爆内存
+  const raw = await req.text().catch(() => "");
+  if (raw.length > 1_000_000) {
+    return Response.json({ error: "请求体过大" }, { status: 413 });
+  }
+  let body: Body;
+  try {
+    body = (JSON.parse(raw || "{}") as Body) ?? { messages: [] };
+  } catch {
+    body = { messages: [] };
+  }
   const cfg = resolveConfig(req);
 
   const stream = new ReadableStream({

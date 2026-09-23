@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { dbGet, emailHash } from "@/lib/server/db";
 import { verifyPassword, setSessionCookie } from "@/lib/server/auth";
+import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,10 @@ interface UserRecord {
 }
 
 export async function POST(req: NextRequest) {
+  // 防暴力破解：每 IP 突发 10 次、每分钟回填 10 次
+  if (!rateLimit(`login:${clientIp(req)}`, { capacity: 10, refillPerSec: 10 / 60 })) {
+    return Response.json({ error: "尝试太频繁，请稍后再试" }, { status: 429 });
+  }
   const body = await req.json().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");

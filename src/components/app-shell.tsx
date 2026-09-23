@@ -18,7 +18,7 @@ import {
 import { FeedbackWidget } from "@/components/feedback-widget";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { toast } from "sonner";
-import { useAuth, useAutoPush } from "@/lib/auth-client";
+import { useAuth, useAutoPush, useSyncStatus } from "@/lib/auth-client";
 import { isAdminEmail } from "@/lib/admin-emails";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
@@ -39,6 +39,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const provider = useAppStore((s) => s.settings.provider);
   const router = useRouter();
   const { user, logout, checking } = useAuth();
+  const syncStatus = useSyncStatus((s) => s.status);
   useAutoPush(!!user);
 
   /* 管理员：侧栏（桌面）与底栏（移动端）都给出后台入口，登上账号就能直达 */
@@ -194,20 +195,20 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className={cn("mt-auto pb-4 pt-2", collapsed ? "px-1.5" : "px-3")}>
-          {/* 收起/展开按钮：纯图标、箭头朝外，位于底部（反馈/账号上方） */}
+          {!collapsed && <FeedbackWidget />}
+          {/* 收起/展开：与「退出」同一列、紧贴账号行上方（右对齐），收起态居中 */}
           <button
             onClick={() => setCollapsed((v) => !v)}
             title={collapsed ? "展开侧栏" : "收起侧栏"}
             className={cn(
-              "mb-1.5 flex items-center rounded-lg py-2 text-ink-dim/70 transition hover:bg-black/[0.05] hover:text-ink cursor-pointer",
-              collapsed ? "justify-center px-1.5" : "justify-end px-3"
+              "mb-0.5 mt-1 flex items-center rounded-lg py-1.5 text-ink-dim/70 transition hover:bg-black/[0.05] hover:text-ink cursor-pointer",
+              collapsed ? "justify-center px-1.5" : "justify-end px-2.5"
             )}
           >
             <PanelLeftOpen
               className={cn("size-5 transition-transform duration-200", collapsed && "rotate-180")}
             />
           </button>
-          {!collapsed && <FeedbackWidget />}
           {user ? (
             <div className="mt-1 flex items-center gap-2 rounded-xl px-2.5 py-2">
               {user.avatar ? (

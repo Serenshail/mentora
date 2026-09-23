@@ -13,6 +13,11 @@ export interface AuthUser {
 
 const CHOICE_KEY = "mentora-sync-choice";
 
+/* 云端同步的可见状态：让"自动同步"从一句静态文案变成可感知的反馈（保存中/已同步/失败） */
+export type SyncStatus = "idle" | "saving" | "saved" | "error";
+export const useSyncStatus = create<{ status: SyncStatus }>(() => ({ status: "idle" }));
+export const setSyncStatus = (status: SyncStatus) => useSyncStatus.setState({ status });
+
 /* ---------------- 认证状态（全局单例：所有组件共享同一份） ---------------- */
 
 let initialized = false;
@@ -152,6 +157,7 @@ export async function pullCloud(): Promise<{ data: Record<string, unknown>; upda
 }
 
 export async function pushCloud(): Promise<boolean> {
+  setSyncStatus("saving");
   const text = JSON.stringify({ data: localData() });
   let res: Response;
   if (text.length > GZIP_THRESHOLD) {
@@ -170,8 +176,10 @@ export async function pushCloud(): Promise<boolean> {
   }
   if (res.ok) {
     localStorage.setItem(CHOICE_KEY, new Date().toISOString());
+    setSyncStatus("saved");
     return true;
   }
+  setSyncStatus("error");
   return false;
 }
 

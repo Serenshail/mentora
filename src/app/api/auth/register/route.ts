@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { dbGet, dbPut, emailHash } from "@/lib/server/db";
 import { hashPassword, setSessionCookie } from "@/lib/server/auth";
 import { checkEmailDeliverable } from "@/lib/email-check";
+import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,10 @@ interface UserRecord {
 }
 
 export async function POST(req: NextRequest) {
+  // 注册成本高（邮箱取证+写库）：每 IP 突发 5 次、每分钟回填 5 次
+  if (!rateLimit(`register:${clientIp(req)}`, { capacity: 5, refillPerSec: 5 / 60 })) {
+    return Response.json({ error: "注册太频繁，请稍后再试" }, { status: 429 });
+  }
   const body = await req.json().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");

@@ -8,7 +8,7 @@
  * Ctrl+K 快速切换器；自动保存（改动即写入，无需手动保存）
  * ============================================================ */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Empty } from "@/components/ui";
 import { WikiMarkdown } from "@/components/brain/wiki-markdown";
 import { useAppStore } from "@/lib/store";
@@ -54,6 +54,41 @@ function inlineTags(body: string): string[] {
 }
 
 const TAGS_OF = (k: KnowledgeItem) => [...new Set([...(k.tags ?? []), ...inlineTags(k.body)])];
+
+/* Obsidian 式搜索命中上下文：截取首个命中处前后若干字符并压平空白 */
+function matchSnippet(body: string, q: string): string | null {
+  const idx = body.toLowerCase().indexOf(q);
+  if (idx === -1) return null;
+  const start = Math.max(0, idx - 18);
+  const end = Math.min(body.length, idx + q.length + 42);
+  const raw = body.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${raw}${end < body.length ? "…" : ""}`;
+}
+
+/* 大小写不敏感高亮命中词 */
+function Highlight({ text, q }: { text: string; q: string }) {
+  if (!q) return <>{text}</>;
+  const lower = text.toLowerCase();
+  const ql = q.toLowerCase();
+  const parts: ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  for (;;) {
+    const hit = lower.indexOf(ql, i);
+    if (hit === -1) {
+      parts.push(text.slice(i));
+      break;
+    }
+    if (hit > i) parts.push(text.slice(i, hit));
+    parts.push(
+      <mark key={key++} className="rounded-sm bg-accent/20 px-0.5 text-ink">
+        {text.slice(hit, hit + ql.length)}
+      </mark>
+    );
+    i = hit + ql.length;
+  }
+  return <>{parts}</>;
+}
 
 /* ============================================================ */
 
@@ -742,8 +777,20 @@ export function NoteWorkspace({
               className="min-w-0 flex-1 cursor-grab px-2 py-1.5 text-left active:cursor-grabbing"
             >
               <p className={cn("truncate text-[12.5px]", k.id === openId ? "font-semibold text-accent" : "text-ink")}>
-                {k.title}
+                <Highlight text={k.title} q={query.trim().toLowerCase()} />
               </p>
+              {/* Obsidian 式：标题未命中但正文命中时,给出命中上下文片段 */}
+              {query.trim() &&
+                !k.title.toLowerCase().includes(query.trim().toLowerCase()) &&
+                (() => {
+                  const sn = matchSnippet(k.body, query.trim().toLowerCase());
+                  if (!sn) return null;
+                  return (
+                    <p className="truncate text-[11px] leading-relaxed text-ink-dim">
+                      <Highlight text={sn} q={query.trim().toLowerCase()} />
+                    </p>
+                  );
+                })()}
             </button>
             <button
               title="删除这篇笔记"
