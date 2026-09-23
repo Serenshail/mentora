@@ -175,10 +175,9 @@ export async function pushCloud(): Promise<boolean> {
   return false;
 }
 
-/** 登录后的同步决策：云端有数据时让用户二选一（避免静默覆盖丢数据） */
-export async function syncAfterLogin(
-  ask: (cloudUpdatedAt: string) => Promise<"cloud" | "local">
-): Promise<"cloud" | "local" | "pushed" | "pulled" | "none"> {
+/** 登录后的同步：全自动、无需用户点击——云端有数据就直接采用云端（云端为准），
+ * 云端为空则把本地数据推上去。之后的本地改动由 useAutoPush 防抖自动推送。 */
+export async function syncAfterLogin(): Promise<"pushed" | "pulled" | "none"> {
   const cloud = await pullCloud();
   // 串号防护已由 setStoreUser 的同步切仓保证：内存状态始终属于 _storeUserId 对应的仓，
   // 不再使用破坏性的 clearLocalStore（曾把用户本地快照写空）。
@@ -190,14 +189,10 @@ export async function syncAfterLogin(
     }
     return "none";
   }
-  const choice = await ask(cloud.updatedAt);
+  // 云端为准：直接采用，不弹窗打断
+  useAppStore.getState().importData(cloud.data);
   localStorage.setItem(CHOICE_KEY, new Date().toISOString());
-  if (choice === "cloud") {
-    useAppStore.getState().importData(cloud.data);
-    return "pulled";
-  }
-  const ok = await pushCloud();
-  return ok ? "pushed" : "none";
+  return "pulled";
 }
 
 /** 登录状态下：数据变化后 2.5s 防抖自动推送 */

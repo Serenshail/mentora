@@ -136,6 +136,31 @@
     return c;
   }
 
+  /* CSS 糖果气球字形（未映射字母 / 图片加载失败时的兜底形态） */
+  function cssBalloonSpan(ch0) {
+    var s = document.createElement('span');
+    s.textContent = ch0;
+    var style = STYLE_FOR[CSS_FOR[ch0]] || pickPalette();
+    s.style.backgroundImage = style.bg;
+    s.style.webkitBackgroundClip = 'text';
+    s.style.backgroundClip = 'text';
+    s.style.color = 'transparent';
+    s.style.webkitTextStroke = '.085em ' + style.stroke;
+    s.style.filter = 'drop-shadow(0 .04em .07em ' + style.glow + ')';
+    return s;
+  }
+
+  /* 打字前预加载本段文字用到的 emoji：否则入场那 620ms 里图片没解码完,
+   * 该字母的入场变形会被跳过——表现为"只有 M/T(CSS 气球)会动,其他字母没特效"。 */
+  function preload(chars) {
+    for (var i = 0; i < chars.length; i++) {
+      var key = IMG_FOR[chars[i].toLowerCase()];
+      if (!key) continue;
+      var im = new Image();
+      im.src = (EMOJI_DATA && EMOJI_DATA[key]) ? EMOJI_DATA[key] : EMOJI_BASE + key + '.png';
+    }
+  }
+
   /* ---------- 变形:字母跳起变成对应图标,悬浮后缩回 ----------
    * 设计原则(Apple HIG / Material 3):
    *   一次交互只有一个主运动(交换本身);图标光学尺寸≈大写高度;
@@ -184,15 +209,7 @@
       bb.src = (EMOJI_DATA && EMOJI_DATA[IMG_FOR[ch0.toLowerCase()]]) ? EMOJI_DATA[IMG_FOR[ch0.toLowerCase()]] : EMOJI_BASE + IMG_FOR[ch0.toLowerCase()] + '.png';
       isImg = true;
     } else {
-      bb = document.createElement('span');
-      bb.textContent = ch0;
-      var style = STYLE_FOR[CSS_FOR[ch0]] || pickPalette();
-      bb.style.backgroundImage = style.bg;
-      bb.style.webkitBackgroundClip = 'text';
-      bb.style.backgroundClip = 'text';
-      bb.style.color = 'transparent';
-      bb.style.webkitTextStroke = '.085em ' + style.stroke;
-      bb.style.filter = 'drop-shadow(0 .04em .07em ' + style.glow + ')';
+      bb = cssBalloonSpan(ch0);
     }
       bb.className = 'pt-bb';
       bb.alt = '';
@@ -200,6 +217,18 @@
       /* t/T 的气球文字默认渲染在盒子左缘（墨迹因此整体压到左邻 n 上）——
          让它在盒内居中,配合下面的 translateX 校正,恰好盖在 t 本身上 */
       if (ch0 === 't' || ch0 === 'T') bb.style.textAlign = 'center';
+      /* 图片加载失败 → 退回 CSS 糖果气球（脚本头注释承诺的兜底,此前未实现,
+         导致缺图字母"没有特效"） */
+      bb.onerror = function () {
+        if (bb.__ptFb) return;
+        bb.__ptFb = 1;
+        var fb = cssBalloonSpan(ch0);
+        fb.className = 'pt-bb';
+        fb.draggable = false;
+        if (ch0 === 't' || ch0 === 'T') fb.style.textAlign = 'center';
+        bb.replaceWith(fb);
+        bb = fb; isImg = false; started = true;
+      };
       ch.appendChild(bb);
 
     /* 交换瞬间的小光点(只闪一次,细微) */
@@ -286,6 +315,7 @@
     var startDelay = opts.startDelay || 0;
     var useCursor = opts.cursor !== false;
     var chars = splitGraphemes(String(text));
+    preload(chars); // 入场前预热 emoji,保证每个字母的入场变形都不被"等图"跳过
     el.textContent = '';
     var cursor = useCursor ? makeCursor() : null;
     if (cursor) el.appendChild(cursor);

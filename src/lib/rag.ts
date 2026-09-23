@@ -10,6 +10,12 @@ export interface RagDoc {
   title: string;
   body: string;
   domain?: string;
+  /** 内容版本：同一知识点多文档时,高版本优先（旧版教材不混入检索） */
+  version?: number;
+  /** 最近更新时间（ISO）：同版本时越新越优先 */
+  updatedAt?: string;
+  /** 标签：与查询命中时作为轻量先验加分 */
+  tags?: string[];
 }
 
 export interface RagHit {
@@ -68,9 +74,35 @@ export function bm25Search(
     .slice(0, k);
 }
 
-/** 上层统一入口：现在走 BM25；接入嵌入模型后这里切换/混排向量检索 */
+/** 同一知识点出现多份文档时的裁决：保留 version 更高者；同版本取 updatedAt 更新者。
+ *  这样旧版教材/过期笔记不会和新版一起混进检索结果（"冲突了听谁的"= 听更新、版本更高的）。 */
+export function dedupeConflicts(docs: RagDoc[]): RagDoc[] {
+  const best = new Map<string, RagDoc>();
+  for (const d of docs) {
+    const key = d.title.trim().toLowerCase();
+    const cur = best.get(key);
+    if (!cur) { best.set(key, d); continue; }
+    const dv = d.version ?? 1, cv = cur.version ?? 1;
+    const du = d.updatedAt ?? "", cu = cur.updatedAt ?? "";
+    if (dv > cv || (dv === cv && du > cu)) best.set(key, d);
+  }
+  return [...best.values()];
+}
+
+/** 上层统一入口：先做冲突裁决,再 BM25,最后叠加标签/更新度轻量先验重排。
+ *  接入嵌入模型后在此切换/混排向量检索,上层无感。 */
 export function retrieve(query: string, docs: RagDoc[], k = 3): RagHit[] {
-  return bm25Search(query, docs, k);
+  const clean = dedupeConflicts(docs);
+  const hits = bm25Search(query, clean, k * 2);
+  const qTokens = new Set(tokenize(query));
+  const reranked = hits.map((h) => {
+    let score = h.score;
+    if ((h.doc.tags ?? []).some((t) => qTokens.has(t.toLowerCase()))) score += 0.5;
+    const ts = h.doc.updatedAt ? Date.parse(h.doc.updatedAt) : 0;
+    if (ts) score += Math.min(0.3, ts / 1e13); // 越新越优先的微小先验,不压过相关性
+    return { ...h, score };
+  });
+  return reranked.sort((a, b) => b.score - a.score).slice(0, k);
 }
 
 /** 把检索结果压成可注入提示词的上下文块 */

@@ -255,6 +255,8 @@ export const useAppStore = create<AppState>()(
             reviewStage: 0,
             nextReviewAt: todayISO(),
             links: [],
+            version: 1,
+            updatedAt: new Date().toISOString(),
           }));
         set((s) => ({ knowledge: [...fresh, ...s.knowledge] }));
       },
@@ -450,9 +452,18 @@ export const useAppStore = create<AppState>()(
       },
       updateKnowledge: (id, patch) =>
         set((s) => ({
-          knowledge: s.knowledge.map((k) =>
-            k.id === id ? { ...k, ...patch } : k
-          ),
+          knowledge: s.knowledge.map((k) => {
+            if (k.id !== id) return k;
+            // 只有内容性修订（标题/正文）才递增版本；复习状态等元数据更新不算改版
+            const contentEdit = patch.title !== undefined || patch.body !== undefined;
+            return {
+              ...k,
+              ...patch,
+              ...(contentEdit
+                ? { version: (k.version ?? 1) + 1, updatedAt: new Date().toISOString() }
+                : {}),
+            };
+          }),
         })),
       removeKnowledge: (id) =>
         set((s) => ({

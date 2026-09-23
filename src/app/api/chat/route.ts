@@ -104,32 +104,61 @@ function ndjson(res: ReadableStreamDefaultController, chunk: string) {
   res.enqueue(new TextEncoder().encode(chunk + "\n"));
 }
 
-async function* upstreamDeltas(cfg: AIConfig, body: Body) {
+/* 可重试的瞬时故障：限流/服务端错误/超时；4xx(除408/409/429)为确定性错误不重试 */
+const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
+const UPSTREAM_TIMEOUT_MS = 45_000;
+const MAX_ATTEMPTS = 3;
+
+class FatalUpstream extends Error { fatal = true; }
+
+/** 带超时 + 指数退避重试的上游请求（仅在尚未产出任何增量前重试，保证幂等） */
+async function fetchUpstream(cfg: AIConfig, body: Body): Promise<Response> {
   const url = `${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${cfg.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages: [
-        ...(body.system ? [{ role: "system", content: body.system }] : []),
-        ...body.messages,
-      ],
-      stream: true,
-      temperature: body.temperature ?? 0.7,
-    }),
-  });
-
-  if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => "");
-    yield { error: `上游模型返回 ${res.status}：${text.slice(0, 300)}` };
-    return;
+  let lastErr = "";
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+        body: JSON.stringify({
+          model: cfg.model,
+          messages: [
+            ...(body.system ? [{ role: "system", content: body.system }] : []),
+            ...body.messages,
+          ],
+          stream: true,
+          temperature: body.temperature ?? 0.7,
+        }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok && res.body) return res;
+      const text = await res.text().catch(() => "");
+      lastErr = `上游模型返回 ${res.status}：${text.slice(0, 300)}`;
+      if (!RETRYABLE.has(res.status)) throw new FatalUpstream(lastErr);
+    } catch (e) {
+      clearTimeout(timer);
+      if (e instanceof FatalUpstream) throw e;
+      lastErr =
+        e instanceof Error && e.name === "AbortError"
+          ? `上游模型响应超时（>${UPSTREAM_TIMEOUT_MS / 1000}s）`
+          : e instanceof Error ? e.message : "网络错误";
+    }
+    if (attempt < MAX_ATTEMPTS - 1) {
+      await new Promise((r) => setTimeout(r, 500 * 2 ** attempt)); // 500ms → 1s
+    }
   }
+  throw new Error(`${lastErr || "上游模型不可用"}（已重试 ${MAX_ATTEMPTS} 次）`);
+}
 
-  const reader = res.body.getReader();
+async function* upstreamDeltas(cfg: AIConfig, body: Body) {
+  const res = await fetchUpstream(cfg, body);
+  const streamBody = res.body;
+  if (!streamBody) return; // fetchUpstream 已保证 ok+body,此处仅为类型收窄
+
+  const reader = streamBody.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   for (;;) {

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import { Badge, Button, Card, Input, PageHeader } from "@/components/ui";
 import { useAppStore, DEFAULT_SETTINGS } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
@@ -486,22 +485,41 @@ export default function SettingsPage() {
   );
 }
 
-/* ================= 推荐有礼：扫码在手机上打开 Mentora ================= */
+/* ================= 推荐：扫码进微信 / 飞书交流群 ================= */
 function InviteSection() {
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   useEffect(() => setOrigin(window.location.origin), []);
   return (
     <Card className="p-6">
-      <p className="text-sm font-bold text-ink">把 Mentora 装到手机</p>
+      <p className="text-sm font-bold text-ink">加入 Mentora 交流群</p>
       <p className="mt-1.5 text-[13px] leading-relaxed text-ink-dim">
-        用手机扫这个码，直接打开 Mentora——注册同一账号，学习进度自动跟着走。
-        推荐给朋友也一样：他们扫的是你正在用的这个产品。
+        微信扫码进微信交流反馈群，飞书扫码进飞书协作群。新功能预告、用法答疑、吐槽反馈都在群里。
+        想把 Mentora 推荐给朋友，转发产品链接或群码都可以。
       </p>
-      <div className="mt-5 flex items-center gap-6">
-        <div className="rounded-2xl border border-border bg-white p-3">
-          {origin ? <QRCodeSVG value={origin} size={132} /> : <div className="size-[132px]" />}
-        </div>
+      <div className="mt-5 flex flex-wrap items-start gap-6">
+        <figure className="m-0">
+          <div className="rounded-2xl border border-border bg-white p-2.5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/wechat-group-qr.jpg"
+              alt="微信交流反馈群二维码"
+              className="size-[132px] rounded-lg object-cover"
+            />
+          </div>
+          <figcaption className="mt-2 text-center text-[12px] text-ink-dim">微信 · 交流反馈群</figcaption>
+        </figure>
+        <figure className="m-0">
+          <div className="rounded-2xl border border-border bg-white p-2.5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/feishu-group-qr.jpg"
+              alt="飞书协作群二维码"
+              className="size-[132px] rounded-lg object-cover"
+            />
+          </div>
+          <figcaption className="mt-2 text-center text-[12px] text-ink-dim">飞书 · 协作群</figcaption>
+        </figure>
         <div className="space-y-2 text-[13px] text-ink-dim">
           <p className="font-mono text-[12px] text-ink">{origin || "…"}</p>
           <Button
@@ -515,7 +533,7 @@ function InviteSection() {
               } catch {}
             }}
           >
-            {copied ? "已复制" : "复制链接"}
+            {copied ? "已复制" : "复制产品链接"}
           </Button>
         </div>
       </div>

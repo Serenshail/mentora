@@ -92,26 +92,9 @@ function LoginInner() {
   }
 
   const afterAuth = async () => {
-    const result = await syncAfterLogin(async (cloudUpdatedAt) => {
-      return new Promise((resolve) => {
-        toast(
-          `云端有你的备份（${new Date(cloudUpdatedAt).toLocaleString("zh-CN")}）。用哪份？`,
-          {
-            duration: 30000,
-            action: {
-              label: "用云端",
-              onClick: () => resolve("cloud"),
-            },
-            cancel: {
-              label: "用本机并覆盖云端",
-              onClick: () => resolve("local"),
-            },
-            onDismiss: () => resolve("cloud"),
-          }
-        );
-      });
-    });
-    if (result === "pulled") toast.success("已从云端恢复你的数据");
+    // 全自动同步：云端有数据直接采用，无需用户点选
+    const result = await syncAfterLogin();
+    if (result === "pulled") toast.success("已同步云端最新数据");
     else if (result === "pushed") toast.success("本机数据已备份到云端");
     // 从 /admin 等页面被送来的，登录完要回到那里，别一律甩回首页
     router.push(safeNext(params.get("next")));

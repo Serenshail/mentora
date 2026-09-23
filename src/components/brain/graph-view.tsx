@@ -324,14 +324,26 @@ export function GraphView({
   useEffect(() => {
     const wrap = wrapRef.current!;
     const ro = new ResizeObserver(() => {
-      const r = wrap.getBoundingClientRect();
+      const canvas = canvasRef.current;
+      if (!wrapRef.current || !canvas) return; // 卸载竞态：节点已移除时不再读 style
+      const r = wrapRef.current.getBoundingClientRect();
       sizeRef.current = { w: r.width, h: r.height };
-      canvasRef.current!.style.width = `${r.width}px`;
-      canvasRef.current!.style.height = `${r.height}px`;
+      canvas.style.width = `${r.width}px`;
+      canvas.style.height = `${r.height}px`;
       dirtyRef.current = true;
     });
     ro.observe(wrap);
     return () => ro.disconnect();
+  }, []);
+
+  /* 滚轮缩放要阻止页面滚动，但 React 的 onWheel 是 passive 的，preventDefault 会告警；
+   * 故用原生非 passive 监听单独拦截默认滚动，onWheel 只算缩放数学。 */
+  useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const block = (e: WheelEvent) => e.preventDefault();
+    cv.addEventListener("wheel", block, { passive: false });
+    return () => cv.removeEventListener("wheel", block);
   }, []);
 
   /* ---- 相机与交互 ---- */
@@ -400,7 +412,6 @@ export function GraphView({
   };
 
   const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
     const cam = camRef.current;

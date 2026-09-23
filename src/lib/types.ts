@@ -141,6 +141,8 @@ export interface KnowledgeItem {
   lastReviewOk?: boolean;
   links: string[]; // 出链：指向其他笔记的 id（用户/AI 建立）
   tags?: string[]; // 标签（frontmatter/正文 #标签/手动添加）— Obsidian 式
+  version?: number; // 内容版本：同一知识点修订时递增；检索冲突时高版本优先（旧版不混入）
+  updatedAt?: string; // 最近修订时间（ISO）；同版本时越新越优先
   unresolved?: boolean; // Obsidian 式「未解析链接」占位笔记：[[目标]] 尚无实体，图谱显示灰色虚影
   /** FSRS 自适应调度状态（ts-fsrs；缺省时按 reviewStage 兼容旧数据） */
   fsrs?: FsrsState;

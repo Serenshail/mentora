@@ -173,9 +173,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           <button
             onClick={() => setCollapsed((v) => !v)}
             title={collapsed ? "展开侧栏" : "收起侧栏"}
-            className="mb-1.5 flex items-center justify-center rounded-lg p-1.5 text-ink-dim/60 transition hover:bg-black/[0.04] hover:text-ink cursor-pointer"
+            className={cn(
+              "mb-1.5 flex items-center rounded-lg py-2 text-ink-dim/70 transition hover:bg-black/[0.05] hover:text-ink cursor-pointer",
+              collapsed ? "justify-center px-1.5" : "justify-end px-3"
+            )}
           >
-            <PanelLeftOpen className="size-4" />
+            <PanelLeftOpen
+              className={cn("size-5 transition-transform duration-200", collapsed && "rotate-180")}
+            />
           </button>
           {!collapsed && <FeedbackWidget />}
           {user ? (

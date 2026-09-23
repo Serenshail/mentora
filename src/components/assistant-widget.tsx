@@ -1,13 +1,19 @@
 "use client";
 
 /* 左下角智能体：用户有问题随时问（产品用法、功能在哪、数据去哪了）。
- * 复用全局聊天管线（use-chat），演示模式有分流兜底。 */
+ * 复用全局聊天管线（use-chat），演示模式有分流兜底。
+ * 悬浮按钮可拖到任意位置（指针拖动），位置记住在 localStorage；轻点（未移动）才开合面板。 */
 
 import { useEffect, useRef, useState } from "react";
 import { MessageCircleQuestion, Send, X } from "lucide-react";
 import { useChat } from "@/lib/use-chat";
 import { APP_ASSISTANT } from "@/lib/ai/prompts";
 import { cn } from "@/lib/utils";
+
+const POS_KEY = "mentora-assistant-pos";
+const BTN = 44; // size-11
+const PANEL_W = 384; // max-w-sm
+const PANEL_H = 560; // max-h
 
 const FEATURE_CTX = `- 第二大脑 = 内嵌 Obsidian：三栏（文件夹树/编辑器/功能面板），[[双链]] 自动补全、#标签、反向链接/出链/大纲面板、Ctrl+K 快速切换、右上「从 Obsidian 导入」可整库导入（大库用仅结构模式）。
 - 学习教练：说目标 → 教练摸底 → 总纲要 + 每日讲义 → 验收通过才放行；知识点自动进第二大脑。
@@ -17,16 +23,64 @@ const FEATURE_CTX = `- 第二大脑 = 内嵌 Obsidian：三栏（文件夹树/�
 - 管理后台：/admin，独立密码进入（与账号登录无关）。
 - 常见问题：页面空白先强刷（Ctrl+F5）；数据没同步点侧栏「退出」重登；Obsidian 导入后笔记不进复习队列是设计如此（参考类笔记）。`;
 
+function defaultPos() {
+  if (typeof window === "undefined") return { x: 16, y: 600 };
+  return { x: 16, y: window.innerHeight - BTN - 80 };
+}
+
+function loadPos() {
+  try {
+    const raw = localStorage.getItem(POS_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as { x: number; y: number };
+      if (typeof p.x === "number" && typeof p.y === "number") return p;
+    }
+  } catch { /* 忽略 */ }
+  return defaultPos();
+}
+
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
 export function AssistantWidget() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
+  const [pos, setPos] = useState(loadPos);
   const { messages, pending, streaming, send } = useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
-  const mountedOnce = useRef(false);
+
+  const drag = useRef<{ px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, pending, open]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(POS_KEY, JSON.stringify(pos));
+    } catch { /* 忽略 */ }
+  }, [pos]);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { px: e.clientX, py: e.clientY, ox: pos.x, oy: pos.y, moved: false };
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.px;
+    const dy = e.clientY - d.py;
+    if (!d.moved && Math.hypot(dx, dy) < 5) return; // 小于阈值视为点击，不拖
+    d.moved = true;
+    setPos({
+      x: clamp(d.ox + dx, 8, window.innerWidth - BTN - 8),
+      y: clamp(d.oy + dy, 8, window.innerHeight - BTN - 8),
+    });
+  };
+  const onPointerUp = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d && !d.moved) setOpen((v) => !v); // 轻点 = 开合
+  };
 
   const doSend = () => {
     const text = input.trim();
@@ -40,17 +94,25 @@ export function AssistantWidget() {
     });
   };
 
-  void mountedOnce;
+  /* 面板优先放在按钮上方，空间不够则放下方；水平方向夹在视口内 */
+  const vw = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const vh = typeof window === "undefined" ? 800 : window.innerHeight;
+  const panelLeft = clamp(pos.x, 8, vw - PANEL_W - 8);
+  const above = pos.y - PANEL_H - 12 >= 8;
+  const panelTop = above ? pos.y - PANEL_H - 12 : clamp(pos.y + BTN + 12, 8, vh - PANEL_H - 8);
 
   return (
     <>
-      {/* 悬浮按钮：左下角 */}
+      {/* 悬浮按钮：可拖到任意位置 */}
       <button
-        onClick={() => setOpen((v) => !v)}
-        title="问点啥"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        title="问点啥（可拖动）"
+        style={{ left: pos.x, top: pos.y, width: BTN, height: BTN, touchAction: "none" }}
         className={cn(
-          "fixed bottom-20 left-4 z-40 flex size-11 items-center justify-center rounded-full shadow-lg transition md:bottom-5 md:left-5",
-          open ? "bg-ink text-white" : "bg-[#1a1a1a] text-white hover:bg-black/80 cursor-pointer"
+          "fixed z-40 flex items-center justify-center rounded-full shadow-lg transition-colors select-none",
+          open ? "bg-ink text-white" : "bg-[#1a1a1a] text-white hover:bg-black/80 cursor-grab active:cursor-grabbing"
         )}
       >
         {open ? <X className="size-5" /> : <MessageCircleQuestion className="size-5" />}
@@ -58,14 +120,17 @@ export function AssistantWidget() {
 
       {/* 对话面板 */}
       {open && (
-        <div className="fixed bottom-[5.5rem] left-4 z-40 flex h-[70vh] max-h-[560px] w-[calc(100vw-2rem)] max-w-sm flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl md:bottom-[5rem] md:left-[4.5rem]">
+        <div
+          style={{ left: panelLeft, top: panelTop, width: `min(${PANEL_W}px, calc(100vw - 1rem))`, maxHeight: PANEL_H }}
+          className="fixed z-40 flex flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
+        >
           <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
             <div>
               <p className="text-[13px] font-bold text-ink">Mentora 助手</p>
               <p className="text-[10.5px] text-ink-dim">功能在哪、怎么用，直接问</p>
             </div>
           </div>
-          <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-3">
+          <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-3" style={{ minHeight: 200 }}>
             {messages.length === 0 && !pending && (
               <div className="space-y-2 rounded-xl bg-surface-2 p-3 text-[12.5px] leading-relaxed text-ink-dim">
                 <p>我是这个产品的使用助手。</p>

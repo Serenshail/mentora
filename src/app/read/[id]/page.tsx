@@ -85,7 +85,10 @@ export default function BookPage() {
     /* RAG 第一步：按用户这句话，从第二大脑检索最相关的笔记注入上下文 */
     const hits = retrieve(
       `${text} ${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`,
-      useAppStore.getState().knowledge.map((k) => ({ id: k.id, title: k.title, body: k.body, domain: k.domain })),
+      useAppStore.getState().knowledge.map((k) => ({
+        id: k.id, title: k.title, body: k.body, domain: k.domain,
+        version: k.version, updatedAt: k.updatedAt, tags: k.tags,
+      })),
       3
     );
     const ragCtx = ragContext(hits);
