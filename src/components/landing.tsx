@@ -64,10 +64,20 @@ function HeroVideo() {
     };
   }, []);
 
+  const [playable, setPlayable] = useState(false);
+
   return (
     <>
-      {/* 兜底层：视频加载失败（VPN/断网/代理拦截）时保证深色底成立，白字永远可读 */}
+      {/* 兜底层：深色底 + 海报图。视频失败/浏览器不支持解码/被拦截时显示海报,绝不黑屏 */}
       <div className="fixed inset-0 z-0 bg-ink" />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/hero-poster.jpg"
+        alt=""
+        aria-hidden
+        className="fixed inset-0 z-0 h-full w-full object-cover"
+        style={{ objectPosition: "70% center" }}
+      />
       <video
         ref={ref}
         src={VIDEO_SRC}
@@ -75,9 +85,17 @@ function HeroVideo() {
         muted
         playsInline
         preload="auto"
-        onError={(e) => e.currentTarget.remove()} /* 加载失败就移除，露出兜底层 */
-        className="fixed inset-0 z-0 h-full w-full object-cover"
-        style={{ objectPosition: "70% center", filter: "brightness(1.06) contrast(1.04)" }}
+        onLoadedData={() => setPlayable(true)}
+        onError={(e) => {
+          /* 加载/解码失败:隐藏视频,露出海报兜底(不黑屏) */
+          e.currentTarget.style.display = "none";
+        }}
+        className="fixed inset-0 z-0 h-full w-full object-cover transition-opacity duration-500"
+        style={{
+          objectPosition: "70% center",
+          filter: "brightness(1.06) contrast(1.04)",
+          opacity: playable ? 1 : 0, // 未可播前透明,避免首帧暗场=黑屏
+        }}
       />
       {/* 可读性压暗层：减到 15%，保白字成立的同时不灰 */}
       <div className="pointer-events-none fixed inset-0 z-0 bg-black/15" />
