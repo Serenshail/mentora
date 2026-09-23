@@ -55,6 +55,107 @@ function inlineTags(body: string): string[] {
 
 const TAGS_OF = (k: KnowledgeItem) => [...new Set([...(k.tags ?? []), ...inlineTags(k.body)])];
 
+/* 把正文切成"块"（空行分隔；代码围栏内部不拆），供块级实时预览编辑 */
+function splitBlocks(body: string): string[] {
+  const lines = body.split("\n");
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  let inFence = false;
+  const flush = () => {
+    if (cur.length) {
+      blocks.push(cur.join("\n"));
+      cur = [];
+    }
+  };
+  for (const ln of lines) {
+    if (/^```/.test(ln.trim())) {
+      inFence = !inFence;
+      cur.push(ln);
+      continue;
+    }
+    if (!inFence && ln.trim() === "") {
+      flush();
+      continue;
+    }
+    cur.push(ln);
+  }
+  flush();
+  return blocks;
+}
+
+/* Obsidian 式实时预览编辑：整篇默认渲染成排版文档；点哪一段,只有那一段进入可编辑(显示原文),
+ * 其余段落保持渲染、纹丝不动。不懂 MD 的人也能直接改。提交只替换被编辑的那一块。 */
+function LiveBlocks({
+  body,
+  notes,
+  onCommit,
+  onOpen,
+  onCreate,
+}: {
+  body: string;
+  notes: KnowledgeItem[];
+  onCommit: (next: string) => void;
+  onOpen: (id: string) => void;
+  onCreate: (title: string) => void;
+}) {
+  const blocks = useMemo(() => splitBlocks(body), [body]);
+  const [active, setActive] = useState<number | null>(null);
+  const [text, setText] = useState("");
+
+  const open = (i: number) => {
+    setActive(i);
+    setText(blocks[i] ?? "");
+  };
+  const commit = () => {
+    if (active == null) return;
+    const next = [...blocks];
+    next[active] = text;
+    onCommit(next.join("\n\n"));
+    setActive(null);
+  };
+
+  return (
+    <div className="min-h-full px-3 py-3">
+      {blocks.length === 0 ? (
+        <textarea
+          autoFocus
+          className="min-h-[40vh] w-full resize-none bg-transparent px-2 font-mono text-[13px] leading-relaxed text-ink outline-none"
+          value={text}
+          placeholder="像聊天一样写就行——点别处自动排版。输入 [[ 可链接其他笔记…"
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+        />
+      ) : (
+        blocks.map((b, i) =>
+          active === i ? (
+            <textarea
+              key={i}
+              autoFocus
+              rows={Math.max(2, text.split("\n").length + 1)}
+              className="my-1 w-full resize-none rounded-lg border border-accent/40 bg-white px-3 py-2 font-mono text-[13px] leading-relaxed text-ink outline-none"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onBlur={commit}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") commit();
+              }}
+            />
+          ) : (
+            <div
+              key={i}
+              onClick={() => open(i)}
+              title="点击编辑这一段（其余保持排版）"
+              className="prose-mentora cursor-text rounded-lg px-3 py-1.5 transition hover:bg-black/[0.035]"
+            >
+              <WikiMarkdown body={b} notes={notes} onOpen={onOpen} onCreate={onCreate} />
+            </div>
+          )
+        )
+      )}
+    </div>
+  );
+}
+
 /* Obsidian 式搜索命中上下文：截取首个命中处前后若干字符并压平空白 */
 function matchSnippet(body: string, q: string): string | null {
   const idx = body.toLowerCase().indexOf(q);
@@ -169,6 +270,8 @@ export function NoteWorkspace({
   const removeFolder = useAppStore((s) => s.removeFolder);
 
   const [query, setQuery] = useState("");
+  /* 编辑态默认 Obsidian 式实时预览(块级),可切源码 */
+  const [editStyle, setEditStyle] = useState<"live" | "raw">("live");
   const [domain, setDomain] = useState("all");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("backlinks");
@@ -1069,7 +1172,14 @@ export function NoteWorkspace({
                       <b.icon className="size-3.5" />
                     </button>
                   ))}
-                  <span className="ml-auto flex items-center gap-1 pr-1 text-[10px] text-ink-dim/50">
+                  <button
+                    onClick={() => setEditStyle((s) => (s === "live" ? "raw" : "live"))}
+                    title={editStyle === "live" ? "切到源码模式（整篇 MD）" : "切回实时预览（点哪段改哪段）"}
+                    className="ml-auto rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer"
+                  >
+                    {editStyle === "live" ? "源码" : "实时预览"}
+                  </button>
+                  <span className="flex items-center gap-1 pr-1 text-[10px] text-ink-dim/50">
                     <ArrowDownUp className="size-3" /> 改动即存
                   </span>
                 </div>
@@ -1120,6 +1230,18 @@ export function NoteWorkspace({
               <div className="relative flex-1 overflow-hidden">
                 {mode === "edit" ? (
                   <div className="relative h-full overflow-y-auto">
+                    {editStyle === "live" ? (
+                      <LiveBlocks
+                        body={note.body}
+                        notes={knowledge}
+                        onCommit={(b) => {
+                          setBody(b);
+                          setSuggest(null);
+                        }}
+                        onOpen={(id) => onOpenNote(id)}
+                        onCreate={(title) => openByTitle(title, true)}
+                      />
+                    ) : (
                     <textarea
                       ref={taRef}
                       className="min-h-full w-full resize-none bg-transparent px-4 py-4 font-mono text-[13px] leading-relaxed text-ink outline-none"
@@ -1141,6 +1263,7 @@ export function NoteWorkspace({
                         onModeChange("preview");
                       }}
                     />
+                    )}
                     {/* [[ 补全下拉 */}
                     {suggest && (
                       <div className="absolute left-4 right-4 top-16 z-10 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
