@@ -213,7 +213,9 @@ export async function bootSync(): Promise<void> {
     if (!cloud) return;
     const localTs = Date.parse(localStorage.getItem(CHOICE_KEY) ?? "") || 0;
     const cloudTs = Date.parse(cloud.updatedAt) || 0;
-    if (cloudTs > localTs) {
+    // 本地为空(大知识库装不下 localStorage,刷新后本地快照是空的)时,只要云端有数据就恢复;
+    // 否则仅在云端比本地新时拉取,避免覆盖本地未推送的编辑。
+    if (!hasLocalData() || cloudTs > localTs) {
       useAppStore.getState().importData(cloud.data);
       localStorage.setItem(CHOICE_KEY, cloud.updatedAt);
       setSyncStatus("saved");
