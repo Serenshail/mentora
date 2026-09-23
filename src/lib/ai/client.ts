@@ -168,7 +168,7 @@ export const phasePlanSchema = z.object({
             /* 资料时效/类型元数据:用于"新近+实用优先、经典降权"的确定性排序 */
             year: z.number().optional().nullable(),
             kind: z
-              .enum(["official", "doc", "course", "tutorial", "book", "paper", "classic"])
+              .enum(["official", "doc", "course", "tutorial", "book", "paper", "classic", "repo"])
               .optional()
               .nullable(),
             evergreen: z.boolean().optional().nullable(),
@@ -218,7 +218,7 @@ export const planSchema = z.object({
             /* 资料时效/类型元数据:用于"新近+实用优先、经典降权"的确定性排序 */
             year: z.number().optional().nullable(),
             kind: z
-              .enum(["official", "doc", "course", "tutorial", "book", "paper", "classic"])
+              .enum(["official", "doc", "course", "tutorial", "book", "paper", "classic", "repo"])
               .optional()
               .nullable(),
             evergreen: z.boolean().optional().nullable(),

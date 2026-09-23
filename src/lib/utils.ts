@@ -13,6 +13,7 @@ const KIND_SCORE: Record<string, number> = {
   course: 4,
   tutorial: 4,
   paper: 3,
+  repo: 4,
   book: 2,
   classic: 1,
 };
@@ -34,6 +35,7 @@ export const KIND_LABEL: Record<string, string> = {
   course: "视频课",
   tutorial: "教程",
   paper: "论文",
+  repo: "开源仓库",
   book: "书",
   classic: "经典",
 };

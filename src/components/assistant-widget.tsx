@@ -8,6 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import { MessageCircleQuestion, Send, X } from "lucide-react";
 import { useChat } from "@/lib/use-chat";
 import { cn } from "@/lib/utils";
+import { useAppStore } from "@/lib/store";
+import { toast } from "sonner";
 
 const POS_KEY = "mentora-assistant-pos";
 const BTN = 44; // size-11
@@ -81,6 +83,14 @@ export function AssistantWidget() {
     if (d && !d.moved) setOpen((v) => !v); // 轻点 = 开合
   };
 
+  /* 把助手的一条回答存进第二大脑（帮用户记笔记） */
+  const saveAsNote = (content: string) => {
+    const firstLine = content.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "").trim() || "助手笔记";
+    const title = firstLine.slice(0, 30);
+    useAppStore.getState().addKnowledge([{ title, body: content, domain: "笔记" }], "manual", "AI 助手");
+    toast.success(`已存为笔记「${title}」`);
+  };
+
   const doSend = () => {
     const text = input.trim();
     if (!text || streaming) return;
@@ -143,8 +153,17 @@ export function AssistantWidget() {
                     {m.content}
                   </div>
                 ) : (
-                  <div className="max-w-[92%] whitespace-pre-wrap rounded-2xl rounded-bl-md bg-surface-2 px-3 py-2 text-[12.5px] leading-relaxed text-ink">
-                    {m.content}
+                  <div className="max-w-[92%]">
+                    <div className="whitespace-pre-wrap rounded-2xl rounded-bl-md bg-surface-2 px-3 py-2 text-[12.5px] leading-relaxed text-ink">
+                      {m.content}
+                    </div>
+                    <button
+                      onClick={() => saveAsNote(m.content)}
+                      className="mt-1 cursor-pointer rounded-md px-1.5 py-0.5 text-[10.5px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink"
+                      title="把这条回答存进第二大脑"
+                    >
+                      ＋ 存为笔记
+                    </button>
                   </div>
                 )}
               </div>

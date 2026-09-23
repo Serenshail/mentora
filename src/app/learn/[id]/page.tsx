@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge, Button, Card, Input, Modal, PageHeader, ProgressRing, StatusDot, Textarea,
 } from "@/components/ui";
@@ -12,6 +12,39 @@ import { DOMAIN_LABELS } from "@/lib/types";
 import type { DayPlan, Goal, QuizItemResult } from "@/lib/types";
 import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
 import { cn, formatDate, uid, rankResources, KIND_LABEL } from "@/lib/utils";
+
+/* 链接体检徽章:服务端检测失效/疑似广告,每 URL 只测一次(模块级缓存) */
+interface LinkCheck { ok: boolean; dead: boolean; ad: boolean; reason: string }
+const linkCache = new Map<string, Promise<LinkCheck | null>>();
+function checkLink(url: string): Promise<LinkCheck | null> {
+  const hit = linkCache.get(url);
+  if (hit) return hit;
+  const p = fetch("/api/linkcheck", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls: [url] }),
+  })
+    .then((r) => r.json())
+    .then((j) => (j.results?.[0] as LinkCheck) ?? null)
+    .catch(() => null);
+  linkCache.set(url, p);
+  return p;
+}
+function LinkStatus({ url }: { url?: string }) {
+  const [st, setSt] = useState<LinkCheck | null>(null);
+  useEffect(() => {
+    if (!url) return;
+    let on = true;
+    void checkLink(url).then((r) => on && setSt(r));
+    return () => {
+      on = false;
+    };
+  }, [url]);
+  if (!st) return null;
+  if (st.dead) return <span className="shrink-0 text-[10px] text-bad" title={st.reason}>✗ 失效</span>;
+  if (st.ad) return <span className="shrink-0 text-[10px] text-warn" title={st.reason}>⚠ 疑似广告</span>;
+  return <span className="shrink-0 text-[10px] text-ok" title="链接可访问">✓</span>;
+}
 import { toast } from "sonner";
 import {
   ArrowLeft, BookMarked, Check, ChevronRight, CircleX, ExternalLink, Flag,
@@ -737,6 +770,7 @@ function DayPanel({
                 <span className="text-ink">{r.title}</span>
               )}
               <span className="text-xs text-ink-dim">— {r.why}</span>
+              <LinkStatus url={r.url} />
               {(r.kind || r.year || r.evergreen) && (
                 <span className="ml-auto shrink-0 rounded bg-surface px-1.5 py-0.5 text-[10px] text-ink-dim">
                   {r.evergreen ? "经典补充" : (KIND_LABEL[r.kind ?? ""] ?? r.kind)}

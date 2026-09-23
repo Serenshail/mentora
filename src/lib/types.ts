@@ -24,7 +24,7 @@ export interface Resource {
   /** 发布/最近修订年份:用于时效排序 */
   year?: number;
   /** 资料类型:official/doc/course/tutorial/book/paper/classic */
-  kind?: "official" | "doc" | "course" | "tutorial" | "book" | "paper" | "classic";
+  kind?: "official" | "doc" | "course" | "tutorial" | "book" | "paper" | "classic" | "repo";
   /** 经典旧著(evergreen):排序降权,作"经典补充" */
   evergreen?: boolean;
 }
