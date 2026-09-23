@@ -42,6 +42,7 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "insight": return P.INSIGHT_EXTRACT(s("text"));
     case "autolink": return P.AUTOLINK({ note: s("note"), candidates: s("candidates") });
     case "coach-qa": return P.ASK_COACH(s("ctx"));
+    case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "app-assistant": return P.APP_ASSISTANT(s("ctx"));
     case "persona-distill": return P.PERSONA_DISTILL(s("name"), s("hint"));
     case "council": {

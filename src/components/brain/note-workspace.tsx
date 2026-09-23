@@ -91,12 +91,14 @@ function LiveBlocks({
   onCommit,
   onOpen,
   onCreate,
+  onRewrite,
 }: {
   body: string;
   notes: KnowledgeItem[];
   onCommit: (next: string) => void;
   onOpen: (id: string) => void;
   onCreate: (title: string) => void;
+  onRewrite?: (t: string) => Promise<string>;
 }) {
   const blocks = useMemo(() => splitBlocks(body), [body]);
   const [active, setActive] = useState<number | null>(null);
@@ -128,8 +130,26 @@ function LiveBlocks({
       ) : (
         blocks.map((b, i) =>
           active === i ? (
-            <textarea
-              key={i}
+            <div key={i}>
+              {onRewrite && (
+                <div className="mb-1 flex justify-end">
+                  <button
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={async () => {
+                      try {
+                        setText(await onRewrite(text));
+                      } catch {
+                        /* 忽略单次失败 */
+                      }
+                    }}
+                    className="rounded-md px-1.5 py-0.5 text-[10.5px] text-accent transition hover:bg-accent/[0.08] cursor-pointer"
+                    title="AI 改写这一段（不改原意）"
+                  >
+                    ✨ AI 改写这段
+                  </button>
+                </div>
+              )}
+              <textarea
               autoFocus
               rows={Math.max(2, text.split("\n").length + 1)}
               className="my-1 w-full resize-none rounded-lg border border-accent/40 bg-white px-3 py-2 font-mono text-[13px] leading-relaxed text-ink outline-none"
@@ -139,7 +159,8 @@ function LiveBlocks({
               onKeyDown={(e) => {
                 if (e.key === "Escape") commit();
               }}
-            />
+              />
+            </div>
           ) : (
             <div
               key={i}
@@ -272,6 +293,19 @@ export function NoteWorkspace({
   const [query, setQuery] = useState("");
   /* 编辑态默认 Obsidian 式实时预览(块级),可切源码 */
   const [editStyle, setEditStyle] = useState<"live" | "raw">("live");
+  const [aiBusy, setAiBusy] = useState(false);
+
+  /* AI 帮改笔记:rewrite 润色 / summarize 总结 / continue 续写(服务端组装提示词) */
+  const aiNote = async (mode: "rewrite" | "summarize" | "continue", text: string) => {
+    const { streamChat } = await import("@/lib/ai/client");
+    return streamChat({
+      task: "note-assist",
+      args: { mode, text },
+      messages: [{ role: "user", content: "执行。" }],
+      temperature: 0.3,
+      onDelta: () => {},
+    });
+  };
   const [domain, setDomain] = useState("all");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("backlinks");
@@ -1173,6 +1207,47 @@ export function NoteWorkspace({
                     </button>
                   ))}
                   <button
+                    disabled={aiBusy || !note}
+                    title="AI 生成本篇要点摘要并追加到文末"
+                    onClick={async () => {
+                      if (!note) return;
+                      setAiBusy(true);
+                      try {
+                        const sum = await aiNote("summarize", note.body);
+                        setBody(note.body + "\n\n## 摘要\n" + sum);
+                        toast.success("已追加 AI 摘要");
+                      } catch {
+                        toast.error("AI 总结失败，稍后再试");
+                      } finally {
+                        setAiBusy(false);
+                      }
+                    }}
+                    className="rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
+                  >
+                    <Sparkles className="mr-0.5 inline size-3" /> {aiBusy ? "AI 中…" : "AI 总结"}
+                  </button>
+                  <button
+                    disabled={aiBusy || !note}
+                    title="AI 润色全文（不改原意，保留双链/标签）"
+                    onClick={async () => {
+                      if (!note) return;
+                      if (!confirm("用 AI 润色全文？原意与双链/标签保留，但措辞会重写。")) return;
+                      setAiBusy(true);
+                      try {
+                        const rw = await aiNote("rewrite", note.body);
+                        if (rw.trim()) setBody(rw);
+                        toast.success("已 AI 润色全文");
+                      } catch {
+                        toast.error("AI 润色失败，稍后再试");
+                      } finally {
+                        setAiBusy(false);
+                      }
+                    }}
+                    className="rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
+                  >
+                    {aiBusy ? "AI 中…" : "AI 润色"}
+                  </button>
+                  <button
                     onClick={() => setEditStyle((s) => (s === "live" ? "raw" : "live"))}
                     title={editStyle === "live" ? "切到源码模式（整篇 MD）" : "切回实时预览（点哪段改哪段）"}
                     className="ml-auto rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer"
@@ -1240,6 +1315,7 @@ export function NoteWorkspace({
                         }}
                         onOpen={(id) => onOpenNote(id)}
                         onCreate={(title) => openByTitle(title, true)}
+                        onRewrite={(t) => aiNote("rewrite", t)}
                       />
                     ) : (
                     <textarea
