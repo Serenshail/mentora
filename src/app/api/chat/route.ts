@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { PROVIDERS, type AIConfig } from "@/lib/ai/providers";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
+import * as P from "@/lib/ai/prompts";
 import {
   demoCouncil, demoIntake, demoLesson, demoPlan, demoQuizGrade,
   demoReadingChat, demoReadingPlan, demoReview, demoReviewGrade,
@@ -10,10 +11,42 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 interface Body {
-  system?: string;
+  system?: string; // 仅服务端内部使用；客户端不再发送
+  args?: Record<string, unknown>; // 纯数据参数,服务端据此组装系统提示词
   messages: { role: "user" | "assistant"; content: string }[];
   temperature?: number;
   task?: string;
+}
+
+/* IP 保护：系统提示词只在服务端组装。前端仅发 task+args(纯数据),
+ * 提示词模板(server-only)不进浏览器包、不上网络,别人只能看到输入→输出,看不到配方。 */
+function buildSystem(task: string | undefined, args: Record<string, unknown> = {}): string {
+  const s = (k: string) => String(args[k] ?? "");
+  switch (task) {
+    case "intake": return P.SOCRATIC_INTAKE(s("topic"), s("userName"));
+    case "plan":
+      return args.mode === "master" ? P.PLANNER_MASTER(s("cardJson")) : P.PLANNER_PHASE(s("ctx"));
+    case "lesson": return P.DAILY_LESSON(s("ctx"));
+    case "quiz-grade": return P.QUIZ_GRADE(s("ctx"));
+    case "review-ask": return P.REVIEW_PROMPT(s("items"));
+    case "review-grade": return P.REVIEW_GRADE(s("ctx"));
+    case "reading-plan": return P.READING_PLAN(s("desc"));
+    case "reading-chat":
+      return (
+        P.READING_CHAT(s("bookCtx")) +
+        (s("ragCtx")
+          ? `\n\n## 你的主人的第二大脑里有这些相关笔记（聊天时自然引用，别硬塞）\n${s("ragCtx")}`
+          : "")
+      );
+    case "verify-score": return P.VERIFY_SCORE(args as Parameters<typeof P.VERIFY_SCORE>[0]);
+    case "insight": return P.INSIGHT_EXTRACT(s("text"));
+    case "autolink": return P.AUTOLINK({ note: s("note"), candidates: s("candidates") });
+    case "coach-qa": return P.ASK_COACH(s("ctx"));
+    case "app-assistant": return P.APP_ASSISTANT(s("ctx"));
+    case "persona-distill": return P.PERSONA_DISTILL(s("name"), s("hint"));
+    case "council": return s("system"); // 内置 persona 的 system 下一步改为服务端按 id 解析
+    default: return s("system");
+  }
 }
 
 function resolveConfig(req: NextRequest): AIConfig {
@@ -200,6 +233,13 @@ export async function POST(req: NextRequest) {
     body = { messages: [] };
   }
   const cfg = resolveConfig(req);
+  // 双契约：客户端发 args(新,核心任务)→服务端组装提示词；发 system(旧,council)→沿用。
+  // 当前客户端仍发 system,故此改动行为零变化,仅为迁移备好服务端能力。
+  const system =
+    body.args && Object.keys(body.args).length > 0
+      ? buildSystem(body.task, body.args)
+      : (body.system ?? "");
+  body.system = system;
 
   const stream = new ReadableStream({
     async start(controller) {

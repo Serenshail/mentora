@@ -22,6 +22,9 @@ export type ChatTask =
  */
 export async function streamChat(
   opts: {
+    /** 纯数据参数；核心任务的系统提示词由服务端组装,前端不持有模板（IP 保护） */
+    args?: Record<string, unknown>;
+    /** 遗留通道：仅 council 暂用 */
     system?: string;
     messages: WireMsg[];
     temperature?: number;
@@ -34,6 +37,7 @@ export async function streamChat(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      args: opts.args,
       system: opts.system,
       messages: opts.messages,
       temperature: opts.temperature,

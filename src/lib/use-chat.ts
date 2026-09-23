@@ -16,6 +16,9 @@ export function useChat(initial: ChatMsg[] = []) {
 
   const send = useCallback(
     async (opts: {
+      /** 纯数据参数：提示词由服务端按 task 组装,前端不持有模板（IP 保护,核心任务用这个） */
+      args?: Record<string, unknown>;
+      /** 遗留通道：仅 council(persona/圆桌) 暂用,下一步迁移 */
       system?: string;
       userText?: string;
       history?: ChatMsg[];
@@ -43,6 +46,7 @@ export function useChat(initial: ChatMsg[] = []) {
       try {
         const wire: WireMsg[] = next.map((m) => ({ role: m.role, content: m.content }));
         const full = await streamChat({
+          args: opts.args,
           system: opts.system,
           messages: wire,
           temperature: opts.temperature,
