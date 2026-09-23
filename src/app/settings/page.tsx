@@ -6,11 +6,11 @@ import { useAppStore, DEFAULT_SETTINGS } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { PROVIDERS } from "@/lib/ai/providers";
 import type { ProviderId } from "@/lib/types";
-import { useAuth } from "@/lib/auth-client";
+import { useAuth, pullCloud } from "@/lib/auth-client";
 import { cn, downloadJson } from "@/lib/utils";
 import { toast } from "sonner";
 import { QrCode, 
-  Camera, Database, Download, KeyRound, LogOut, Save, Trash2, Upload, UserRound, X,
+  Camera, Database, Download, KeyRound, LogOut, RefreshCw, Save, Trash2, Upload, UserRound, X,
 } from "lucide-react";
 
 /* ================= 账户：头像 + 称呼 ================= */
@@ -391,6 +391,32 @@ function DataSection() {
     }
   };
 
+  /* 数据丢失兜底：直接从云端拉回（本地快照可能因配额为空,云端才是耐久存储） */
+  const [restoring, setRestoring] = useState(false);
+  const restoreFromCloud = async () => {
+    setRestoring(true);
+    try {
+      const cloud = await pullCloud();
+      if (!cloud) {
+        toast.error("云端没有备份数据（可能从未成功推送过）");
+        return;
+      }
+      importData(cloud.data);
+      toast.success(`已从云端恢复（更新于 ${new Date(cloud.updatedAt).toLocaleString("zh-CN")}）`);
+    } catch {
+      toast.error("拉取云端失败，稍后再试");
+    } finally {
+      setRestoring(false);
+    }
+  };
+
+  const local = useAppStore((s) => ({
+    goals: s.goals.length,
+    knowledge: s.knowledge.length,
+    books: s.books.length,
+    sessions: s.sessions.length,
+  }));
+
   return (
     <Card>
       <p className="mb-3 text-sm font-bold text-ink">数据</p>
@@ -400,6 +426,9 @@ function DataSection() {
         </Button>
         <Button variant="outline" onClick={() => fileRef.current?.click()}>
           <Upload className="size-4" /> 导入备份
+        </Button>
+        <Button variant="outline" onClick={restoreFromCloud} disabled={restoring}>
+          <RefreshCw className={cn("size-4", restoring && "animate-spin")} /> {restoring ? "恢复中…" : "从云端恢复"}
         </Button>
         <input
           ref={fileRef}
@@ -426,7 +455,10 @@ function DataSection() {
         </Button>
       </div>
       <p className="mt-3 text-xs text-ink-dim">
-        登录后数据自动同步云端（加密存储）；不登录则只在这台电脑上，换设备前先导出。
+        本机当前：目标 {local.goals} · 笔记 {local.knowledge} · 书 {local.books} · 对话 {local.sessions}。
+      </p>
+      <p className="mt-1 text-xs text-ink-dim">
+        登录后数据自动同步云端（加密存储）；不登录则只在这台电脑上，换设备前先导出。若刷新后本地变空，点「从云端恢复」。
       </p>
     </Card>
   );

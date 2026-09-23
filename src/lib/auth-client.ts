@@ -158,31 +158,76 @@ export async function pullCloud(): Promise<{ data: Record<string, unknown>; upda
   return j.data ? { data: j.data, updatedAt: j.updatedAt } : null;
 }
 
-export async function pushCloud(): Promise<boolean> {
+/** 推送本地数据到云端。带重试+退避；keepalive 用于关页/刷新前的兜底 flush（数据丢失根治的一环）。 */
+export async function pushCloud(opts: { keepalive?: boolean; retries?: number } = {}): Promise<boolean> {
+  const { keepalive = false, retries = keepalive ? 0 : 2 } = opts;
   setSyncStatus("saving");
   const text = JSON.stringify({ data: localData() });
-  let res: Response;
-  if (text.length > GZIP_THRESHOLD) {
-    const gz = await gzipBytes(text);
-    res = await fetch("/api/sync", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-gzip" },
-      body: gz.buffer as ArrayBuffer,
-    });
-  } else {
-    res = await fetch("/api/sync", {
+  const doFetch = (): Promise<Response> => {
+    if (text.length > GZIP_THRESHOLD) {
+      // keepalive 与 gzip 异步压缩不兼容：flush 场景若超大则降级为不压缩直传（仍可能超 4.5MB,失败则报错提示导出）
+      if (keepalive) {
+        return fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: text,
+          keepalive: true,
+        });
+      }
+      return gzipBytes(text).then((gz) =>
+        fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-gzip" },
+          body: gz.buffer as ArrayBuffer,
+        })
+      );
+    }
+    return fetch("/api/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: text,
+      keepalive: keepalive || undefined,
     });
+  };
+
+  let ok = false;
+  for (let attempt = 0; attempt <= retries && !ok; attempt++) {
+    try {
+      const res = await doFetch();
+      ok = res.ok;
+    } catch {
+      ok = false;
+    }
+    if (!ok && attempt < retries) await new Promise((r) => setTimeout(r, 800 * 2 ** attempt));
   }
-  if (res.ok) {
-    localStorage.setItem(CHOICE_KEY, new Date().toISOString());
+  if (ok) {
+    try {
+      localStorage.setItem(CHOICE_KEY, new Date().toISOString());
+    } catch { /* 配额满忽略 */ }
     setSyncStatus("saved");
     return true;
   }
   setSyncStatus("error");
   return false;
+}
+
+/** 关页/切后台前把内存数据强制 flush 到云端,防"没推上去就关了"导致丢失 */
+export function useFlushOnHide(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    const flush = () => {
+      void pushCloud({ keepalive: true });
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [enabled]);
 }
 
 /** 登录后的同步：全自动、无需用户点击——云端有数据就直接采用云端（云端为准），

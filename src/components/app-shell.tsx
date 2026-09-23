@@ -18,7 +18,8 @@ import {
 import { FeedbackWidget } from "@/components/feedback-widget";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { toast } from "sonner";
-import { useAuth, useAutoPush, useSyncStatus } from "@/lib/auth-client";
+import { ErrorBoundary } from "@/components/error-boundary";
+import { useAuth, useAutoPush, useSyncStatus, useFlushOnHide } from "@/lib/auth-client";
 import { isAdminEmail } from "@/lib/admin-emails";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
@@ -41,6 +42,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, logout, checking } = useAuth();
   const syncStatus = useSyncStatus((s) => s.status);
   useAutoPush(!!user);
+  useFlushOnHide(!!user); // 关页/切后台前强制 flush,防数据没推上去就丢
 
   /* 管理员：侧栏（桌面）与底栏（移动端）都给出后台入口，登上账号就能直达 */
   /* 侧栏可收起（图标条模式），用户自己决定宽窄，选择记住 */
@@ -272,7 +274,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <main className="w-full flex-1 px-4 py-6 md:px-7 md:py-8">
           <div key={pathname} className="page-fade">
-            {children}
+            <ErrorBoundary>{children}</ErrorBoundary>
           </div>
         </main>
 
