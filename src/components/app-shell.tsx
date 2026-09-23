@@ -195,13 +195,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className={cn("mt-auto pb-4 pt-2", collapsed ? "px-1.5" : "px-3")}>
-          {!collapsed && <FeedbackWidget />}
-          {/* 收起/展开：与「退出」同一列、紧贴账号行上方（右对齐），收起态居中 */}
+          {/* 收起/展开：位于「反馈」上方、水平右移对齐「退出」所在列；收起态居中 */}
           <button
             onClick={() => setCollapsed((v) => !v)}
             title={collapsed ? "展开侧栏" : "收起侧栏"}
             className={cn(
-              "mb-0.5 mt-1 flex items-center rounded-lg py-1.5 text-ink-dim/70 transition hover:bg-black/[0.05] hover:text-ink cursor-pointer",
+              "mb-1 flex items-center rounded-lg py-1.5 text-ink-dim/70 transition hover:bg-black/[0.05] hover:text-ink cursor-pointer",
               collapsed ? "justify-center px-1.5" : "justify-end px-2.5"
             )}
           >
@@ -209,6 +208,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               className={cn("size-5 transition-transform duration-200", collapsed && "rotate-180")}
             />
           </button>
+          {!collapsed && <FeedbackWidget />}
           {user ? (
             <div className="mt-1 flex items-center gap-2 rounded-xl px-2.5 py-2">
               {user.avatar ? (

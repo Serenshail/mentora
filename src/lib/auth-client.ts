@@ -101,6 +101,8 @@ export function useAuth() {
         if (useAppStore.getState()._storeUserId !== target) {
           setStoreUser(target);
         }
+        // 刷新/新开页面即与云端对齐,不必重新登录才恢复数据
+        if (user) void bootSync();
       } catch {
         useAuthStore.setState({ user: null });
         setStoreUser(null);
@@ -201,6 +203,24 @@ export async function syncAfterLogin(): Promise<"pushed" | "pulled" | "none"> {
   useAppStore.getState().importData(cloud.data);
   localStorage.setItem(CHOICE_KEY, new Date().toISOString());
   return "pulled";
+}
+
+/** 开机/刷新即与云端对齐：本地快照可能因配额装不下大知识库而为空，
+ * 不能只靠"登录那一刻"拉云。云端比本地新就拉取,否则保留本地(含未推送编辑)。 */
+export async function bootSync(): Promise<void> {
+  try {
+    const cloud = await pullCloud();
+    if (!cloud) return;
+    const localTs = Date.parse(localStorage.getItem(CHOICE_KEY) ?? "") || 0;
+    const cloudTs = Date.parse(cloud.updatedAt) || 0;
+    if (cloudTs > localTs) {
+      useAppStore.getState().importData(cloud.data);
+      localStorage.setItem(CHOICE_KEY, cloud.updatedAt);
+      setSyncStatus("saved");
+    }
+  } catch {
+    /* 开机同步失败不打断应用,本地数据照常可用 */
+  }
 }
 
 /** 登录状态下：数据变化后 2.5s 防抖自动推送 */
