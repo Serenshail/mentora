@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { FeedbackWidget } from "@/components/feedback-widget";
 import { AssistantWidget } from "@/components/assistant-widget";
+import { toast } from "sonner";
 import { useAuth, useAutoPush } from "@/lib/auth-client";
 import { isAdminEmail } from "@/lib/admin-emails";
 import { useRouter } from "next/navigation";
@@ -55,6 +56,30 @@ export function AppShell({ children }: { children: ReactNode }) {
       window.localStorage.setItem("mentora-sidebar-collapsed", collapsed ? "1" : "0");
     } catch {}
   }, [collapsed]);
+
+  /* 本地快照写满（知识库过大）时给一次可见提示：不崩溃、数据以云端为准 */
+  useEffect(() => {
+    let warned = false;
+    const onQuota = () => {
+      if (warned) return;
+      warned = true;
+      toast.warning(
+        "本地快照已装满：笔记数量超出浏览器存储上限。数据以云端同步为准，功能不受影响。"
+      );
+    };
+    /* Next 内置 web-vitals 的已知缺陷（reportAllChanges 读 undefined.startTime），
+     * 非本应用代码；定向抑制，避免控制台噪音掩盖真实错误。 */
+    const onError = (e: ErrorEvent) => {
+      const stack = (e.error as Error | undefined)?.stack ?? "";
+      if (/startTime/.test(e.message) && /reportAllChanges/.test(stack)) e.preventDefault();
+    };
+    window.addEventListener("mentora:quota", onQuota);
+    window.addEventListener("error", onError);
+    return () => {
+      window.removeEventListener("mentora:quota", onQuota);
+      window.removeEventListener("error", onError);
+    };
+  }, []);
 
   /* /admin 自带独立密码门，不需要登录态，也不参与登录跳转（否则和登录页互相弹） */
   const isPublicPath = pathname === "/" || pathname === "/login" || pathname === "/admin";

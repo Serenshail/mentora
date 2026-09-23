@@ -504,7 +504,7 @@ function InviteSection() {
             <img
               src="/wechat-group-qr.jpg"
               alt="微信交流反馈群二维码"
-              className="size-[132px] rounded-lg object-cover"
+              className="h-auto w-[132px] rounded-lg"
             />
           </div>
           <figcaption className="mt-2 text-center text-[12px] text-ink-dim">微信 · 交流反馈群</figcaption>
@@ -515,7 +515,7 @@ function InviteSection() {
             <img
               src="/feishu-group-qr.jpg"
               alt="飞书协作群二维码"
-              className="size-[132px] rounded-lg object-cover"
+              className="h-auto w-[132px] rounded-lg"
             />
           </div>
           <figcaption className="mt-2 text-center text-[12px] text-ink-dim">飞书 · 协作群</figcaption>

@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { fsrs, generatorParameters, createEmptyCard, Rating, State } from "ts-fsrs";
 import { useShallow } from "zustand/react/shallow";
 import type {
@@ -160,6 +160,40 @@ function migrateKnowledge(items: unknown[]): KnowledgeItem[] {
     links: (k.links as string[]) ?? [],
   })) as KnowledgeItem[];
 }
+
+/* 配额安全的本地存储：localStorage 只是"缓存"，云端自动同步才是耐久存储。
+ * 大知识库（如整库导入的数百篇笔记）可能撑爆 ~5MB 配额；此前 setItem 抛
+ * QuotaExceededError 且未被捕获 → 整页崩溃（"This page couldn't load"）。
+ * 现在写满时优雅跳过本次快照并通知 UI，绝不崩溃、绝不丢内存数据。 */
+const safeStorage: StateStorage = {
+  getItem: (name) => {
+    try {
+      return localStorage.getItem(name);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (name, value) => {
+    try {
+      localStorage.setItem(name, value);
+    } catch (e) {
+      const quota =
+        e instanceof DOMException &&
+        (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED");
+      if (!quota) throw e;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("mentora:quota"));
+      }
+    }
+  },
+  removeItem: (name) => {
+    try {
+      localStorage.removeItem(name);
+    } catch {
+      /* 忽略 */
+    }
+  },
+};
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -619,6 +653,7 @@ export const useAppStore = create<AppState>()(
     {
       name: "mentora-store-anon",
       version: 2,
+      storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({
         goals: state.goals,
         knowledge: state.knowledge,
