@@ -8,7 +8,7 @@ import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
 import { extractJson, insightsSchema } from "@/lib/ai/client";
 import { heuristicVerify } from "@/lib/verify-heuristic";
-import { ragContext, retrieve } from "@/lib/rag";
+import { ragContext, wikiRetrieve } from "@/lib/rag";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { ArrowLeft, Check, Lightbulb, PanelLeftClose, PanelLeftOpen, ShieldCheck } from "lucide-react";
@@ -82,14 +82,14 @@ export default function BookPage() {
     if (!text || streaming) return;
     setInput("");
     /* RAG 第一步：按用户这句话，从第二大脑检索最相关的笔记注入上下文 */
-    const hits = retrieve(
+    const hits = wikiRetrieve(
       `${text} ${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`,
       useAppStore
         .getState()
-        .knowledge.filter((k) => !(k.tags ?? []).includes("MOC")) // 目录索引笔记不参与语义检索
+        .knowledge.filter((k) => !(k.tags ?? []).includes("MOC")) // 目录索引笔记不作种子,但可作为 hub 被导航到
         .map((k) => ({
           id: k.id, title: k.title, body: k.body, domain: k.domain,
-          version: k.version, updatedAt: k.updatedAt, tags: k.tags,
+          links: k.links, version: k.version, updatedAt: k.updatedAt, tags: k.tags,
         })),
       3
     );

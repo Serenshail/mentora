@@ -105,6 +105,70 @@ export function retrieve(query: string, docs: RagDoc[], k = 3): RagHit[] {
   return reranked.sort((a, b) => b.score - a.score).slice(0, k);
 }
 
+/* ========= LLMWiki 导航式检索 =========
+ * 知识库被视为一张"编译型 wiki"而非散文档堆：检索不是纯相似性匹配,
+ * 而是 BM25 种子 → 沿 [[wikilink]] 一出/一进扩展(图导航) → hub/MOC 与标签加权。
+ * 链接越密的知识网络检索越准——这是随使用复利的护城河。 */
+export interface WikiNote {
+  id: string;
+  title: string;
+  body: string;
+  domain?: string;
+  links?: string[];
+  tags?: string[];
+  version?: number;
+  updatedAt?: string;
+}
+
+export function wikiRetrieve(query: string, notes: WikiNote[], k = 3): RagHit[] {
+  const clean = dedupeConflicts(
+    notes.map((n) => ({
+      id: n.id, title: n.title, body: n.body, domain: n.domain,
+      version: n.version, updatedAt: n.updatedAt, tags: n.tags,
+    }))
+  );
+  const byId = new Map(clean.map((n) => [n.id, n]));
+  const linksOf = new Map(notes.map((n) => [n.id, n.links ?? []]));
+  const seeds = bm25Search(query, clean, k * 2);
+  const scores = new Map<string, number>();
+  for (const s of seeds) scores.set(s.doc.id, s.score);
+
+  // 反向链接索引（谁链向我）
+  const reverse = new Map<string, string[]>();
+  for (const n of notes) {
+    for (const l of n.links ?? []) {
+      const arr = reverse.get(l) ?? [];
+      arr.push(n.id);
+      reverse.set(l, arr);
+    }
+  }
+  // 图导航：种子的一跳邻居(出链 0.5 / 入链 0.4 衰减)进入候选
+  for (const s of seeds) {
+    const n = byId.get(s.doc.id);
+    if (!n) continue;
+    for (const l of linksOf.get(n.id) ?? []) scores.set(l, Math.max(scores.get(l) ?? 0, s.score * 0.5));
+    for (const r of reverse.get(n.id) ?? []) scores.set(r, Math.max(scores.get(r) ?? 0, s.score * 0.4));
+  }
+
+  const qTokens = new Set(tokenize(query));
+  const ranked = [...scores.entries()]
+    .map(([id, score]) => {
+      const n = byId.get(id)!;
+      let s = score;
+      if ((n.tags ?? []).includes("MOC")) s += 0.3; // hub/目录页加权
+      if ((n.tags ?? []).some((t) => qTokens.has(t.toLowerCase()))) s += 0.5;
+      const ts = n.updatedAt ? Date.parse(n.updatedAt) : 0;
+      if (ts) s += Math.min(0.3, ts / 1e13);
+      return {
+        doc: { id: n.id, title: n.title, body: n.body, domain: n.domain, version: n.version, updatedAt: n.updatedAt, tags: n.tags },
+        score: s,
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k);
+  return ranked;
+}
+
 /** 把检索结果压成可注入提示词的上下文块 */
 export function ragContext(hits: RagHit[], maxChars = 1200): string {
   let out = "";

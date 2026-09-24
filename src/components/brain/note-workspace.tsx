@@ -1280,6 +1280,31 @@ export function NoteWorkspace({
                     {aiBusy ? "AI 中…" : "AI 润色"}
                   </button>
                   <button
+                    disabled={aiBusy}
+                    title="LLMWiki 编译：把孤立笔记织进双链网（建链/合并建议/冲突标记）"
+                    onClick={async () => {
+                      setAiBusy(true);
+                      try {
+                        const { runWikiCompile } = await import("@/lib/wiki-compile");
+                        const r = await runWikiCompile(3);
+                        if (r.linked || r.merges.length || r.conflicts.length) {
+                          toast.success(
+                            `wiki 编译：新建 ${r.linked} 条链接${r.merges.length ? `；建议合并 ${r.merges.length} 处` : ""}${r.conflicts.length ? `；标记冲突 ${r.conflicts.length} 处` : ""}`
+                          );
+                        } else {
+                          toast("没有孤立笔记需要编译，或暂无可建联系");
+                        }
+                      } catch {
+                        toast.error("wiki 编译失败，稍后再试");
+                      } finally {
+                        setAiBusy(false);
+                      }
+                    }}
+                    className="rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
+                  >
+                    {aiBusy ? "AI 中…" : "AI 整理"}
+                  </button>
+                  <button
                     onClick={() => setEditStyle((s) => (s === "live" ? "raw" : "live"))}
                     title={editStyle === "live" ? "切到源码模式（整篇 MD）" : "切回实时预览（点哪段改哪段）"}
                     className="ml-auto rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer"
