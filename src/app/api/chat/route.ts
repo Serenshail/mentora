@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { PROVIDERS, type AIConfig } from "@/lib/ai/providers";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import * as P from "@/lib/ai/prompts";
+import { logEvent } from "@/lib/server/config";
 import {
   demoCouncil, demoIntake, demoLesson, demoPlan, demoQuizGrade,
   demoReadingChat, demoReadingPlan, demoReview, demoReviewGrade,
@@ -186,7 +187,10 @@ async function fetchUpstream(cfg: AIConfig, body: Body): Promise<Response> {
         signal: ctrl.signal,
       });
       clearTimeout(timer);
-      if (res.ok && res.body) return res;
+      if (res.ok && res.body) {
+        logEvent({ route: "chat-upstream", status: res.status, attempt });
+        return res;
+      }
       const text = await res.text().catch(() => "");
       lastErr = `上游模型返回 ${res.status}：${text.slice(0, 300)}`;
       if (!RETRYABLE.has(res.status)) throw new FatalUpstream(lastErr);
@@ -202,6 +206,7 @@ async function fetchUpstream(cfg: AIConfig, body: Body): Promise<Response> {
       await new Promise((r) => setTimeout(r, 500 * 2 ** attempt)); // 500ms → 1s
     }
   }
+  logEvent({ route: "chat-upstream", status: "fail", lastErr, attempts: MAX_ATTEMPTS });
   throw new Error(`${lastErr || "上游模型不可用"}（已重试 ${MAX_ATTEMPTS} 次）`);
 }
 
@@ -276,6 +281,7 @@ export async function POST(req: NextRequest) {
           }
         }
       } catch (e) {
+        logEvent({ route: "chat", task: body.task, error: e instanceof Error ? e.message : "unknown" });
         push({ t: "e", v: e instanceof Error ? e.message : "未知错误" });
       } finally {
         push({ t: "end" });

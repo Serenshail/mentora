@@ -66,3 +66,15 @@
 3. **维护（lint/maintain）**：MOC 自动目录（科目 hub）+ 版本/冲突裁决（dedupeConflicts）+「AI 整理」定期编译 = wiki 自愈合。
 
 护城河逻辑：UI 可仿、单点提示词可抄，但**"用户数据 × 链接密度 × 编译维护"的复合资产**无法一次性抄走；检索质量随使用单调提升，形成切换成本。
+
+---
+
+## 8. 工程化基线（12-Factor 对齐，"去 demo 化"）
+
+对照 12-Factor 与生产就绪清单落的基线（2026-09-24）：
+- **测试（回归网）**：vitest 单测覆盖核心纯逻辑——`rag`(dedupeConflicts/wikiRetrieve 图导航/bm25 标题加权)、`utils`(rankResources 时效排序)、`ai/client`(extractJson 容忍围栏/前后缀/字符串内括号)。`npm run test`，CI 必跑。13 用例。
+- **CI**：`.github/workflows/ci.yml`——push/PR 触发 install→`tsc --noEmit`→`npm run test`。类型+测试不过不进主干。
+- **Config in env + fail-fast**：`server/config.ts envStatus()` 校验必需 env（AUTH_SECRET），可选通道只报数量不报内容（防泄露）；`/api/health` 暴露 ok/missing/optionalConfigured/build。
+- **Logs as event streams**：`logEvent()` 结构化 JSON 写 stdout（Vercel 捕获）；/api/chat 记录上游状态/重试/失败与任务级错误。
+- **Dependencies 显式声明**：补齐曾漏提交的依赖（qrcode.react/ts-fsrs/vitest/vite）。
+- 圆桌纪要升级为详细七节结构化输出（问题重构/逐人立场/共识/分歧矩阵/遗漏视角/条件化决策/改判信号），1200-2000 字——"总结不到位"的工程化回应。
