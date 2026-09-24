@@ -248,7 +248,7 @@ export function Modal({
     >
       <div
         className={cn(
-          "animate-rise w-full rounded-2xl border border-border bg-white p-6 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] max-h-[88vh] overflow-y-auto",
+          "animate-rise w-full rounded-2xl border border-border bg-white p-4 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] max-h-[88vh] overflow-y-auto md:p-6",
           wide ? "max-w-3xl" : "max-w-lg"
         )}
         onClick={(e) => e.stopPropagation()}

@@ -280,6 +280,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         {/* 移动端底部导航（管理员多一个「后台」入口） */}
         <nav
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
           className={cn(
             "sticky bottom-0 z-40 grid border-t border-border bg-white/90 backdrop-blur md:hidden",
             isAdmin ? "grid-cols-7" : "grid-cols-6"

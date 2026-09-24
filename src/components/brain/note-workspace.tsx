@@ -293,6 +293,8 @@ export function NoteWorkspace({
   const [query, setQuery] = useState("");
   /* 编辑态默认 Obsidian 式实时预览(块级),可切源码 */
   const [editStyle, setEditStyle] = useState<"live" | "raw">("live");
+  /* 移动端单栏:列表/笔记/信息 三选一切换(桌面仍多栏并列) */
+  const [mobilePane, setMobilePane] = useState<"list" | "editor" | "info">("list");
   const [aiBusy, setAiBusy] = useState(false);
 
   /* AI 帮改笔记:rewrite 润色 / summarize 总结 / continue 续写(服务端组装提示词) */
@@ -766,6 +768,7 @@ export function NoteWorkspace({
               onClick={() => {
                 onOpenNote(k.id);
                 onModeChange("preview");
+                setMobilePane("editor");
               }}
               className="min-w-0 flex-1 cursor-grab px-2 py-1.5 text-left active:cursor-grabbing"
             >
@@ -909,6 +912,7 @@ export function NoteWorkspace({
               onClick={() => {
                 onOpenNote(k.id);
                 onModeChange("preview");
+                setMobilePane("editor");
               }}
               className="min-w-0 flex-1 cursor-grab px-2 py-1.5 text-left active:cursor-grabbing"
             >
@@ -1101,10 +1105,31 @@ export function NoteWorkspace({
   return (
     <div>
       {/* 工作台：左缘 ribbon + 文件夹树 + 编辑器 + 功能面板（可收起） */}
+      {/* 移动端单栏切换 Tab（桌面隐藏） */}
+      <div className="mb-2 flex gap-1 md:hidden">
+        {(
+          [
+            ["list", "列表"],
+            ["editor", "笔记"],
+            ["info", "信息"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setMobilePane(key)}
+            className={cn(
+              "flex-1 rounded-lg py-2 text-[12.5px] transition cursor-pointer",
+              mobilePane === key ? "bg-ink/[0.07] font-semibold text-ink" : "text-ink-dim hover:bg-black/[0.04]"
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div
         className={cn(
-          "flex h-[calc(100vh-104px)] min-h-[500px] overflow-hidden rounded-2xl border border-border bg-white",
-          rightOpen ? "" : ""
+          "flex h-[calc(100dvh-200px)] min-h-[420px] overflow-hidden rounded-2xl border border-border bg-white",
+          "md:h-[calc(100vh-104px)] md:min-h-[500px]"
         )}
       >
         {/* 左缘 ribbon（Obsidian 式竖排图标） */}
@@ -1133,11 +1158,18 @@ export function NoteWorkspace({
           </div>
         </div>
 
-        {/* 文件树 */}
-        <div className="h-full w-60 shrink-0 overflow-hidden border-r border-border p-2.5">{leftPane}</div>
+        {/* 文件树（移动端=列表 Tab） */}
+        <div
+          className={cn(
+            "h-full w-full shrink-0 overflow-hidden border-r border-border p-2.5 md:w-60",
+            mobilePane === "list" ? "block" : "hidden md:block"
+          )}
+        >
+          {leftPane}
+        </div>
 
-        {/* 中栏：编辑器 / 预览 */}
-        <div className="h-full min-w-0 flex-1 overflow-hidden">
+        {/* 中栏：编辑器 / 预览（移动端=笔记 Tab） */}
+        <div className={cn("h-full min-w-0 flex-1 overflow-hidden", mobilePane === "editor" ? "block" : "hidden md:block")}>
           {!note ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
               <Empty
@@ -1397,10 +1429,16 @@ export function NoteWorkspace({
           )}
         </div>
 
-        {/* 功能面板（右上角，可收起） */}
-        {rightOpen && (
-          <div className="h-full w-64 shrink-0 overflow-hidden border-l border-border p-2.5">{rightPane}</div>
-        )}
+        {/* 功能面板（移动端=信息 Tab；桌面由 rightOpen 控制） */}
+        <div
+          className={cn(
+            "h-full w-full shrink-0 overflow-hidden border-l border-border p-2.5 md:w-64",
+            mobilePane === "info" ? "block" : "hidden",
+            rightOpen ? "md:block" : "md:hidden"
+          )}
+        >
+          {rightPane}
+        </div>
       </div>
 
       {/* Ctrl+K 快速切换器 */}
