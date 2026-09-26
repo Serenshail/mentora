@@ -39,6 +39,17 @@ function normalizeUrl(u?: string): string | undefined {
   return t.startsWith("http") ? t : `https://${t}`;
 }
 
+/* 模型偶尔把数组包成 {"replacements":[...]} 之类对象——取其中第一个数组值兜底 */
+function asArray<T>(v: unknown): T[] {
+  if (Array.isArray(v)) return v as T[];
+  if (v && typeof v === "object") {
+    for (const val of Object.values(v as Record<string, unknown>)) {
+      if (Array.isArray(val)) return val as T[];
+    }
+  }
+  return [];
+}
+
 export async function refineResources(resources: Resource[], ctx: string): Promise<Resource[]> {
   // 先规范化 URL(补协议),再体检
   const norm = resources.map((r) => ({ ...r, url: normalizeUrl(r.url) }));
@@ -64,7 +75,7 @@ export async function refineResources(resources: Resource[], ctx: string): Promi
       temperature: 0.3,
       onDelta: () => {},
     });
-    reps = extractJson<Resource[]>(full) || [];
+    reps = asArray<Resource>(extractJson<unknown>(full));
   } catch {
     reps = [];
   }

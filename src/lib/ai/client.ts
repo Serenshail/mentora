@@ -92,6 +92,7 @@ export function extractJson<T>(text: string): T {
   if (fenced?.[1]) candidates.push(fenced[1].trim());
 
   // 大括号/中括号配对扫描（跳过字符串内部）
+  const scanned: { start: number; text: string }[] = [];
   for (const [open, close] of [["{", "}"], ["[", "]"]] as const) {
     const start = text.indexOf(open);
     if (start === -1) continue;
@@ -108,8 +109,11 @@ export function extractJson<T>(text: string): T {
         if (depth === 0) { end = i; break; }
       }
     }
-    if (end > start) candidates.push(text.slice(start, end + 1));
+    // 记录起点,后面按"在原文中出现最早"排序——裸数组 "[{...}]" 时先命中整个数组而非首个对象
+    if (end > start) scanned.push({ start, text: text.slice(start, end + 1) });
   }
+  scanned.sort((a, b) => a.start - b.start);
+  for (const s of scanned) candidates.push(s.text);
   candidates.push(text.trim());
 
   for (const c of candidates) {

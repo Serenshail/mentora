@@ -17,6 +17,12 @@ describe("extractJson（容忍围栏/前后缀）", () => {
     const t = '{"s":"a } b { c","n":2}';
     expect(extractJson<{ n: number }>(t).n).toBe(2);
   });
+  it("裸数组(无围栏,元素是对象)→ 返回整个数组而非首个对象(曾踩坑)", () => {
+    const t = '好的。\n[{"title":"a","url":"https://x"},{"title":"b","url":null}]';
+    const arr = extractJson<Array<{ title: string }>>(t);
+    expect(Array.isArray(arr)).toBe(true);
+    expect(arr.length).toBe(2);
+  });
   it("无 JSON 时抛错", () => {
     expect(() => extractJson("纯文本,没有 json")).toThrow();
   });
