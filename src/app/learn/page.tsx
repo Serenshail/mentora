@@ -33,7 +33,8 @@ export default function LearnPage() {
   const removeGoal = useAppStore((s) => s.removeGoal);
   const [topic, setTopic] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
-  const [alsoNotes, setAlsoNotes] = useState(true);
+  const [alsoNotes, setAlsoNotes] = useState(true); // 删计划类笔记(总纲要/阶段/目录)
+  const [alsoKnowledge, setAlsoKnowledge] = useState(false); // 连知识点(含复习队列)一起删,默认保护
 
   const start = () => {
     const t = topic.trim() || "Python";
@@ -144,18 +145,32 @@ export default function LearnPage() {
           <Card className="max-w-sm animate-rise" onClick={(e) => e.stopPropagation()}>
             <p className="font-bold text-ink">删除这个学习目标？</p>
             <p className="mt-2 text-sm text-ink-dim">计划与验收记录会一并删除。</p>
-            <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-surface-2/50 p-2.5 text-sm">
-              <input
-                type="checkbox"
-                checked={alsoNotes}
-                onChange={(e) => setAlsoNotes(e.target.checked)}
-                className="mt-0.5 size-4 accent-[#5b54e6]"
-              />
-              <span className="text-ink-dim">
-                同时删除该科目在第二大脑的全部笔记（总纲要 / 阶段计划 / 知识点 / 目录）。
-                <span className="block text-xs text-ink-dim/70">不勾选则保留笔记，只删目标。</span>
-              </span>
-            </label>
+            <div className="mt-3 space-y-2">
+              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-surface-2/50 p-2.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={alsoNotes}
+                  onChange={(e) => setAlsoNotes(e.target.checked)}
+                  className="mt-0.5 size-4 accent-[#5b54e6]"
+                />
+                <span className="text-ink-dim">
+                  同时删除该科目的计划类笔记（总纲要 / 阶段计划 / 目录）。
+                  <span className="block text-xs text-ink-dim/70">不勾选则只删目标，笔记全保留。</span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-warn/30 bg-warn/[0.06] p-2.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={alsoKnowledge}
+                  onChange={(e) => setAlsoKnowledge(e.target.checked)}
+                  className="mt-0.5 size-4 accent-[#b45309]"
+                />
+                <span className="text-ink-dim">
+                  连知识点笔记一起删（含复习队列里的待复习项）。
+                  <span className="block text-xs text-ink-dim/70">这是你的学习成果，默认保留；确认不再需要再勾。</span>
+                </span>
+              </label>
+            </div>
             <div className="mt-5 flex justify-end gap-2">
               <Button variant="outline" onClick={() => setConfirmId(null)}>
                 取消
@@ -163,10 +178,11 @@ export default function LearnPage() {
               <Button
                 variant="danger"
                 onClick={() => {
-                  if (alsoNotes) useAppStore.getState().removeGoalAndNotes(confirmId);
+                  if (alsoNotes) useAppStore.getState().removeGoalAndNotes(confirmId, alsoKnowledge);
                   else removeGoal(confirmId);
                   setConfirmId(null);
                   setAlsoNotes(true);
+                  setAlsoKnowledge(false);
                 }}
               >
                 删除

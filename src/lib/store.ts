@@ -75,7 +75,7 @@ interface AppState {
   addGoal: (g: Goal) => void;
   updateGoal: (id: string, patch: Partial<Goal>) => void;
   removeGoal: (id: string) => void;
-  removeGoalAndNotes: (id: string) => void;
+  removeGoalAndNotes: (id: string, includeKnowledge?: boolean) => void;
   setPlan: (goalId: string, plan: Plan) => void;
   setPhasePlan: (goalId: string, phaseId: string, boundary: string, days: Plan["days"]) => void;
   setDayStatus: (
@@ -274,21 +274,21 @@ export const useAppStore = create<AppState>()(
         })),
       removeGoal: (id) =>
         set((s) => ({ goals: s.goals.filter((g) => g.id !== id) })),
-      removeGoalAndNotes: (id) =>
+      removeGoalAndNotes: (id, includeKnowledge = false) =>
         set((s) => {
           const goal = s.goals.find((g) => g.id === id);
           const goals = s.goals.filter((g) => g.id !== id);
           if (!goal) return { goals };
           const t = goal.topic;
-          const knowledge = s.knowledge.filter((k) => {
-            const dom = k.domain || "";
-            return !(
-              dom === t ||
-              dom.startsWith(`${t}/`) ||
-              k.title.startsWith(`${t} 学习计划`) ||
-              k.title === `${t} · 目录`
-            );
-          });
+          // 默认只删"计划类"(总纲要/阶段计划/目录);知识点(含复习队列)是学习成果,需显式勾选才删
+          const isPlan = (k: KnowledgeItem) =>
+            (k.domain || "") === `${t}/计划` ||
+            k.title.startsWith(`${t} 学习计划`) ||
+            k.title === `${t} · 目录`;
+          const isKnow = (k: KnowledgeItem) => (k.domain || "") === `${t}/笔记`;
+          const knowledge = s.knowledge.filter(
+            (k) => !(isPlan(k) || (includeKnowledge && isKnow(k)))
+          );
           return { goals, knowledge };
         }),
       setPlan: (goalId, plan) =>

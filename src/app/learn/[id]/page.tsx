@@ -14,29 +14,15 @@ import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
 import { cn, formatDate, uid, rankResources, KIND_LABEL } from "@/lib/utils";
 import { refineResources } from "@/lib/resource-pipeline";
 
-/* 链接体检徽章:服务端检测失效/疑似广告,每 URL 只测一次(模块级缓存) */
-interface LinkCheck { ok: boolean; dead: boolean; ad: boolean; reason: string }
-const linkCache = new Map<string, Promise<LinkCheck | null>>();
-function checkLink(url: string): Promise<LinkCheck | null> {
-  const hit = linkCache.get(url);
-  if (hit) return hit;
-  const p = fetch("/api/linkcheck", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ urls: [url] }),
-  })
-    .then((r) => r.json())
-    .then((j) => (j.results?.[0] as LinkCheck) ?? null)
-    .catch(() => null);
-  linkCache.set(url, p);
-  return p;
-}
+/* 链接体检徽章:复用资源管线的模块级缓存(refine 已体检过的不再重复请求) */
+import type { LinkCheck } from "@/lib/resource-pipeline";
+import { ensureCheck } from "@/lib/resource-pipeline";
 function LinkStatus({ url }: { url?: string }) {
   const [st, setSt] = useState<LinkCheck | null>(null);
   useEffect(() => {
     if (!url) return;
     let on = true;
-    void checkLink(url).then((r) => on && setSt(r));
+    void ensureCheck(url).then((r) => on && setSt(r));
     return () => {
       on = false;
     };

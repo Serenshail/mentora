@@ -339,6 +339,17 @@ export function GraphView({
     return () => ro.disconnect();
   }, []);
 
+  /* 没有焦点笔记时(如从侧栏直接进图谱),自动 fitView 让全图入视野,避免"打开是空的" */
+  useEffect(() => {
+    if (focusId) return;
+    const t = setTimeout(() => {
+      fitView();
+      dirtyRef.current = true;
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, notes.length]);
+
   /* 打开图谱时把镜头居中到 focusId 笔记(等物理布局稳定后),用户一眼看到它的关系网 */
   useEffect(() => {
     if (!focusId) return;

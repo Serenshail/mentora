@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "vitest run e2e"
   },
   "dependencies": {
     "clsx": "^2.1.1",

@@ -327,6 +327,13 @@ export function NoteWorkspace({
       const store = useAppStore.getState();
       const subj = (store.knowledge.find((k) => k.id === openId)?.domain?.split("/")[0] || "笔记");
       store.addKnowledge([{ title, body, domain: `${subj}/笔记` }], "manual", "上传文档");
+      // 导入后直接打开这篇,用户立刻看到转换结果(而不是"传了但没反应")
+      const created = useAppStore.getState().knowledge.find((k) => k.title === title);
+      if (created) {
+        onOpenNote(created.id);
+        onModeChange("preview");
+        setMobilePane("editor");
+      }
       toast.success(`已导入《${title}》`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "导入失败");

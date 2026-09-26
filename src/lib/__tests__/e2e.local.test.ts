@@ -6,7 +6,8 @@ import { extractJson, masterPlanSchema, phasePlanSchema } from "../ai/client";
  * 用真实 zod schema 校验真实模型输出,全绿才允许部署——防止"改一处坏一处"。
  * CI 无本地服务器,自动跳过。 */
 const BASE = process.env.E2E_BASE ?? "http://localhost:3000";
-const run = !!process.env.E2E;
+// `npm run e2e` 或 E2E=1 时启用;CI(无本地服务器/无脚本名)自动跳过
+const run = !!process.env.E2E || process.env.npm_lifecycle_event === "e2e";
 
 async function chat(body: Record<string, unknown>, timeoutMs = 120_000): Promise<string> {
   const res = await fetch(`${BASE}/api/chat`, {
