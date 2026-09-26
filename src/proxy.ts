@@ -48,6 +48,27 @@ export function proxy(req: NextRequest) {
   // 全站禁止搜索引擎/AI 爬虫索引
   res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
 
+  // CORS：允许外部后台管理系统跨域调用 admin/health API（凭 x-admin-password 头鉴权）。
+  // 默认放开来源（密钥在请求头而非 cookie，故跨域读响应仍需持有密码）；可用 ADMIN_CORS_ORIGINS 收紧。
+  if (pathname.startsWith("/api/admin") || pathname === "/api/health") {
+    const origin = req.headers.get("origin");
+    const cfg = process.env.ADMIN_CORS_ORIGINS;
+    const allow = cfg ? cfg.split(",").map((s) => s.trim()).includes(origin ?? "") : true;
+    const cors: Record<string, string> = {
+      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, x-admin-password",
+      "Access-Control-Max-Age": "600",
+    };
+    if (allow && origin) {
+      cors["Access-Control-Allow-Origin"] = origin;
+      cors["Vary"] = "Origin";
+    }
+    if (req.method === "OPTIONS") {
+      return new NextResponse(null, { status: 204, headers: cors });
+    }
+    for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+  }
+
   // 防火墙第 1 层：已知 AI 抓取/训练机器人 UA 直接拒（静态资源也不给，防整站镜像）
   const ua = req.headers.get("user-agent") ?? "";
   if (AI_SCRAPER_UA.test(ua)) {
