@@ -12,6 +12,7 @@ import { DOMAIN_LABELS } from "@/lib/types";
 import type { DayPlan, Goal, QuizItemResult } from "@/lib/types";
 import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
 import { cn, formatDate, uid, rankResources, KIND_LABEL } from "@/lib/utils";
+import { refineResources } from "@/lib/resource-pipeline";
 
 /* 链接体检徽章:服务端检测失效/疑似广告,每 URL 只测一次(模块级缓存) */
 interface LinkCheck { ok: boolean; dead: boolean; ad: boolean; reason: string }
@@ -348,7 +349,15 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
         onDelta: () => {},
       });
       const draft = phasePlanSchema.parse(extractJson(full));
-      const days = phaseDraftToDays(draft, phase.id);
+      const rawDays = phaseDraftToDays(draft, phase.id);
+      // 资源体检闭环:失效/广告的链接重新找替代,仍坏则丢弃——绝不把坏链推给用户
+      const refinedEntries = await Promise.all(
+        Object.entries(rawDays).map(async ([id, d]) => {
+          const resources = await refineResources(d.resources, `${goal.topic}：${phase.title} — ${d.title}`);
+          return [id, { ...d, resources }] as const;
+        })
+      );
+      const days = Object.fromEntries(refinedEntries) as typeof rawDays;
       useAppStore.getState().setPhasePlan(goal.id, phase.id, draft.boundary ?? "", days);
       // 阶段计划入第二大脑关系链
       const masterNote = `${goal.topic} 学习计划 · 学习总纲要`;
