@@ -33,6 +33,7 @@ export default function LearnPage() {
   const removeGoal = useAppStore((s) => s.removeGoal);
   const [topic, setTopic] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [alsoNotes, setAlsoNotes] = useState(true);
 
   const start = () => {
     const t = topic.trim() || "Python";
@@ -142,9 +143,19 @@ export default function LearnPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px] p-4" onClick={() => setConfirmId(null)}>
           <Card className="max-w-sm animate-rise" onClick={(e) => e.stopPropagation()}>
             <p className="font-bold text-ink">删除这个学习目标？</p>
-            <p className="mt-2 text-sm text-ink-dim">
-              计划与验收记录会一并删除（已入第二大脑的知识点保留）。
-            </p>
+            <p className="mt-2 text-sm text-ink-dim">计划与验收记录会一并删除。</p>
+            <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-surface-2/50 p-2.5 text-sm">
+              <input
+                type="checkbox"
+                checked={alsoNotes}
+                onChange={(e) => setAlsoNotes(e.target.checked)}
+                className="mt-0.5 size-4 accent-[#5b54e6]"
+              />
+              <span className="text-ink-dim">
+                同时删除该科目在第二大脑的全部笔记（总纲要 / 阶段计划 / 知识点 / 目录）。
+                <span className="block text-xs text-ink-dim/70">不勾选则保留笔记，只删目标。</span>
+              </span>
+            </label>
             <div className="mt-5 flex justify-end gap-2">
               <Button variant="outline" onClick={() => setConfirmId(null)}>
                 取消
@@ -152,8 +163,10 @@ export default function LearnPage() {
               <Button
                 variant="danger"
                 onClick={() => {
-                  removeGoal(confirmId);
+                  if (alsoNotes) useAppStore.getState().removeGoalAndNotes(confirmId);
+                  else removeGoal(confirmId);
                   setConfirmId(null);
+                  setAlsoNotes(true);
                 }}
               >
                 删除

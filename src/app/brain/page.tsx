@@ -210,6 +210,7 @@ export default function BrainPage() {
         <Card className="p-3">
           <GraphView
             notes={knowledge}
+            focusId={openId}
             onOpen={(id) => {
               setOpenId(id);
               setWsMode("preview");

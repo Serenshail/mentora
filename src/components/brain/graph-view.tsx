@@ -44,9 +44,12 @@ void domainColor; // 已改为 Obsidian 单色系，保留以防后续需要
 export function GraphView({
   notes,
   onOpen,
+  focusId,
 }: {
   notes: KnowledgeItem[];
   onOpen: (id: string) => void;
+  /** 打开图谱时把镜头居中到这篇笔记(及其邻居),避免用户进来面对空图自己找 */
+  focusId?: string | null;
 }) {
   const [gQuery, setGQuery] = useState("");
   const [gDomain, setGDomain] = useState("all");
@@ -335,6 +338,23 @@ export function GraphView({
     ro.observe(wrap);
     return () => ro.disconnect();
   }, []);
+
+  /* 打开图谱时把镜头居中到 focusId 笔记(等物理布局稳定后),用户一眼看到它的关系网 */
+  useEffect(() => {
+    if (!focusId) return;
+    let tries = 0;
+    const iv = setInterval(() => {
+      const n = nodesRef.current.find((x) => x.id === focusId);
+      if (n) {
+        camRef.current = { x: n.x, y: n.y, zoom: 1.35 };
+        dirtyRef.current = true;
+        if (++tries > 2) clearInterval(iv);
+      } else if (++tries > 20) {
+        clearInterval(iv);
+      }
+    }, 120);
+    return () => clearInterval(iv);
+  }, [focusId]);
 
   /* 滚轮缩放要阻止页面滚动，但 React 的 onWheel 是 passive 的，preventDefault 会告警；
    * 故用原生非 passive 监听单独拦截默认滚动，onWheel 只算缩放数学。 */

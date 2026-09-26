@@ -75,6 +75,7 @@ interface AppState {
   addGoal: (g: Goal) => void;
   updateGoal: (id: string, patch: Partial<Goal>) => void;
   removeGoal: (id: string) => void;
+  removeGoalAndNotes: (id: string) => void;
   setPlan: (goalId: string, plan: Plan) => void;
   setPhasePlan: (goalId: string, phaseId: string, boundary: string, days: Plan["days"]) => void;
   setDayStatus: (
@@ -232,6 +233,28 @@ function withMoc(knowledge: KnowledgeItem[], subject: string): KnowledgeItem[] {
   return [moc, ...knowledge];
 }
 
+/* 从正文里的 [[双链]] 反解析出 links(仅匹配已存在标题,不建占位)。
+ * 让图谱/反链立即反映双链结构——否则正文写了 [[..]] 但 links 字段为空,图谱显示"连接 0"。 */
+function linkifyBodies(knowledge: KnowledgeItem[]): KnowledgeItem[] {
+  const norm = (t: string) => t.trim().toLowerCase();
+  const byTitle = new Map<string, string>();
+  for (const k of knowledge) if (!k.unresolved) byTitle.set(norm(k.title), k.id);
+  const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+  return knowledge.map((k) => {
+    const found: string[] = [];
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(k.body || ""))) {
+      const id = byTitle.get(norm(m[1]));
+      if (id && id !== k.id) found.push(id);
+    }
+    if (!found.length) return k;
+    const merged = [...new Set([...(k.links ?? []), ...found])];
+    if (merged.length === (k.links?.length ?? 0)) return k;
+    return { ...k, links: merged };
+  });
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -251,6 +274,23 @@ export const useAppStore = create<AppState>()(
         })),
       removeGoal: (id) =>
         set((s) => ({ goals: s.goals.filter((g) => g.id !== id) })),
+      removeGoalAndNotes: (id) =>
+        set((s) => {
+          const goal = s.goals.find((g) => g.id === id);
+          const goals = s.goals.filter((g) => g.id !== id);
+          if (!goal) return { goals };
+          const t = goal.topic;
+          const knowledge = s.knowledge.filter((k) => {
+            const dom = k.domain || "";
+            return !(
+              dom === t ||
+              dom.startsWith(`${t}/`) ||
+              k.title.startsWith(`${t} 学习计划`) ||
+              k.title === `${t} · 目录`
+            );
+          });
+          return { goals, knowledge };
+        }),
       setPlan: (goalId, plan) =>
         set((s) => ({
           goals: s.goals.map((g) => (g.id === goalId ? { ...g, plan } : g)),
@@ -334,6 +374,7 @@ export const useAppStore = create<AppState>()(
           for (const subj of new Set(fresh.map((f) => (f.domain || "").split("/")[0]))) {
             k = withMoc(k, subj);
           }
+          k = linkifyBodies(k);
           return { knowledge: k };
         });
       },
@@ -547,6 +588,8 @@ export const useAppStore = create<AppState>()(
             knowledge = withMoc(knowledge, (old.domain || "").split("/")[0]);
             knowledge = withMoc(knowledge, (patch.domain || "").split("/")[0]);
           }
+          // 正文改了→重新解析 [[双链]] 进 links,图谱/反链实时同步
+          if (patch.body !== undefined) knowledge = linkifyBodies(knowledge);
           return { knowledge };
         }),
       removeKnowledge: (id) =>
@@ -705,7 +748,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "mentora-store-anon",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({
         goals: state.goals,
@@ -722,9 +765,13 @@ export const useAppStore = create<AppState>()(
         if (version < 2) {
           return {
             ...state,
-            knowledge: migrateKnowledge(state.knowledge ?? []),
+            knowledge: linkifyBodies(migrateKnowledge(state.knowledge ?? [])),
             customPersonas: state.customPersonas ?? [],
           } as AppState;
+        }
+        // v3:把已有笔记正文里的 [[双链]] 一次性解析进 links,旧图谱立即有连线
+        if (version < 3) {
+          return { ...state, knowledge: linkifyBodies((state.knowledge ?? []) as KnowledgeItem[]) } as AppState;
         }
         return state as AppState;
       },

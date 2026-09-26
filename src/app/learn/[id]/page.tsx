@@ -352,13 +352,14 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
       useAppStore.getState().setPhasePlan(goal.id, phase.id, draft.boundary ?? "", days);
       // 阶段计划入第二大脑关系链
       const masterNote = `${goal.topic} 学习计划 · 学习总纲要`;
+      // d.title 本身已含 "Day N：",不再重复前缀;用项目符号列表,Markdown 才换行成结构化清单
       const daysOverview = Object.values(days)
-        .map((d, i) => `Day ${i + 1}：${d.title} — ${d.knowledgePoints.map((k) => k.text).join("、")}`)
+        .map((d) => `- **${d.title.replace(/^Day\s*\d+[：:]\s*/, "")}** — ${d.knowledgePoints.map((k) => k.text).join("、")}`)
         .join("\n");
       useAppStore.getState().addKnowledge(
         [{
           title: `${goal.topic} 学习计划 · ${phase.title}`,
-          body: `**阶段目标：**${phase.outcome}\n\n**边界：**${draft.boundary ?? phase.boundary ?? "—"}\n\n${daysOverview}\n\n关联：[[${masterNote}]]`,
+          body: `**阶段目标：**${phase.outcome}\n\n**边界：**${draft.boundary ?? phase.boundary ?? "—"}\n\n## 每日安排\n\n${daysOverview}\n\n关联：[[${masterNote}]]`,
           domain: `${goal.topic}/计划`,
         }],
         "learn",
