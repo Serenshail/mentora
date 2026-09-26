@@ -151,10 +151,11 @@ function IntakeInner() {
           useAppStore.getState().setPlan(goalId, plan);
           // 总计划入第二大脑关系链
           const store = useAppStore.getState();
+          // 链接标题必须与阶段笔记实际标题完全一致(${planTitle} · ${phase.title}),否则点开是空占位
           const outlineMd = plan.phases
-            .map((p, i) => {
-              const noteTitle = `${planTitle(finalCard.topic)} · 阶段${i + 1}：${p.title.replace(/^阶段\d+ · /, "")}`;
-              return `${i + 1}. [[${noteTitle}]] — ${p.outcome}`;
+            .map((p) => {
+              const noteTitle = `${planTitle(finalCard.topic)} · ${p.title}`;
+              return `- **[[${noteTitle}]]**\n  ${p.outcome}`;
             })
             .join("\n");
           store.addKnowledge(

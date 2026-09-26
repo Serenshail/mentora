@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Empty } from "@/components/ui";
 import { WikiMarkdown } from "@/components/brain/wiki-markdown";
+import { fileToMarkdown, docTitleFromFilename } from "@/lib/doc-import";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { KnowledgeItem } from "@/lib/types";
@@ -19,7 +20,7 @@ import {
   ArrowDownUp, Bold, Braces, ChevronRight, Eye, FileText, FolderPlus, Heading2, Heading3,
   PanelRight,
   Link2, List, ListOrdered, Minus, MoreVertical, Pencil, Plus, Quote, RefreshCcw, Search, Sparkles, Tag,
-  Trash2, Type, X, Zap,
+  Trash2, Type, Upload, X, Zap,
 } from "lucide-react";
 
 type RightTab = "backlinks" | "outgoing" | "outline" | "tags";
@@ -317,6 +318,20 @@ export function NoteWorkspace({
   const [rightOpen, setRightOpen] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [newFolder, setNewFolder] = useState<string | null>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
+  /* 上传文档 → Markdown 笔记（进当前笔记所在科目/笔记,否则 笔记/笔记） */
+  const uploadDoc = async (file: File) => {
+    try {
+      const body = await fileToMarkdown(file);
+      const title = docTitleFromFilename(file.name);
+      const store = useAppStore.getState();
+      const subj = (store.knowledge.find((k) => k.id === openId)?.domain?.split("/")[0] || "笔记");
+      store.addKnowledge([{ title, body, domain: `${subj}/笔记` }], "manual", "上传文档");
+      toast.success(`已导入《${title}》`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "导入失败");
+    }
+  };
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null); // 当前打开 ⋮ 菜单的文件夹
   const [showTags, setShowTags] = useState(false); // 标签筛选默认收起
@@ -859,13 +874,33 @@ export function NoteWorkspace({
         <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-ink-dim/70">
           文件夹 · 可拖拽整理
         </p>
-        <button
-          title="新建文件夹"
-          onClick={() => setNewFolder(" ")}
-          className="rounded-md p-1 text-ink-dim/70 transition hover:text-ink cursor-pointer"
-        >
-          <FolderPlus className="size-3.5" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <input
+            ref={docInputRef}
+            type="file"
+            accept=".docx,.md,.markdown,.txt"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void uploadDoc(f);
+              e.target.value = "";
+            }}
+          />
+          <button
+            title="上传文档（.docx / .md / .txt → 笔记；旧 .doc/.wps 请先另存为 .docx）"
+            onClick={() => docInputRef.current?.click()}
+            className="rounded-md p-1 text-ink-dim/70 transition hover:text-ink cursor-pointer"
+          >
+            <Upload className="size-3.5" />
+          </button>
+          <button
+            title="新建文件夹"
+            onClick={() => setNewFolder(" ")}
+            className="rounded-md p-1 text-ink-dim/70 transition hover:text-ink cursor-pointer"
+          >
+            <FolderPlus className="size-3.5" />
+          </button>
+        </div>
       </div>
       <div className="-mr-1 flex-1 space-y-0.5 overflow-y-auto pr-1">
         {newFolder !== null && (
