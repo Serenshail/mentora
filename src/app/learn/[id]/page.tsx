@@ -34,7 +34,7 @@ function LinkStatus({ url }: { url?: string }) {
 }
 import { toast } from "sonner";
 import {
-  ArrowLeft, BookMarked, Check, ChevronRight, CircleX, ExternalLink, Flag,
+  ArrowLeft, BookMarked, BookOpen, Check, ChevronRight, CircleX, ExternalLink, Flag, Globe,
   NotebookPen, Puzzle, Swords, Trophy,
 } from "lucide-react";
 
@@ -751,30 +751,58 @@ function DayPanel({
         {/* 资源 */}
         <div className="mt-4 space-y-2">
           <p className="text-xs font-semibold text-ink-dim">学习资源（选一个顺手的）</p>
-          {rankResources(day.resources).map((r, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm">
-              {r.url ? (
-                <a
-                  href={r.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-accent hover:underline"
-                >
-                  {r.title} <ExternalLink className="size-3.5" />
-                </a>
-              ) : (
-                <span className="text-ink">{r.title}</span>
-              )}
-              <span className="text-xs text-ink-dim">— {r.why}</span>
-              <LinkStatus url={r.url} />
-              {(r.kind || r.year || r.evergreen) && (
-                <span className="ml-auto shrink-0 rounded bg-surface px-1.5 py-0.5 text-[10px] text-ink-dim">
-                  {r.evergreen ? "经典补充" : (KIND_LABEL[r.kind ?? ""] ?? r.kind)}
-                  {r.year ? ` · ${r.year}` : ""}
+          {(() => {
+            const ranked = rankResources(day.resources);
+            const online = ranked.filter((r) => r.url);
+            const offline = ranked.filter((r) => !r.url);
+            const row = (r: (typeof day.resources)[number], i: number) => (
+              <div key={i} className="flex items-start gap-2 rounded-lg border border-border/60 bg-surface px-2.5 py-1.5 text-sm">
+                {r.url ? (
+                  <a
+                    href={r.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex min-w-0 items-center gap-1 text-accent hover:underline"
+                  >
+                    <span className="truncate">{r.title}</span> <ExternalLink className="size-3.5 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="min-w-0 truncate text-ink">{r.title}</span>
+                )}
+                <LinkStatus url={r.url} />
+                <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                  {(r.kind || r.year || r.evergreen) && (
+                    <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-dim">
+                      {r.evergreen ? "经典补充" : (KIND_LABEL[r.kind ?? ""] ?? r.kind)}
+                      {r.year ? ` · ${r.year}` : ""}
+                    </span>
+                  )}
                 </span>
-              )}
-            </div>
-          ))}
+                <span className="basis-full text-xs leading-relaxed text-ink-dim">{r.why}</span>
+              </div>
+            );
+            return (
+              <>
+                {online.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-ink-dim">
+                      <Globe className="size-3.5" /> 在线资源（可直接点开）
+                    </p>
+                    {online.map(row)}
+                  </div>
+                )}
+                {offline.length > 0 && (
+                  <div className="mt-2.5 space-y-1.5">
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-ink-dim">
+                      <BookOpen className="size-3.5" /> 书籍 / 线下补充
+                    </p>
+                    {offline.map(row)}
+                  </div>
+                )}
+                {!ranked.length && <p className="text-xs text-ink-dim">本日暂无资源，以讲义正文「① 直接可学的资料」为准。</p>}
+              </>
+            );
+          })()}
         </div>
       </Card>
 

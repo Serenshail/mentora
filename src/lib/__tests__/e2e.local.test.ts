@@ -75,6 +75,21 @@ describe.skipIf(!run)("E2E 学习教练全链路(需 E2E=1 + dev server)", () =>
     expect(draft.days.length).toBeGreaterThan(0);
   }, 180_000);
 
+  it("每日讲义:必须含≥1 条可点在线链接(防'零链接'回归)", async () => {
+    const ctx = JSON.stringify({
+      domainKind: "exam",
+      goal: { topic: "雅思", direction: "3 个月 6.5", background: "词汇3000", weeklyHours: 15 },
+      day: { title: "Day 1：学术词汇第一批", knowledgePoints: ["词族串记", "搭配"] },
+    });
+    const full = await chat({
+      task: "lesson",
+      args: { ctx },
+      messages: [{ role: "user", content: "生成今日讲义。" }],
+    });
+    // 讲义里必须出现 Markdown 链接或裸 URL——只给书名不给链接=不合格
+    expect(/\]\(https?:\/\/|https?:\/\/\S+/.test(full)).toBe(true);
+  }, 180_000);
+
   it("资源修复:坏链能得到可访问替代或被置空", async () => {
     const bad = [{ title: "失效资源", url: "https://example.com/definitely-dead-xyz", why: "学习用", reason: "HTTP 404 已失效" }];
     const full = await chat({

@@ -100,6 +100,7 @@ ${ctx}
    **来源广度**：除官方文档外,主动考虑 B站(bilibili.com)系统课程/合集、GitHub 优质仓库与开源讲义(kind=repo)、Twitter/X 上的高质量课程线程;视频课给合集/播放列表页而非单集。
    **可点与真实**：url 必须是完整可访问地址(带 https://)且你确信存在、稳定、非广告;在每日讲义正文里引用资料一律用 Markdown 链接 [标题](https://…) 形式,保证用户能直接点开。
    **时效与质量排序（工程要求,非可选）**：以"最新+最实用"为主。每条资源必须给 year(发布/最近修订年份)与 kind(official=官网/doc=官方文档/course=视频课/tutorial=教程/book=书/paper=论文/classic=经典旧著)；优先当前主版本的官方文档与近 2 年的高质量教程；老旧资料即使经典也只能作补充,标 evergreen:true 且 kind=classic,排到最后,不得占用主资源位。同主题新旧冲突时选新不选旧。
+   **在线资源不可缺**：每天 resources 至少 1 条**带 url 的在线资源**(官方文档/免费课/交互教程);书籍(kind=book)允许 url 为空,但必须与在线资源同时出现,不得整天只有书。url 用完整 https:// 地址;不确定深链就给该领域最稳定的官方入口,不许省略。
 5. example 仅编程领域（title+description，不写代码）；验收 2-3 条（操作+默写双轨）。
 6. 每阶段 2-8 天（按 estDays 与画像调整；宁可少不可虚胖）。输出务必紧凑，总输出 ≤1200 tokens。
 
@@ -250,18 +251,30 @@ ${ctx}
 
 ${LESSON_COMMON_RULE}`;
 
+/* 资料铁律(v2)：上一轮"URL 必须确信存在"把模型吓成"干脆不给链接"——用户看到整篇讲义零链接。
+ * 现在强制:①必须有可点在线链接;不确定深链就给最稳定的官方入口,绝不允许省略。 */
+const LESSON_RESOURCE_RULE = `
+
+## 资料铁律（最高优先,违反即不合格）
+- ①「直接可学的资料」必须包含 **至少 2 条可点开的在线资源**,一律写成 Markdown 链接 [标题](https://…);只给书名/机构名而不给链接 = 不合格。
+- 在线资源优先级:官方文档具体小节 > 免费视频课/合集 > 交互教程/开源讲义。不确定具体深链时,给该领域**最稳定的官方入口**(如 docs.python.org/3/tutorial/、developer.mozilla.org、ielts.org、剑桥官方样题页、对应官方频道合集页),**绝不允许省略链接**。
+- 书籍/纸质/付费资料只能作为「补充(线下)」另起一行列出,不计入在线资源;注明获取提示(图书馆/官方出版社/正版渠道),不贴购买链接。
+- 每条链接后用一句话说明"看哪一段/哪几个视频/做什么",让资料可执行。`;
+
 export const DAILY_LESSON = (ctx: string) => {
   const kind = ctx.match(/"domainKind":\s*"(\w+)"/)?.[1] ?? "other";
   const mathy = /数学|高数|微积分|线性代数|概率|统计|物理|函数|导数|积分/.test(ctx);
+  let t: string;
   switch (kind) {
-    case "coding": return CODING_LESSON(ctx);
-    case "humanities": return HUMANITIES_LESSON(ctx);
-    case "language": return LANGUAGE_LESSON(ctx);
-    case "exam": return mathy ? MATH_LESSON(ctx) : EXAM_LESSON(ctx);
-    case "career": return GENERIC_LESSON(ctx);
-    case "other": return mathy ? MATH_LESSON(ctx) : GENERIC_LESSON(ctx);
-    default: return GENERIC_LESSON(ctx);
+    case "coding": t = CODING_LESSON(ctx); break;
+    case "humanities": t = HUMANITIES_LESSON(ctx); break;
+    case "language": t = LANGUAGE_LESSON(ctx); break;
+    case "exam": t = mathy ? MATH_LESSON(ctx) : EXAM_LESSON(ctx); break;
+    case "career": t = GENERIC_LESSON(ctx); break;
+    case "other": t = mathy ? MATH_LESSON(ctx) : GENERIC_LESSON(ctx); break;
+    default: t = GENERIC_LESSON(ctx); break;
   }
+  return t + LESSON_RESOURCE_RULE;
 };
 
 
