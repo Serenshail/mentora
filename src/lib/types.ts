@@ -23,8 +23,8 @@ export interface Resource {
   why: string;
   /** 发布/最近修订年份:用于时效排序 */
   year?: number;
-  /** 资料类型:official/doc/course/tutorial/book/paper/classic */
-  kind?: "official" | "doc" | "course" | "tutorial" | "book" | "paper" | "classic" | "repo";
+  /** 资料类型:official/doc/course/tutorial/book/paper/classic/repo 等(容错,模型可自由标注) */
+  kind?: string;
   /** 经典旧著(evergreen):排序降权,作"经典补充" */
   evergreen?: boolean;
 }

@@ -165,13 +165,22 @@ export const phasePlanSchema = z.object({
             title: z.string(),
             url: z.string().optional().nullable(),
             why: z.string(),
-            /* 资料时效/类型元数据:用于"新近+实用优先、经典降权"的确定性排序 */
-            year: z.number().optional().nullable(),
-            kind: z
-              .enum(["official", "doc", "course", "tutorial", "book", "paper", "classic", "repo"])
-              .optional()
-              .nullable(),
-            evergreen: z.boolean().optional().nullable(),
+            /* 资料时效/类型元数据:容错解析——模型常把年份写成字符串/带"年"、kind 自由发挥。
+             * 这些是可选增强字段,绝不能因格式不符让整个计划 parse 失败(工程:边界降级)。 */
+            year: z.preprocess(
+              (v) =>
+                typeof v === "number"
+                  ? v
+                  : typeof v === "string"
+                    ? parseInt(v.replace(/\D/g, ""), 10) || null
+                    : null,
+              z.number().optional().nullable()
+            ),
+            kind: z.preprocess((v) => (typeof v === "string" ? v : null), z.string().optional().nullable()),
+            evergreen: z.preprocess(
+              (v) => (v === true || v === "true" ? true : v === false || v === "false" ? false : null),
+              z.boolean().optional().nullable()
+            ),
           })
         ),
         method: z.string(),
@@ -186,7 +195,10 @@ export const phasePlanSchema = z.object({
         acceptance: z
           .array(
             z.object({
-              kind: z.enum(["explain", "apply", "oral", "essay", "build"]),
+              kind: z.preprocess(
+                (v) => (["explain", "apply", "oral", "essay", "build"].includes(String(v)) ? v : "apply"),
+                z.enum(["explain", "apply", "oral", "essay", "build"])
+              ),
               question: z.string(),
               hint: z.string().optional().nullable(),
             })
@@ -215,13 +227,22 @@ export const planSchema = z.object({
             title: z.string(),
             url: z.string().optional().nullable(),
             why: z.string(),
-            /* 资料时效/类型元数据:用于"新近+实用优先、经典降权"的确定性排序 */
-            year: z.number().optional().nullable(),
-            kind: z
-              .enum(["official", "doc", "course", "tutorial", "book", "paper", "classic", "repo"])
-              .optional()
-              .nullable(),
-            evergreen: z.boolean().optional().nullable(),
+            /* 资料时效/类型元数据:容错解析——模型常把年份写成字符串/带"年"、kind 自由发挥。
+             * 这些是可选增强字段,绝不能因格式不符让整个计划 parse 失败(工程:边界降级)。 */
+            year: z.preprocess(
+              (v) =>
+                typeof v === "number"
+                  ? v
+                  : typeof v === "string"
+                    ? parseInt(v.replace(/\D/g, ""), 10) || null
+                    : null,
+              z.number().optional().nullable()
+            ),
+            kind: z.preprocess((v) => (typeof v === "string" ? v : null), z.string().optional().nullable()),
+            evergreen: z.preprocess(
+              (v) => (v === true || v === "true" ? true : v === false || v === "false" ? false : null),
+              z.boolean().optional().nullable()
+            ),
           })
           ),
           method: z.string(),
@@ -236,7 +257,10 @@ export const planSchema = z.object({
           acceptance: z
             .array(
               z.object({
-                kind: z.enum(["explain", "apply", "oral", "essay", "build"]),
+                kind: z.preprocess(
+                (v) => (["explain", "apply", "oral", "essay", "build"].includes(String(v)) ? v : "apply"),
+                z.enum(["explain", "apply", "oral", "essay", "build"])
+              ),
                 question: z.string(),
                 hint: z.string().optional().nullable(),
               })
