@@ -41,6 +41,14 @@ function AccountSection() {
   const [savingName, setSavingName] = useState(false);
   const [savingAvatar, setSavingAvatar] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  /* 安全：修改密码 / 注销账号 */
+  const [oldPwd, setOldPwd] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [newPwd2, setNewPwd2] = useState("");
+  const [savingPwd, setSavingPwd] = useState(false);
+  const [delPwd, setDelPwd] = useState("");
+  const [delPwd2, setDelPwd2] = useState(""); // 二次确认：再点一次才算
+  const [savingDel, setSavingDel] = useState(false);
 
   /* 拉一次完整资料（含头像） */
   useEffect(() => {
@@ -224,6 +232,129 @@ function AccountSection() {
             }}
           >
             <LogOut className="size-4" /> 退出登录
+          </Button>
+        </div>
+      </Card>
+
+      {/* 安全：修改密码 + 注销账号 */}
+      <Card>
+        <p className="text-sm font-bold text-ink">修改密码</p>
+        <p className="mt-1 text-xs text-ink-dim">
+          新密码至少 6 位。其他已登录设备会在其会话到期（最长 30 天）后自动退出。
+        </p>
+        <div className="mt-4 grid gap-2.5 sm:grid-cols-3">
+          <Input
+            type="password"
+            placeholder="当前密码"
+            autoComplete="current-password"
+            value={oldPwd}
+            onChange={(e) => setOldPwd(e.target.value)}
+          />
+          <Input
+            type="password"
+            placeholder="新密码（至少 6 位）"
+            autoComplete="new-password"
+            value={newPwd}
+            onChange={(e) => setNewPwd(e.target.value)}
+          />
+          <Input
+            type="password"
+            placeholder="再输一遍新密码"
+            autoComplete="new-password"
+            value={newPwd2}
+            onChange={(e) => setNewPwd2(e.target.value)}
+          />
+        </div>
+        <div className="mt-3 flex justify-end">
+          <Button
+            loading={savingPwd}
+            onClick={async () => {
+              if (savingPwd) return;
+              if (!oldPwd || !newPwd) {
+                toast.error("当前密码和新密码都要填");
+                return;
+              }
+              if (newPwd !== newPwd2) {
+                toast.error("两次输入的新密码不一致");
+                return;
+              }
+              setSavingPwd(true);
+              try {
+                const res = await fetch("/api/auth/change-password", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ oldPassword: oldPwd, newPassword: newPwd }),
+                });
+                const j = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(j.error || "修改失败");
+                setOldPwd("");
+                setNewPwd("");
+                setNewPwd2("");
+                toast.success("密码已更新，下次登录用新密码");
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "修改失败");
+              } finally {
+                setSavingPwd(false);
+              }
+            }}
+          >
+            <KeyRound className="size-4" /> 更新密码
+          </Button>
+        </div>
+      </Card>
+
+      {/* 危险区：注销账号 */}
+      <Card className="border-bad/30 bg-bad/[0.03]">
+        <p className="text-sm font-bold text-bad">注销账号</p>
+        <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+          永久删除该账号及其云端全部数据（学习计划、笔记、书、对话），<b className="text-bad">不可恢复</b>。
+          本机缓存会一并清除。建议先在「数据」页导出一份备份。
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Input
+            type="password"
+            placeholder="输入登录密码以确认注销"
+            autoComplete="current-password"
+            value={delPwd}
+            onChange={(e) => setDelPwd(e.target.value)}
+            className="sm:max-w-xs"
+          />
+          <Button
+            variant="danger"
+            loading={savingDel}
+            onClick={async () => {
+              if (savingDel) return;
+              if (delPwd !== delPwd2) {
+                toast.error("再点一次以确认注销（该操作不可恢复）");
+                setDelPwd2(delPwd);
+                return;
+              }
+              setSavingDel(true);
+              try {
+                const res = await fetch("/api/auth/account", {
+                  method: "DELETE",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ password: delPwd }),
+                });
+                const j = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(j.error || "注销失败");
+                const uidLocal = user.userId;
+                await logout();
+                try {
+                  localStorage.removeItem(`mentora-store-${uidLocal}`);
+                  localStorage.removeItem("mentora-sync-choice");
+                } catch { /* 忽略 */ }
+                useAppStore.getState().resetAll();
+                toast.success("账号已注销，云端与本机数据已删除");
+                setTimeout(() => (window.location.href = "/"), 600);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "注销失败");
+              } finally {
+                setSavingDel(false);
+              }
+            }}
+          >
+            <Trash2 className="size-4" /> 永久注销账号
           </Button>
         </div>
       </Card>
