@@ -77,6 +77,12 @@ export function proxy(req: NextRequest) {
 
   // 防火墙第 2 层：全站 /api 每 IP 限流，防批量扒取/DoS（各路由另有更严的专项限流）
   if (pathname.startsWith("/api/")) {
+    // admin 接口专项限流：外部后台走密码鉴权，严打爆破（30 次/分/IP）
+    if (pathname.startsWith("/api/admin")) {
+      if (!rateLimit(`admin:${clientIpOf(req)}`, { capacity: 30, refillPerSec: 0.5 })) {
+        return NextResponse.json({ error: "请求过于频繁" }, { status: 429 });
+      }
+    }
     if (!rateLimit(`api:${clientIpOf(req)}`, { capacity: 120, refillPerSec: 2 })) {
       return NextResponse.json({ error: "请求过于频繁" }, { status: 429 });
     }

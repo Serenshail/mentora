@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Input, PageHeader } from "@/components/ui";
 import { useAppStore, DEFAULT_SETTINGS } from "@/lib/store";
+import { useShallow } from "zustand/react/shallow";
 import { useHydrated } from "@/lib/use-chat";
 import { PROVIDERS } from "@/lib/ai/providers";
 import type { ProviderId } from "@/lib/types";
@@ -410,12 +411,15 @@ function DataSection() {
     }
   };
 
-  const local = useAppStore((s) => ({
-    goals: s.goals.length,
-    knowledge: s.knowledge.length,
-    books: s.books.length,
-    sessions: s.sessions.length,
-  }));
+  // 注意:zustand v5 选择器返回新对象必须 useShallow,否则无限重渲染白屏(踩坑档案 #1 的第二次踩)
+  const local = useAppStore(
+    useShallow((s) => ({
+      goals: s.goals.length,
+      knowledge: s.knowledge.length,
+      books: s.books.length,
+      sessions: s.sessions.length,
+    }))
+  );
 
   return (
     <Card>
