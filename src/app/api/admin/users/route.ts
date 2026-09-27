@@ -1,18 +1,14 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbList, dbDelete, emailHash } from "@/lib/server/db";
-import { getSessionUser } from "@/lib/server/auth";
-import { isAdminEmail } from "@/lib/admin-emails";
+import { authorizeAdmin } from "@/lib/server/admin-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-/* 不再要管理密码：登上白名单账号就直接能用，鉴权与 /api/admin/overview 一致 */
-async function requireAdmin(): Promise<{ error: string; status: number } | null> {
-  const session = await getSessionUser();
-  if (!session) return { error: "未登录", status: 401 };
-  if (!isAdminEmail(session.email, process.env.ADMIN_EMAILS)) {
-    return { error: "此账号没有管理权限", status: 403 };
-  }
+/* 双鉴权:白名单会话 OR 后台密码头(外部后台管理系统走后者),与 overview 同源 */
+async function requireAdmin(req: NextRequest): Promise<{ error: string; status: number } | null> {
+  const admin = await authorizeAdmin(req);
+  if (!admin) return { error: "未授权", status: 401 };
   return null;
 }
 
@@ -25,7 +21,7 @@ interface UserRecord {
 
 /** 删除用户：连同其云端数据一并移除 */
 export async function DELETE(req: NextRequest) {
-  const denied = await requireAdmin();
+  const denied = await requireAdmin(req);
   if (denied) return Response.json({ error: denied.error }, { status: denied.status });
   const body = await req.json().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
@@ -42,8 +38,8 @@ export async function DELETE(req: NextRequest) {
   return Response.json({ ok: true });
 }
 
-export async function POST() {
-  const denied = await requireAdmin();
+export async function POST(req: NextRequest) {
+  const denied = await requireAdmin(req);
   if (denied) return Response.json({ error: denied.error }, { status: denied.status });
 
   const userFiles = await dbList("users");

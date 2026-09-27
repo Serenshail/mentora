@@ -1,17 +1,14 @@
 import { NextRequest } from "next/server";
-import { getSessionUser } from "@/lib/server/auth";
-import { isAdminEmail } from "@/lib/admin-emails";
+import { authorizeAdmin } from "@/lib/server/admin-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-/** 管理员一键处理/重开反馈（对应 GitHub issue 的 close/reopen） */
+/** 管理员一键处理/重开反馈（对应 GitHub issue 的 close/reopen）。
+ *  双鉴权:白名单会话 OR 后台密码头(外部后台管理系统走后者)。 */
 export async function POST(req: NextRequest) {
-  const session = await getSessionUser();
-  if (!session) return Response.json({ error: "未登录" }, { status: 401 });
-  if (!isAdminEmail(session.email, process.env.ADMIN_EMAILS)) {
-    return Response.json({ error: "此账号没有管理权限" }, { status: 403 });
-  }
+  const admin = await authorizeAdmin(req);
+  if (!admin) return Response.json({ error: "未授权" }, { status: 401 });
 
   const body = await req.json().catch(() => null);
   const number = Number(body?.number);
