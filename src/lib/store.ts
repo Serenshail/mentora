@@ -748,7 +748,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "mentora-store-anon",
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({
         goals: state.goals,
@@ -772,6 +772,15 @@ export const useAppStore = create<AppState>()(
         // v3:把已有笔记正文里的 [[双链]] 一次性解析进 links,旧图谱立即有连线
         if (version < 3) {
           return { ...state, knowledge: linkifyBodies((state.knowledge ?? []) as KnowledgeItem[]) } as AppState;
+        }
+        // v4:清洗历史脏正文——"Day N：Day N：" 重复前缀(早期生成 bug 的残留),一次性自愈
+        if (version < 4) {
+          const fixed = ((state.knowledge ?? []) as KnowledgeItem[]).map((k) =>
+            k.body && /Day\s*\d+[：:]\s*Day\s*\d+[：:]/.test(k.body)
+              ? { ...k, body: k.body.replace(/(Day\s*\d+[：:])\s*Day\s*\d+[：:]\s*/g, "$1 ") }
+              : k
+          );
+          return { ...state, knowledge: linkifyBodies(fixed) } as AppState;
         }
         return state as AppState;
       },
