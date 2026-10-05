@@ -1035,13 +1035,14 @@ function DayPanel({
         </Card>
       )}
 
-      {/* 强制跳过 */}
+      {/* 强制跳过：固定在视口右下角,任何滚动位置都触手可及(此前在页尾,用户要拉很久以为坏了) */}
       {mode === "learn" && !done && !readOnly && (
         <button
           onClick={() => setSkipConfirm(true)}
-          className="w-full cursor-pointer rounded-xl border border-dashed border-warn/30 py-2.5 text-xs text-warn/80 hover:bg-warn/[0.05]"
+          title="学不会也可以跳过这个阶段（会被记录）"
+          className="fixed bottom-4 right-4 z-30 cursor-pointer rounded-full border border-warn/40 bg-white/95 px-4 py-2 text-xs font-medium text-warn shadow-lg backdrop-blur transition hover:bg-warn/[0.08]"
         >
-          学不会也要跳过这个阶段？（强硬跳过会被记录）
+          跳过这一阶段 →
         </button>
       )}
       <Modal open={skipConfirm} onClose={() => setSkipConfirm(false)} title="强制跳过确认">

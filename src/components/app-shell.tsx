@@ -272,7 +272,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Link>
         </header>
 
-        <main className="w-full flex-1 px-4 py-6 md:px-7 md:py-8">
+        <main className="flex w-full flex-1 flex-col px-4 py-6 md:overflow-hidden md:px-7 md:py-8">
           <div key={pathname} className="page-fade">
             <ErrorBoundary>{children}</ErrorBoundary>
           </div>
