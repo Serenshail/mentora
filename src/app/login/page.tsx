@@ -79,6 +79,16 @@ function LoginInner() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState("");
+  const [codeCooldown, setCodeCooldown] = useState(0);
+  const [codeBusy, setCodeBusy] = useState(false);
+
+  /* 验证码 60s 倒计时 */
+  useEffect(() => {
+    if (codeCooldown <= 0) return;
+    const t = setTimeout(() => setCodeCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [codeCooldown]);
 
   /* 已登录还访问 /login：直接回目标页，不渲染登录表单（否则出现三栏叠层） */
   useEffect(() => {
@@ -107,7 +117,7 @@ function LoginInner() {
       if (mode === "login") {
         await login(email.trim(), password);
       } else {
-        await register(email.trim(), password, name.trim());
+        await register(email.trim(), password, name.trim(), code.trim());
       }
       await afterAuth();
     } catch (e) {
@@ -158,6 +168,60 @@ function LoginInner() {
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
               />
+              {mode === "register" && (
+                <div>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="邮箱验证码"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={code}
+                      onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                      onKeyDown={(e) => e.key === "Enter" && submit()}
+                    />
+                    <Button
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={codeCooldown > 0 || codeBusy}
+                      loading={codeBusy}
+                      onClick={async () => {
+                        if (codeBusy || codeCooldown > 0) return;
+                        const em = email.trim();
+                        if (!em) {
+                          toast.error("先填邮箱再获取验证码");
+                          return;
+                        }
+                        setCodeBusy(true);
+                        try {
+                          const res = await fetch("/api/auth/send-code", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ email: em }),
+                          });
+                          const j = await res.json().catch(() => ({}));
+                          if (!res.ok) throw new Error(j.error || "发送失败");
+                          if (j.devCode) {
+                            setCode(String(j.devCode));
+                            toast("开发模式：验证码已自动填入（线上需配置发信服务）");
+                          } else {
+                            toast.success("验证码已发送到你的邮箱，10 分钟内有效");
+                          }
+                          setCodeCooldown(60);
+                        } catch (e2) {
+                          toast.error(e2 instanceof Error ? e2.message : "发送失败");
+                        } finally {
+                          setCodeBusy(false);
+                        }
+                      }}
+                    >
+                      {codeCooldown > 0 ? `${codeCooldown}s` : "获取验证码"}
+                    </Button>
+                  </div>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim/70">
+                    验证码用于确认这个邮箱真的是你的——收不到请检查垃圾箱。
+                  </p>
+                </div>
+              )}
               <Button className="w-full" size="lg" onClick={submit} loading={busy}>
                 {mode === "login" ? "登录" : "注册并登录"}
               </Button>

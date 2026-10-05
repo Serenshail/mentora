@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { dbGet, dbPut, emailHash } from "@/lib/server/db";
 import { hashPassword, setSessionCookie } from "@/lib/server/auth";
 import { checkEmailDeliverable } from "@/lib/email-check";
+import { verifyCode } from "@/lib/server/mail";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
@@ -35,6 +36,12 @@ export async function POST(req: NextRequest) {
   }
   if (password.length < 6) {
     return Response.json({ error: "密码至少 6 位" }, { status: 400 });
+  }
+  /* 邮箱归属验证码：证明"这个邮箱是你的"。dev 模式(未配 RESEND_API_KEY)下由
+   * send-code 返回 devCode,前端自动填入——链路可测,上线配 Key 即全量生效。 */
+  const code = String(body.code ?? "").trim();
+  if (!verifyCode(email, "register", code)) {
+    return Response.json({ error: "验证码不对或已过期，请重新获取" }, { status: 401 });
   }
 
   const path = `users/${emailHash(email)}.json`;
