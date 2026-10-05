@@ -237,7 +237,8 @@ export async function syncAfterLogin(): Promise<"pushed" | "pulled" | "none"> {
   // 串号防护已由 setStoreUser 的同步切仓保证：内存状态始终属于 _storeUserId 对应的仓，
   // 不再使用破坏性的 clearLocalStore（曾把用户本地快照写空）。
   if (!cloud) {
-    // 云端为空：本地有数据就推上去
+    // 云端为空：本地有**实质数据**才推——空内存推上去会存下"空快照",
+    // 之后任何设备的 bootSync 都可能被它覆盖(历史事故根源)
     if (hasLocalData()) {
       const ok = await pushCloud();
       return ok ? "pushed" : "none";
@@ -250,17 +251,41 @@ export async function syncAfterLogin(): Promise<"pushed" | "pulled" | "none"> {
   return "pulled";
 }
 
+/** 云端快照是否"有实质内容"——全空快照(如历史事故推送的)不作为覆盖本地的依据 */
+function cloudHasData(data: Record<string, unknown> | null | undefined): boolean {
+  if (!data) return false;
+  const d = data as { goals?: unknown[]; knowledge?: unknown[]; books?: unknown[]; sessions?: unknown[]; customPersonas?: unknown[] };
+  return (
+    (d.goals?.length ?? 0) +
+      (d.knowledge?.length ?? 0) +
+      (d.books?.length ?? 0) +
+      (d.sessions?.length ?? 0) +
+      (d.customPersonas?.length ?? 0) >
+    0
+  );
+}
+
 /** 开机/刷新即与云端对齐：本地快照可能因配额装不下大知识库而为空，
- * 不能只靠"登录那一刻"拉云。云端比本地新就拉取,否则保留本地(含未推送编辑)。 */
+ * 不能只靠"登录那一刻"拉云。云端比本地新就拉取,否则保留本地(含未推送编辑)。
+ * 红线:云端是"空快照"而本地有数据时,绝不拉取——否则一条历史空备份会抹掉本地新数据。 */
 export async function bootSync(): Promise<void> {
   try {
     const cloud = await pullCloud();
     if (!cloud) return;
+    const localHas = hasLocalData();
+    const cloudOk = cloudHasData(cloud.data);
+    // 云端空 & 本地有 → 不覆盖,反手把本地推上去(修复历史空快照)
+    if (!cloudOk && localHas) {
+      void pushCloud();
+      return;
+    }
+    // 云端空 & 本地空 → 无事可做
+    if (!cloudOk) return;
     const localTs = Date.parse(localStorage.getItem(CHOICE_KEY) ?? "") || 0;
     const cloudTs = Date.parse(cloud.updatedAt) || 0;
     // 本地为空(大知识库装不下 localStorage,刷新后本地快照是空的)时,只要云端有数据就恢复;
     // 否则仅在云端比本地新时拉取,避免覆盖本地未推送的编辑。
-    if (!hasLocalData() || cloudTs > localTs) {
+    if (!localHas || cloudTs > localTs) {
       useAppStore.getState().importData(cloud.data);
       localStorage.setItem(CHOICE_KEY, cloud.updatedAt);
       setSyncStatus("saved");

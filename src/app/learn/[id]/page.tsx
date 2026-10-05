@@ -261,7 +261,7 @@ export default function GoalDetailPage() {
             selectedDayId={viewDayId}
             onSelect={setViewDayId}
           />
-          <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={viewDay.id !== activeDay?.id} />
+          <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={viewDay.id !== activeDay?.id} onGoToDay={setViewDayId} />
         </div>
       )}
       {goal.plan && !viewDay && activePhase && !activePhase.planned && activePhase.dayIds.length === 0 && (
@@ -564,10 +564,13 @@ function DayPanel({
   goal,
   day,
   readOnly = false,
+  onGoToDay,
 }: {
   goal: Goal;
   day: DayPlan;
   readOnly?: boolean;
+  /** 跳过成功后让父组件把视图切到新解锁的一天(传 null=回阶段视图) */
+  onGoToDay?: (dayId: string | null) => void;
 }) {
   const store = useAppStore;
   const [mode, setMode] = useState<PanelMode>("learn");
@@ -710,7 +713,17 @@ function DayPanel({
       items: [],
     });
     setSkipConfirm(false);
-    toast("已强制跳过，该阶段标记为 skipped，知识点未入第二大脑。");
+    setSkipText("");
+    // 跳过成功后自动走到新解锁的一天,让用户明确"下一步在哪"(否则视图停在旧日,像没生效)
+    const next = goal.plan?.phases
+      .find((p) => p.id === day.phaseId)?.dayIds?.[(goal.plan?.phases.find((p) => p.id === day.phaseId)?.dayIds ?? []).indexOf(day.id) + 1];
+    const nextDay = next ? goal.plan?.days[next] : undefined;
+    if (nextDay && nextDay.status === "active" && next) {
+      onGoToDay?.(next);
+    } else {
+      onGoToDay?.(null); // 阶段完成,回阶段视图看解锁的下一阶段
+    }
+    toast.success("已跳过。解锁了下一天，继续。");
   };
 
   return (

@@ -749,6 +749,10 @@ export const useAppStore = create<AppState>()(
     {
       name: "mentora-store-anon",
       version: 4,
+      // 跳过 persist 的自动 rehydrate：水合完全由 setStoreUser() 同步掌控。
+      // 否则刷新页面时 persist 会用 anon 仓异步覆盖内存,而此刻 setOptions 已换到用户仓——
+      // 空状态随后被写进用户仓,goal 凭空消失(实测:导航后 3s goals 1→0,堆栈指向 persist setState)。
+      skipHydration: true,
       storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({
         goals: state.goals,
@@ -828,9 +832,20 @@ export function setStoreUser(userId: string | null) {
     if (raw) {
       const parsed = JSON.parse(raw) as { state?: Record<string, unknown>; version?: number };
       const st = (parsed?.state ?? {}) as Partial<AppState> & { knowledge?: unknown[] };
-      loaded = (parsed?.version ?? 2) < 2
-        ? { ...st, knowledge: migrateKnowledge(st.knowledge ?? []) }
-        : st;
+      const ver = parsed?.version ?? 2;
+      // 与 persist.migrate 同一套迁移:同步加载路径也要跑(v3 双链解析/v4 Day 前缀清洗)
+      let knowledge = st.knowledge ?? [];
+      if (ver < 2) knowledge = migrateKnowledge(knowledge);
+      else if (ver < 4) knowledge = linkifyBodies(
+        ver < 4
+          ? ((knowledge as KnowledgeItem[]).map((k) =>
+              k.body && /Day\s*\d+[：:]\s*Day\s*\d+[：:]/.test(k.body)
+                ? { ...k, body: k.body.replace(/(Day\s*\d+[：:])\s*Day\s*\d+[：:]\s*/g, "$1 ") }
+                : k
+            ))
+          : (knowledge as KnowledgeItem[])
+      );
+      loaded = { ...st, knowledge };
     }
   } catch {
     /* 损坏的仓按空仓处理，绝不写入破坏 */

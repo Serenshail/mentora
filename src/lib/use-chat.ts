@@ -83,16 +83,22 @@ export function useChat(initial: ChatMsg[] = []) {
   return { messages, setMessages, pending, streaming, error, setError, send, stop };
 }
 
-/** 等 zustand persist 完成再渲染 store 数据（防 SSR 水合不一致） */
+/** 等 store 数据就绪再渲染（防 SSR 水合不一致）。
+ *  persist 已 skipHydration,水合由 useAuth 首次 /api/auth/me 后 setStoreUser 同步完成;
+ *  故以"认证检查结束"为准——checking=false 即内存已是正确用户仓。 */
 export function useHydrated() {
   const [h, setH] = useState(false);
   useEffect(() => {
-    if (useAppStore.persist.hasHydrated()) {
-      setH(true);
-      return;
-    }
-    const unsub = useAppStore.persist.onFinishHydration(() => setH(true));
-    return unsub;
+    // useAuth 的 checking 存在 useAuthStore;checking=false 即切仓已完成
+    import("@/lib/auth-client").then(({ useAuthStore }) => {
+      const un1 = useAuthStore.subscribe((s) => {
+        if (!s.checking) setH(true);
+      });
+      if (!useAuthStore.getState().checking) setH(true);
+      // 兜底:匿名模式 800ms 后放行(极端时序下不阻塞 UI)
+      const t = setTimeout(() => setH(true), 800);
+      return () => { un1(); clearTimeout(t); };
+    });
   }, []);
   return h;
 }
