@@ -7,6 +7,7 @@ import { useAppStore, useDueReviews } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { useAuth } from "@/lib/auth-client";
 import Landing from "@/components/landing";
+import { StudyHeatmap } from "@/components/learn/study-heatmap";
 import { cn, streakFrom } from "@/lib/utils";
 import {
   ArrowRight, BookOpen, Brain, Compass, Flame, GraduationCap, Zap,
@@ -73,6 +74,10 @@ function Dashboard() {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
+          {/* 学习日历：可看见的成长（热力墙+回溯） */}
+          <div className="md:col-span-2">
+            <StudyHeatmap />
+          </div>
           {/* 当前学习 */}
           <Card className="card-lift md:col-span-2">
             <div className="flex items-center justify-between">

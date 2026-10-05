@@ -921,10 +921,16 @@ function DayPanel({
       {mode === "result" && grade && (
         <Card
           className={cn(
-            "animate-rise",
-            grade.overall === "pass" ? "border-ok/30" : "border-bad/30"
+            "animate-rise relative overflow-hidden",
+            grade.overall === "pass" ? "border-ok/30 pass-glow" : "border-bad/30"
           )}
         >
+          {grade.overall === "pass" && (
+            /* 即时正反馈：一次性"印章"式盖章,1.2s 后静止,不彩带不喧哗 */
+            <span aria-hidden className="pass-stamp select-none">
+              过
+            </span>
+          )}
           <div className="flex items-center gap-2">
             {grade.overall === "pass" ? (
               <Badge tone="ok">验收通过</Badge>

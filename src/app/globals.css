@@ -257,6 +257,42 @@ h1, h2, h3 {
   animation: rise 0.35s ease both;
 }
 
+/* 验收通过即时正反馈：印章式"过"字,一次性缩放盖章后静止(克制,不彩带) */
+@keyframes stamp {
+  0% { opacity: 0; transform: rotate(-14deg) scale(2.2); }
+  55% { opacity: 0.9; transform: rotate(-14deg) scale(0.94); }
+  75% { transform: rotate(-14deg) scale(1.04); }
+  100% { opacity: 0.85; transform: rotate(-14deg) scale(1); }
+}
+.pass-stamp {
+  position: absolute;
+  right: 14px;
+  top: 8px;
+  pointer-events: none;
+  font-weight: 800;
+  font-size: 44px;
+  line-height: 1;
+  color: var(--color-ok);
+  border: 3px solid var(--color-ok);
+  border-radius: 10px;
+  padding: 2px 10px;
+  opacity: 0.85;
+  animation: stamp 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes passGlow {
+  0% { box-shadow: 0 0 0 0 rgba(4, 120, 87, 0.35); }
+  100% { box-shadow: 0 0 0 14px rgba(4, 120, 87, 0); }
+}
+.pass-glow {
+  animation: passGlow 0.9s ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pass-stamp,
+  .pass-glow {
+    animation: none;
+  }
+}
+
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.15; }
