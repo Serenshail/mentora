@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { MASTERY_LABELS, MASTERY_ORDER } from "@/lib/types";
 import {
   Badge, Button, Card, Input, Modal, PageHeader, ProgressRing, StatusDot, Textarea,
 } from "@/components/ui";
@@ -13,6 +14,7 @@ import type { DayPlan, Goal, QuizItemResult } from "@/lib/types";
 import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
 import { cn, formatDate, uid, rankResources, KIND_LABEL } from "@/lib/utils";
 import { refineResources } from "@/lib/resource-pipeline";
+import { masteryFromQuiz } from "@/lib/store";
 
 /* 链接体检徽章:复用资源管线的模块级缓存(refine 已体检过的不再重复请求) */
 import type { LinkCheck } from "@/lib/resource-pipeline";
@@ -254,13 +256,15 @@ export default function GoalDetailPage() {
       </div>
 
       {goal.plan && viewDay && (
-        <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
-          <PlanTimeline
-            goal={goal}
-            activeDayId={activeDay?.id ?? null}
-            selectedDayId={viewDayId}
-            onSelect={setViewDayId}
-          />
+        <div className="grid gap-6 lg:grid-cols-[300px_1fr] lg:items-start">
+          <div className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+            <PlanTimeline
+              goal={goal}
+              activeDayId={activeDay?.id ?? null}
+              selectedDayId={viewDayId}
+              onSelect={setViewDayId}
+            />
+          </div>
           <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={viewDay.id !== activeDay?.id} onGoToDay={setViewDayId} />
         </div>
       )}
@@ -302,7 +306,7 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
         .slice(0, 5)
         .flatMap((q) => {
           const day = plan.days[q.dayId];
-          return day ? [`${day.title}（${q.items.filter((i) => i.verdict === "fail").length} 题未过）`] : [];
+          return day ? [`${day.title}（${q.items.filter((i) => i.verdict === "incorrect").length} 题未过）`] : [];
         });
       const ctx = JSON.stringify(
         {
@@ -480,7 +484,7 @@ function PlanTimeline({
   const viewDayId = selectedDayId ?? activeDayId;
 
   return (
-    <Card className="h-fit lg:sticky lg:top-8">
+    <Card>
       <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-dim">
         路径设计
       </p>
@@ -581,6 +585,8 @@ function DayPanel({
   const [grading, setGrading] = useState(false);
   const [skipConfirm, setSkipConfirm] = useState(false);
   const [skipText, setSkipText] = useState("");
+  const [transferAnswer, setTransferAnswer] = useState<string | null>(null);
+  const [transferDone, setTransferDone] = useState(false);
 
   const done = day.status === "passed" || day.status === "skipped";
 
@@ -678,18 +684,42 @@ function DayPanel({
               itemId: it.itemId,
               question: q?.question ?? "",
               userAnswer: answers[it.itemId] ?? "",
-              verdict: "pass",
+              verdict: it.verdict,
               feedback: it.feedback,
+              hintLevel: it.hintLevel,
             };
           }),
         });
-        // 知识点进入第二大脑 + 间隔复习队列
+        // 知识点进入第二大脑 + 间隔复习队列；掌握状态按本次判分证据推进（Learn Anything）
+        const mStatus = masteryFromQuiz(
+          g.items.map((it) => ({ verdict: it.verdict, hintLevel: it.hintLevel }))
+        );
         store.getState().addKnowledge(
-          day.knowledgePoints.map((k) => ({ title: k.text, domain: `${goal.topic}/笔记` })),
+          day.knowledgePoints.map((k) => ({
+            title: k.text,
+            domain: `${goal.topic}/笔记`,
+            knowledgeType: k.knowledgeType,
+          })),
           "learn",
           `${goal.topic} · ${day.title}`
         );
-        toast.success("验收通过，下一阶段已解锁，知识点已存入第二大脑。");
+        // 把掌握状态写回计划里的知识点（historicalHighest 保留历史最高证据）
+        store.getState().updateGoal(goal.id, {
+          plan: (() => {
+            const plan = structuredClone(goal.plan!);
+            for (const k of plan.days[day.id]?.knowledgePoints ?? []) {
+              k.masteryStatus = mStatus;
+              if (
+                !k.historicalHighest ||
+                MASTERY_ORDER.indexOf(mStatus) > MASTERY_ORDER.indexOf(k.historicalHighest)
+              ) {
+                k.historicalHighest = mStatus;
+              }
+            }
+            return plan;
+          })(),
+        });
+        toast.success(`验收通过，下一天已解锁。本批掌握状态：${MASTERY_LABELS[mStatus]}`);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "评分失败，请重试");
@@ -746,9 +776,18 @@ function DayPanel({
             <p className="mt-1 text-xs text-ink-dim">{day.method}</p>
           </div>
           {!done && !readOnly && mode === "learn" && (
-            <Button onClick={() => setMode("quiz")} variant="ok">
-              <Swords className="size-4" /> 开始验收
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button onClick={() => setMode("quiz")} variant="ok">
+                <Swords className="size-4" /> 开始验收
+              </Button>
+              <button
+                onClick={() => setSkipConfirm(true)}
+                title="学不会也可以跳过这个阶段（会被记录）"
+                className="cursor-pointer rounded-full border border-warn/40 bg-white px-3 py-2 text-xs font-medium text-warn transition hover:bg-warn/[0.08]"
+              >
+                跳过 →
+              </button>
+            </div>
           )}
         </div>
 
@@ -963,8 +1002,10 @@ function DayPanel({
                       <span className="mr-2 text-ink-dim">第{i + 1}题</span>
                       {a.question}
                     </p>
-                    {r.verdict === "pass" ? (
+                    {r.verdict === "correct" ? (
                       <Check className="mt-0.5 size-4 shrink-0 text-ok" />
+                    ) : r.verdict === "partially_correct" ? (
+                      <span className="mt-0.5 size-4 shrink-0 text-warn font-bold text-xs">~</span>
                     ) : (
                       <CircleX className="mt-0.5 size-4 shrink-0 text-bad" />
                     )}
@@ -975,8 +1016,11 @@ function DayPanel({
                     </p>
                   )}
                   <p className="mt-2 text-xs text-ink-dim">
-                    <span className={r.verdict === "pass" ? "text-ok" : "text-bad"}>
-                      {r.verdict === "pass" ? "✓ " : "✗ "}
+                    <span className={
+                      r.verdict === "correct" ? "text-ok" :
+                      r.verdict === "partially_correct" ? "text-warn" : "text-bad"
+                    }>
+                      {r.verdict === "correct" ? "✓ " : r.verdict === "partially_correct" ? "~ " : "✗ "}
                     </span>
                     {r.feedback}
                   </p>
@@ -987,11 +1031,57 @@ function DayPanel({
           <div className="mt-4 rounded-xl border border-accent/20 bg-accent/[0.05] p-3.5 text-sm text-accent">
             {grade.reviewAdvice}
           </div>
+          {grade.overall === "pass" && (
+            /* 即时复习门（Learn Anything 硬规则）：先合上材料主动回忆，再做一道迁移题，完成后才算真正过门 */
+            <div className="mt-4 rounded-xl border border-ok/25 bg-ok/[0.04] p-3.5">
+              <p className="text-sm font-bold text-ink">过关前，最后一步：合上材料，回答这道迁移题</p>
+              {transferAnswer === null && (
+                <>
+                  <p className="mt-1.5 text-xs text-ink-dim">
+                    先花 10 秒回忆本日核心内容，再作答。回忆不出来的部分，正是该回炉的地方。
+                  </p>
+                  <Button size="sm" className="mt-2.5" onClick={() => setTransferAnswer("")}>
+                    我准备好了，看题
+                  </Button>
+                </>
+              )}
+              {transferAnswer !== null && (
+                <>
+                  <p className="mt-2 text-[13px] leading-relaxed text-ink">
+                    {grade.transferQuestion || "用你自己的话，把这个概念讲给一个没学过的人听，并说明它在什么情况下不适用。"}
+                  </p>
+                  <textarea
+                    className="mt-2 min-h-[72px] w-full resize-y rounded-lg border border-border bg-white p-2.5 text-[13px] text-ink outline-none focus:border-accent/50"
+                    placeholder="凭记忆作答（这不是评分，是帮你把知识焊牢）"
+                    value={transferAnswer}
+                    onChange={(e) => setTransferAnswer(e.target.value)}
+                  />
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      size="sm"
+                      disabled={!transferAnswer.trim()}
+                      onClick={() => {
+                        setTransferDone(true);
+                        toast.success("过关。你的回答已存入当日验收记录。");
+                      }}
+                    >
+                      提交，完成过关
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {grade.overall === "pass" ? (
-            <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-sm text-ink-dim">
-              <Check className="size-4 text-ok" />
-              已解锁下一任务，左侧时间线可查看。
-            </p>
+            transferDone ? (
+              <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-sm text-ok">
+                <Check className="size-4" /> 已过关并解锁下一任务，左侧时间线可查看。
+              </p>
+            ) : (
+              <p className="mt-4 text-center text-sm text-ink-dim">
+                回答上方迁移题后即完成过关（内容已解锁，但建议先回忆）。
+              </p>
+            )
           ) : (
             <div className="mt-4 flex items-center justify-between">
               <Button
@@ -1035,36 +1125,42 @@ function DayPanel({
         </Card>
       )}
 
-      {/* 强制跳过：固定在视口右下角,任何滚动位置都触手可及(此前在页尾,用户要拉很久以为坏了) */}
-      {mode === "learn" && !done && !readOnly && (
-        <button
-          onClick={() => setSkipConfirm(true)}
-          title="学不会也可以跳过这个阶段（会被记录）"
-          className="fixed bottom-4 right-4 z-30 cursor-pointer rounded-full border border-warn/40 bg-white/95 px-4 py-2 text-xs font-medium text-warn shadow-lg backdrop-blur transition hover:bg-warn/[0.08]"
+      {skipConfirm && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          onClick={() => setSkipConfirm(false)}
         >
-          跳过这一阶段 →
-        </button>
-      )}
-      <Modal open={skipConfirm} onClose={() => setSkipConfirm(false)} title="强制跳过确认">
-        <p className="text-sm text-ink-dim">
-          当前阶段的知识点<b className="text-ink">不会</b>存入第二大脑，也不会进入复习队列。
-          后续阶段的内容可能依赖它 —— 这是你的选择，系统尊重并记录它。
-        </p>
-        <Input
-          className="mt-4"
-          placeholder='输入「跳过」确认'
-          value={skipText}
-          onChange={(e) => setSkipText(e.target.value)}
-        />
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="outline" onClick={() => setSkipConfirm(false)}>
-            我再学学
-          </Button>
-          <Button variant="danger" onClick={forceSkip}>
-            确认跳过
-          </Button>
+          <Card
+            className="animate-rise max-w-sm w-full"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          >
+            <p className="text-lg font-bold text-ink">跳过这一阶段？</p>
+            <p className="mt-2 text-sm text-ink-dim">
+              本日知识点<b className="text-ink">不会</b>存入第二大脑，也不会进入复习队列。
+              跳过会被记录 —— 这是你的选择，系统尊重它。
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => { setSkipConfirm(false); setSkipText(""); }}>
+                我再学学
+              </Button>
+              {/* 两击确认：第一击变为红色警示,第二击执行——替代旧的打字确认(要拉很远找不到输入框) */}
+              {skipText !== "跳过" ? (
+                <Button
+                  variant="outline"
+                  onClick={() => setSkipText("跳过")}
+                  className="border-warn/50 text-warn"
+                >
+                  确认跳过（再点一次）
+                </Button>
+              ) : (
+                <Button variant="danger" onClick={forceSkip}>
+                  我确认，跳过
+                </Button>
+              )}
+            </div>
+          </Card>
         </div>
-      </Modal>
+      )}
     </div>
   );
 }

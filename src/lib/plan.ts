@@ -111,7 +111,10 @@ export function phaseDraftToDays(
       id: dayId,
       phaseId,
       title: d.title,
-      knowledgePoints: d.knowledgePoints.map((t) => ({ id: uid("kp"), text: t })),
+      knowledgePoints: d.knowledgePoints.map((t) => {
+        if (typeof t === "string") return { id: uid("kp"), text: t };
+        return { id: uid("kp"), text: t.text, knowledgeType: t.knowledgeType };
+      }),
       resources: d.resources.map((r) => ({
         title: r.title,
         url: r.url || undefined,

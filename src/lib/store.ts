@@ -4,6 +4,9 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { fsrs, generatorParameters, createEmptyCard, Rating, State } from "ts-fsrs";
 import { useShallow } from "zustand/react/shallow";
+import {
+  MASTERY_ORDER,
+} from "@/lib/types";
 import type {
   Book,
   ChatMsg,
@@ -11,6 +14,8 @@ import type {
   CustomPersona,
   Goal,
   KnowledgeItem,
+  MasteryStatus,
+  GradingResult,
   KnowledgeSource,
   Plan,
   QuizResult,
@@ -253,6 +258,51 @@ function linkifyBodies(knowledge: KnowledgeItem[]): KnowledgeItem[] {
     if (merged.length === (k.links?.length ?? 0)) return k;
     return { ...k, links: merged };
   });
+}
+
+/* ========= 掌握状态推进（Learn Anything assessment-integrity） =========
+ * 规则：L1-L4 提示下完成最高只记 guided；L5 完整示范后原题不得记 independent；
+ * 结论对但依据错不升级；一次偶然答对不覆盖此前引导证据（historicalHighest 保底）。
+ * ungradable 不算任何证据。 */
+export function advanceMastery(
+  cur: MasteryStatus | undefined,
+  hist: MasteryStatus | undefined,
+  verdict: GradingResult,
+  hintLevel: number | undefined
+): { next: MasteryStatus; hist: MasteryStatus } {
+  const order = MASTERY_ORDER;
+  const idx = (m: MasteryStatus) => order.indexOf(m);
+  const h = hist ?? cur ?? "unknown";
+  if (verdict === "ungradable") return { next: cur ?? "unknown", hist: h };
+  const hl = typeof hintLevel === "number" ? hintLevel : 0;
+  const base: MasteryStatus = cur ?? "unknown";
+  let next: MasteryStatus = base;
+  if (verdict === "correct") {
+    if (hl >= 5) next = base === "unknown" ? "exposed" : base; // L5 完整示范：原题不升级过 exposed
+    else if (hl >= 1) next = maxStatus("guided", base); // L1-L4：guided 封顶
+    else next = maxStatus("independent", base); // 无提示答对
+  } else if (verdict === "partially_correct") {
+    next = maxStatus("guided", base === "unknown" ? "exposed" : base);
+  } else {
+    // incorrect：不升级；连续错误由 FSRS/复习队列处理,不在此降级历史
+    next = base === "unknown" ? "exposed" : base;
+  }
+  return { next, hist: idx(next) > idx(h) ? next : h };
+}
+
+function maxStatus(a: MasteryStatus, b: MasteryStatus): MasteryStatus {
+  return MASTERY_ORDER.indexOf(a) >= MASTERY_ORDER.indexOf(b) ? a : b;
+}
+
+/** 验收通过后,把本日知识点按判分/提示等级推进掌握状态并同步进第二大脑的对应笔记 */
+export function masteryFromQuiz(items: { verdict: GradingResult; hintLevel?: number }[]): MasteryStatus {
+  // 取所有题里最弱的证据作为本日知识点的保守估计（Learn Anything:证据从紧不从松）
+  let worst: MasteryStatus = "durable";
+  for (const it of items) {
+    const { next } = advanceMastery("unknown", undefined, it.verdict, it.hintLevel);
+    if (MASTERY_ORDER.indexOf(next) < MASTERY_ORDER.indexOf(worst)) worst = next;
+  }
+  return worst === "durable" ? "independent" : worst; // 单日到不了 durable(需延迟复习)
 }
 
 export const useAppStore = create<AppState>()(

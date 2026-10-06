@@ -53,6 +53,7 @@ export default function ReadPage() {
         planSummary: plan.planSummary,
         chapters: plan.chapters.map((c) => ({
           ...c,
+          knowledgeType: c.knowledgeType || "concept",
           coreIdea: c.coreIdea || undefined,
           perspectives: c.perspectives || undefined,
           capture: c.capture || undefined,

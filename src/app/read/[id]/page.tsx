@@ -69,7 +69,12 @@ export default function BookPage() {
         title: book.title,
         author: book.author,
         planSummary: book.planSummary,
-        currentChapter: chapter ? { title: chapter.title, focusQuestion: chapter.focusQuestion } : null,
+        currentChapter: chapter ? {
+          title: chapter.title,
+          focusQuestion: chapter.focusQuestion,
+          knowledgeType: chapter.knowledgeType || "concept",
+          coreIdea: chapter.coreIdea,
+        } : null,
         pastedExcerpt: book.pastedText?.slice(0, 2000),
         insights: book.insights.map((i) => i.text),
       },

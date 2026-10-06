@@ -33,6 +33,14 @@ export interface KnowledgePoint {
   id: string;
   text: string;
   detail?: string;
+  /** 知识类型（Learn Anything 路由）：决定教学策略与验收方式 */
+  knowledgeType?: KnowledgeType;
+  /** 掌握状态（六级，来自 Learn Anything mastery-rubric） */
+  masteryStatus?: MasteryStatus;
+  /** 历史最高掌握状态（降级时保留，不删除历史证据） */
+  historicalHighest?: MasteryStatus;
+  /** 最近一次完成任务使用的提示等级 0-5 */
+  hintLevel?: number;
 }
 
 /** 验收条目：讲解测试 / 变体测试 / 口述 / 短文 / 实战（来自学习方法论） */
@@ -48,6 +56,66 @@ export interface ExampleProject {
   description: string;
   code?: string;
 }
+
+/* ========= 掌握状态机（Learn Anything 六级） ========= */
+export type MasteryStatus =
+  | "unknown"    // 没有可靠证据
+  | "exposed"    // 看过/听过，能识别但不能稳定提取
+  | "guided"     // 在提示/脚手架帮助下能完成
+  | "independent" // 无关键提示独立完成
+  | "transferable" // 变化后的新情境中仍能完成
+  | "durable";   // 延迟后仍能调用
+
+export const MASTERY_ORDER: MasteryStatus[] = [
+  "unknown", "exposed", "guided", "independent", "transferable", "durable",
+];
+
+export const MASTERY_LABELS: Record<MasteryStatus, string> = {
+  unknown: "未测",
+  exposed: "接触过",
+  guided: "需要提示",
+  independent: "能独立完成",
+  transferable: "能迁移应用",
+  durable: "长期保持",
+};
+
+/* ========= 知识类型（Learn Anything 领域路由） ========= */
+export type KnowledgeType =
+  | "fact"          // 事实/术语/定义
+  | "concept"       // 概念/原理/因果关系
+  | "procedure"     // 解题/编程/操作流程
+  | "discrimination" // 类别与方法辨别
+  | "judgment"      // 判断/策略/权衡
+  | "creative";     // 写作/设计/开放创作
+
+export const KNOWLEDGE_TYPE_LABELS: Record<KnowledgeType, string> = {
+  fact: "事实记忆",
+  concept: "概念理解",
+  procedure: "操作技能",
+  discrimination: "辨别分类",
+  judgment: "判断权衡",
+  creative: "创作产出",
+};
+
+/* ========= 提示阶梯（Learn Anything feedback-strategies） ========= */
+export interface HintLevel {
+  level: 0 | 1 | 2 | 3 | 4 | 5;
+  /** L0 自检 / L1 位置 / L2 原则 / L3 结构 / L4 示范关键步 / L5 完整示范 */
+  label: string;
+  prompt: string;
+}
+
+export const HINT_LADDER: HintLevel[] = [
+  { level: 0, label: "自检", prompt: "先检查一下题目真正问的对象，以及你的最后一步是否和它一致。" },
+  { level: 1, label: "错误位置", prompt: "问题出在…（指出具体位置），前面的方向是对的。" },
+  { level: 2, label: "原则提醒", prompt: "这里要用的是…（提醒相关规则或判据）。" },
+  { level: 3, label: "部分结构", prompt: "先把问题拆成两个部分：第一部分处理…，第二部分处理…。" },
+  { level: 4, label: "示范关键步", prompt: "第一步可以写成…。接下来请你只处理…。" },
+  { level: 5, label: "完整示范", prompt: "展示完整答案，同时要求学习者标出偏离点并完成一道小变式。" },
+];
+
+/* ========= 判分结果（Learn Anything 四级，替代 pass/fail 二元） ========= */
+export type GradingResult = "correct" | "partially_correct" | "incorrect" | "ungradable";
 
 export type NodeStatus = "locked" | "active" | "passed" | "skipped";
 
@@ -94,8 +162,9 @@ export interface QuizItemResult {
   itemId: string;
   question: string;
   userAnswer: string;
-  verdict: "pass" | "fail";
+  verdict: GradingResult;
   feedback: string;
+  hintLevel?: number;
 }
 
 export interface QuizResult {
@@ -170,6 +239,8 @@ export interface FsrsState {
 export interface BookChapter {
   id: string;
   title: string;
+  /** 本章主知识类型：决定对话模式（苏格拉底 vs 思维碰撞 vs 操作验证） */
+  knowledgeType?: KnowledgeType;
   coreIdea?: string; // 本单元核心论点
   focusQuestion: string; // 本章带着什么问题读
   perspectives?: string[]; // 其他思想家/作者对该观点的看法（人名+一句话）

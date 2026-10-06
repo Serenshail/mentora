@@ -163,7 +163,20 @@ export const phasePlanSchema = z.object({
     .array(
       z.object({
         title: z.string(),
-        knowledgePoints: z.array(z.string()).min(1),
+        knowledgePoints: z.array(z.union([
+          z.string(),
+          z.object({
+            text: z.string(),
+            knowledgeType: z.preprocess(
+              (v) => {
+                const s = String(v ?? "").toLowerCase();
+                if (["fact", "concept", "procedure", "discrimination", "judgment", "creative"].includes(s)) return s;
+                return undefined;
+              },
+              z.enum(["fact", "concept", "procedure", "discrimination", "judgment", "creative"]).optional()
+            ),
+          }),
+        ])).min(1),
         resources: z.array(
           z.object({
             title: z.string(),
@@ -281,13 +294,44 @@ export const quizGradeSchema = z.object({
   items: z.array(
     z.object({
       itemId: z.string(),
-      verdict: z.enum(["pass", "fail"]),
+      verdict: z.preprocess(
+        (v) => {
+          const s = String(v ?? "").toLowerCase();
+          // 兼容旧 pass/fail 格式
+          if (s === "pass" || s === "correct") return "correct";
+          if (s === "fail" || s === "incorrect") return "incorrect";
+          if (s === "partially_correct" || s === "partial") return "partially_correct";
+          if (s === "ungradable") return "ungradable";
+          return "incorrect";
+        },
+        z.enum(["correct", "partially_correct", "incorrect", "ungradable"])
+      ),
       feedback: z.string(),
+      hintLevel: z.preprocess(
+        (v) => (typeof v === "number" ? Math.min(5, Math.max(0, Math.round(v))) : undefined),
+        z.number().optional()
+      ),
     })
   ),
-  overall: z.enum(["pass", "fail"]),
+  overall: z.preprocess(
+    (v) => {
+      const s = String(v ?? "").toLowerCase();
+      if (s === "pass" || s === "correct") return "pass";
+      if (s === "fail" || s === "incorrect") return "fail";
+      return "fail";
+    },
+    z.enum(["pass", "fail"])
+  ),
+  /** 掌握升级所需证据表（Learn Anything assessment-integrity）：
+   *  每项的四级判分+提示等级都在 items 里,由前端据此推掌握状态并执行 guided 封顶。 */
   summary: z.string(),
   reviewAdvice: z.string(),
+  /** 每课即时复习门（Learn Anything 硬规则：未完成即时复习不得进入下一课）：
+   *  迁移任务=变化后的新情境小题,summary 已含一句话总结;均由判分模型一次性产出。 */
+  transferQuestion: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() ? v.trim() : null),
+    z.string().nullable().optional()
+  ),
 });
 export type QuizGrade = z.infer<typeof quizGradeSchema>;
 
@@ -305,6 +349,14 @@ export const readingPlanSchema = z.object({
     .array(
       z.object({
         title: z.string(),
+        knowledgeType: z.preprocess(
+          (v) => {
+            const s = String(v ?? "").toLowerCase();
+            if (["fact", "concept", "procedure", "discrimination", "judgment", "creative"].includes(s)) return s;
+            return "concept"; // 默认值
+          },
+          z.enum(["fact", "concept", "procedure", "discrimination", "judgment", "creative"])
+        ),
         coreIdea: z.string().optional().nullable(),
         focusQuestion: z.string(),
         perspectives: z.array(z.string()).optional().nullable(),

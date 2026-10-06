@@ -62,11 +62,39 @@ export function daysBetween(a: string, b: string): number {
 }
 
 /** 间隔重复队列：第 1/3/7/15 天（来自用户学习方法论） */
-export const REVIEW_INTERVALS = [1, 3, 7, 15] as const;
+/* Learn Anything 动态复习间隔：根据掌握状态和提示等级调整。
+ * 独立完成→更长间隔；需要提示→缩短间隔；完整示范后→重头开始。 */
+export const REVIEW_INTERVALS = [1, 3, 7, 14, 30] as const;
 
 export function nextReviewDate(stage: number): string {
   const idx = Math.min(stage, REVIEW_INTERVALS.length - 1);
   return addDays(REVIEW_INTERVALS[idx]);
+}
+
+/** 按掌握状态计算下一轮复习间隔（天）
+ * - independent/transferable：正常递进
+ * - guided：缩短间隔（还没独立，需要更密复习）
+ * - exposed：重头开始
+ * - durable：进入长间隔维护 */
+export function nextReviewInterval(
+  masteryStatus: string | undefined,
+  hintLevel: number | undefined,
+  currentStage: number
+): number {
+  // L1-L4 提示完成 = guided，缩短间隔
+  if (hintLevel != null && hintLevel >= 1 && hintLevel <= 4) {
+    return Math.max(1, Math.min(3, REVIEW_INTERVALS[Math.min(currentStage, 2)]));
+  }
+  // L5 完整示范 = exposed，重头开始
+  if (hintLevel === 5) return 1;
+  switch (masteryStatus) {
+    case "durable": return 30;
+    case "transferable": return 14;
+    case "independent": return REVIEW_INTERVALS[Math.min(currentStage, REVIEW_INTERVALS.length - 1)];
+    case "guided": return 3;
+    case "exposed": return 1;
+    default: return REVIEW_INTERVALS[Math.min(currentStage, REVIEW_INTERVALS.length - 1)];
+  }
 }
 
 export function formatDate(iso: string): string {

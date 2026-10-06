@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractJson, masterPlanSchema, phasePlanSchema } from "../ai/client";
+import { extractJson, masterPlanSchema, phasePlanSchema, quizGradeSchema } from "../ai/client";
 
 /* 端到端冒烟(真模型):本地 `E2E=1 npx vitest run e2e` 且 dev 服务器在跑时执行。
  * 目的:改完任何 AI 链路,先在本地把"引导→总纲要→天级计划→资源修复"整条跑一遍,
@@ -88,6 +88,32 @@ describe.skipIf(!run)("E2E 学习教练全链路(需 E2E=1 + dev server)", () =>
     });
     // 讲义里必须出现 Markdown 链接或裸 URL——只给书名不给链接=不合格
     expect(/\]\(https?:\/\/|https?:\/\/\S+/.test(full)).toBe(true);
+  }, 180_000);
+
+  it("验收判分:四级判分+迁移题字段(即时复习门)", async () => {
+    const ctx = JSON.stringify({
+      domainKind: "exam",
+      goal: { topic: "雅思", direction: "3 个月 6.5", background: "词汇3000", weeklyHours: 15 },
+      day: {
+        title: "Day 1：学术词汇第一批",
+        knowledgePoints: [{ text: "词族串记", knowledgeType: "fact" }],
+        acceptance: [{ id: "a1", kind: "explain", question: "用自己的话解释什么是词族串记" }],
+      },
+    });
+    const full = await chat({
+      task: "quiz-grade",
+      args: { ctx },
+      messages: [
+        { role: "user", content: "开始评分。\n\na1 的用户回答：词族串记就是把同一个词根的一串词放在一起记，比如 act 行动、action 行为、active 活跃的，记一个词根等于记住一串。" },
+      ],
+      temperature: 0.2,
+    });
+    const grade = quizGradeSchema.parse(extractJson(full));
+    expect(["correct", "partially_correct", "incorrect", "ungradable"]).toContain(grade.items[0]!.verdict);
+    expect(typeof grade.overall).toBe("string");
+    if (grade.overall === "pass") {
+      expect(grade.transferQuestion).toBeTruthy(); // 即时复习门必须给迁移题
+    }
   }, 180_000);
 
   it("资源修复:坏链能得到可访问替代或被置空", async () => {
