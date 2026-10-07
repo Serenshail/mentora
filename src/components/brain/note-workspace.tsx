@@ -1171,7 +1171,7 @@ export function NoteWorkspace({
       <div
         className={cn(
           "flex h-[calc(100dvh-200px)] min-h-[420px] overflow-hidden rounded-2xl border border-border bg-white",
-          "md:h-auto md:min-h-0 md:flex-1"
+          "md:h-[calc(100vh-150px)] md:min-h-[500px]"
         )}
       >
         {/* 左缘 ribbon（Obsidian 式竖排图标） */}
