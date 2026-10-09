@@ -210,6 +210,10 @@ export interface KnowledgeItem {
   domain: string;
   source: KnowledgeSource;
   sourceTitle: string; // 来自哪个目标 / 哪本书
+  /** 知识类型（Learn Anything 路由）：验收入库时记录，驱动后续复习/讲解策略 */
+  knowledgeType?: KnowledgeType;
+  /** 掌握状态（六级）：验收入库时按本次判分证据记录 */
+  masteryStatus?: MasteryStatus;
   masteredAt: string;
   reviewStage: number; // 0=未开始复习，1..4=已过第n轮
   nextReviewAt?: string; // ISO date，间隔重复 1/3/7/15

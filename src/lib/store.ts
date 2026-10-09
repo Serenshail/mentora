@@ -17,6 +17,7 @@ import type {
   MasteryStatus,
   GradingResult,
   KnowledgeSource,
+  KnowledgeType,
   Plan,
   QuizResult,
   Settings,
@@ -94,7 +95,7 @@ interface AppState {
   addFolder: (name: string) => void;
   removeFolder: (name: string) => void;
   addKnowledge: (
-    items: { title: string; body?: string; domain: string }[],
+    items: { title: string; body?: string; domain: string; knowledgeType?: KnowledgeType; masteryStatus?: MasteryStatus }[],
     source: KnowledgeSource,
     sourceTitle: string
   ) => void;
@@ -412,6 +413,8 @@ export const useAppStore = create<AppState>()(
             domain: i.domain,
             source,
             sourceTitle,
+            knowledgeType: i.knowledgeType,
+            masteryStatus: i.masteryStatus,
             masteredAt: todayISO(),
             reviewStage: 0,
             nextReviewAt: todayISO(),

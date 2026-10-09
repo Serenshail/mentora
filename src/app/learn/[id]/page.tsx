@@ -699,6 +699,7 @@ function DayPanel({
             title: k.text,
             domain: `${goal.topic}/笔记`,
             knowledgeType: k.knowledgeType,
+            masteryStatus: mStatus,
           })),
           "learn",
           `${goal.topic} · ${day.title}`
