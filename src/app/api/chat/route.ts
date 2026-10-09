@@ -46,6 +46,8 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
     case "resource-fix": return P.RESOURCE_FIX(s("bad"), s("ctx"));
+    case "direction-guide": return P.DIRECTION_GUIDE(s("ctx"));
+    case "life-post": return P.LIFE_POST(s("events"), Number(args.streak ?? 0));
     case "app-assistant": return P.APP_ASSISTANT(s("ctx"));
     case "persona-distill": return P.PERSONA_DISTILL(s("name"), s("hint"));
     case "council": {

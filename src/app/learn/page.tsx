@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Empty, Input, PageHeader, ProgressRing, StatusDot } from "@/components/ui";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS, type DomainKind } from "@/lib/types";
-import { GraduationCap, Plus, Trash2 } from "lucide-react";
+import { Compass, GraduationCap, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function goalProgress(goals: ReturnType<typeof useAppStore.getState>["goals"][number]) {
@@ -48,6 +48,9 @@ export default function LearnPage() {
         title="学习教练"
         desc="先聊几句摸清你的底细，再排计划。每天一课，验收不过不放行。"
       />
+
+      {/* 方向迷茫：第一性原理引导对话 */}
+      <DirectionGuideCard />
 
       {/* 新目标入口 */}
       <Card className="mb-8">
@@ -192,5 +195,113 @@ export default function LearnPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/* ================= 方向迷茫：第一性原理引导（一次一问，最多 4 轮） ================= */
+function DirectionGuideCard() {
+  const [open, setOpen] = useState(false);
+  const [turns, setTurns] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    boxRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [turns.length, busy]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput("");
+    const next = [...turns, { role: "user" as const, content: text }];
+    setTurns(next);
+    setBusy(true);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const full = await streamChat({
+        task: "direction-guide",
+        args: { ctx: "" },
+        messages: next.map((t) => ({ role: t.role, content: t.content })),
+        temperature: 0.6,
+        onDelta: () => {},
+      });
+      setTurns([...next, { role: "assistant", content: full || "（没收到回复，再试一次）" }]);
+    } catch {
+      setTurns([...next, { role: "assistant", content: "网络出问题了，稍后再聊。" }]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <Card className="mb-4 border-dashed">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-ink">不知道学什么？</p>
+            <p className="mt-1 text-xs text-ink-dim">
+              不看热门榜。从你自己的事实出发，把方向聊出来（约 4 轮对话）。
+            </p>
+          </div>
+          <Button variant="outline" onClick={() => setOpen(true)}>
+            <Compass className="size-4" /> 聊出方向
+          </Button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mb-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold text-ink">把方向聊出来</p>
+        <button
+          onClick={() => { setOpen(false); setTurns([]); }}
+          className="cursor-pointer text-xs text-ink-dim hover:text-ink"
+        >
+          收起
+        </button>
+      </div>
+      <div ref={boxRef} className="mt-3 max-h-72 space-y-2.5 overflow-y-auto pr-1">
+        {turns.map((t, i) => (
+          <div key={i} className={t.role === "user" ? "flex justify-end" : ""}>
+            <div
+              className={
+                t.role === "user"
+                  ? "max-w-[85%] rounded-2xl rounded-br-md bg-[#1a1a1a] px-3 py-2 text-[12.5px] text-white"
+                  : "max-w-[92%] whitespace-pre-wrap rounded-2xl rounded-bl-md bg-surface-2 px-3 py-2 text-[12.5px] leading-relaxed text-ink"
+              }
+            >
+              {t.content}
+            </div>
+          </div>
+        ))}
+        {busy && (
+          <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-surface-2 px-3 py-2 text-[12.5px] text-ink-dim">
+            想一下…
+          </div>
+        )}
+        {turns.length === 0 && !busy && (
+          <p className="rounded-xl bg-surface-2 p-3 text-[12.5px] leading-relaxed text-ink-dim">
+            先从一个小事实开始：抛开"应该学什么"，最近哪件事让你做起来忘记时间？或者哪个问题让你反复烦躁、想解决它？
+          </p>
+        )}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send()}
+          placeholder="想到什么说什么…"
+        />
+        <Button onClick={send} loading={busy} className="shrink-0">
+          发送
+        </Button>
+      </div>
+      <p className="mt-2 text-[11px] text-ink-dim/70">
+        聊出方向后，把方向填进下面的"想学点什么"，教练接着排计划。
+      </p>
+    </Card>
   );
 }

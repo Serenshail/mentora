@@ -8,6 +8,7 @@ import { useHydrated } from "@/lib/use-chat";
 import { useAuth } from "@/lib/auth-client";
 import Landing from "@/components/landing";
 import { StudyHeatmap } from "@/components/learn/study-heatmap";
+import { periodOf, PERIOD_GREETING } from "@/lib/period";
 import { cn, streakFrom } from "@/lib/utils";
 import {
   ArrowRight, BookOpen, Brain, Compass, Flame, GraduationCap, Zap,
@@ -52,7 +53,7 @@ function Dashboard() {
     <div>
       <PageHeader
         title={userName ? `${userName}，继续。` : "继续。"}
-        desc="今天学什么、复习什么，都在这一页。"
+        desc={`${PERIOD_GREETING[periodOf()]} 今天学什么、复习什么，都在这一页。`}
       />
 
       {isEmpty ? (

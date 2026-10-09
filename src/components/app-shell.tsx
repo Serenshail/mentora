@@ -14,11 +14,13 @@ import {
   LogOut,
   PanelLeftOpen,
   ShieldCheck,
+  Footprints,
 } from "lucide-react";
 import { FeedbackWidget } from "@/components/feedback-widget";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { toast } from "sonner";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { applyPeriodTheme, periodOf, PERIOD_LABEL } from "@/lib/period";
 import { useAuth, useAutoPush, useSyncStatus, useFlushOnHide } from "@/lib/auth-client";
 import { isAdminEmail } from "@/lib/admin-emails";
 import { useRouter } from "next/navigation";
@@ -30,6 +32,7 @@ const NAV = [
   { href: "/brain", label: "第二大脑", icon: Brain },
   { href: "/read", label: "读书伙伴", icon: BookOpen },
   { href: "/council", label: "人生伙伴", icon: Compass },
+  { href: "/life", label: "学习人生", icon: Footprints },
   { href: "/settings", label: "设置", icon: Settings2 },
 ];
 
@@ -59,6 +62,17 @@ export function AppShell({ children }: { children: ReactNode }) {
       window.localStorage.setItem("mentora-sidebar-collapsed", collapsed ? "1" : "0");
     } catch {}
   }, [collapsed]);
+
+  /* 学习时段主题：按本地时间切换氛围色,每 10 分钟校准一次 */
+  const [period, setPeriod] = useState(periodOf);
+  useEffect(() => {
+    applyPeriodTheme();
+    const iv = setInterval(() => {
+      applyPeriodTheme();
+      setPeriod(periodOf());
+    }, 600_000);
+    return () => clearInterval(iv);
+  }, []);
 
   /* 本地快照写满（知识库过大）时给一次可见提示：不崩溃、数据以云端为准 */
   useEffect(() => {
@@ -138,7 +152,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 工作台
               </p>
             )}
-            {NAV.slice(0, 5).map(({ href, label, icon: Icon }) => (
+            {NAV.slice(0, 6).map(({ href, label, icon: Icon }) => (
               <Link
                 key={href}
                 href={href}
@@ -160,7 +174,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <p className="px-3.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-dim/60">
               系统
             </p>
-            {NAV.slice(5).map(({ href, label, icon: Icon }) => (
+            {NAV.slice(6).map(({ href, label, icon: Icon }) => (
               <Link
                 key={href}
                 href={href}
@@ -283,7 +297,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
           className={cn(
             "sticky bottom-0 z-40 grid border-t border-border bg-white/90 backdrop-blur md:hidden",
-            isAdmin ? "grid-cols-7" : "grid-cols-6"
+            isAdmin ? "grid-cols-8" : "grid-cols-7"
           )}
         >
           {NAV.map(({ href, label, icon: Icon }) => (
