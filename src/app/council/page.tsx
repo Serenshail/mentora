@@ -6,16 +6,18 @@ import { Markdown } from "@/components/markdown";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
 import {
-  PERSONAS, personaById,
-} from "@/lib/ai/prompts";
+  ALL_SEAT_METAS, seatById, type SeatMeta,
+} from "@/lib/ai/persona-meta";
 import { extractJson, personaDistillSchema, streamChat } from "@/lib/ai/client";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { Compass, FlaskConical, Plus, Trash2, UserPlus, Users, Zap } from "lucide-react";
-import type { Persona as BuiltinPersona } from "@/lib/ai/prompts";
 import type { CustomPersona } from "@/lib/types";
 
-type ResolvedPersona = BuiltinPersona | (CustomPersona & { id: string });
+/* 内置席位在前端只有展示元数据（无 system 提示词）；自建人物带用户自己蒸馏的 system */
+type ResolvedPersona = SeatMeta | (CustomPersona & { id: string });
+const isCustomPersona = (p: ResolvedPersona): p is CustomPersona & { id: string } =>
+  "identityNote" in p;
 
 /* 内置 12 席的 hedcut 点刻肖像（public/personas/）；自建人物回落到墨色首字母 */
 const PORTRAITS: Record<string, string> = {
@@ -91,7 +93,7 @@ export default function CouncilPage() {
 
   const resolvePersona = (personaId: string): ResolvedPersona | null | undefined => {
     if (personaId === "roundtable") return null;
-    const builtin = personaById(personaId);
+    const builtin = seatById(personaId);
     if (builtin) return builtin;
     const c = customPersonas.find((x) => x.id === personaId);
     if (c) return { ...c, system: c.system };
@@ -109,7 +111,7 @@ export default function CouncilPage() {
   }, [activeId]);
 
   const allPersonaOptions = [
-    ...PERSONAS.map((p) => ({ id: p.id, name: p.name, color: p.color, custom: false })),
+    ...ALL_SEAT_METAS.map((p) => ({ id: p.id, name: p.name, color: p.color, custom: false })),
     ...customPersonas.map((c) => ({ id: c.id, name: c.name, color: c.color, custom: true })),
   ];
 
@@ -134,7 +136,7 @@ export default function CouncilPage() {
     setActiveId(sessionId);
     setMessages([]);
     await send({
-      args: { mode: "single", personaId: p?.id, customSystem: p && "identityNote" in p ? p.system : undefined },
+      args: { mode: "single", personaId: p?.id, customSystem: p && isCustomPersona(p) ? p.system : undefined },
       userText: "（请用你的风格开场：你是谁、你处理什么问题、以及你会先反问用户什么。50字内，不要列清单。）",
       task: "council",
       onDone: (full) => {
@@ -188,7 +190,7 @@ export default function CouncilPage() {
     const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
     addSessionMsg(active.id, userMsg);
     void send({
-      args: { mode: "single", personaId: persona?.id, customSystem: persona && "identityNote" in persona ? persona.system : undefined },
+      args: { mode: "single", personaId: persona?.id, customSystem: persona && isCustomPersona(persona) ? persona.system : undefined },
       userText: text,
       task: "council",
       history: base,
@@ -228,7 +230,8 @@ export default function CouncilPage() {
         try {
           const full = await streamChat({
             task: "council",
-            args: { mode: "take", name: p.name, personaId: p.id, customSystem: p.system },
+            /* 内置席位只发 personaId，system 由服务端解析；自建人物才携带用户自己的 system */
+            args: { mode: "take", name: p.name, personaId: p.id, customSystem: isCustomPersona(p) ? p.system : undefined },
             messages: [{ role: "user", content: text }],
             temperature: 0.8,
             onDelta: (d) => {
@@ -477,7 +480,7 @@ export default function CouncilPage() {
                   </div>
                 ))}
 
-                {PERSONAS.map((p) => (
+                {ALL_SEAT_METAS.map((p) => (
                   <button
                     key={p.id}
                     onClick={() => startWith(p.id)}

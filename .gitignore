@@ -41,3 +41,10 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# debug / smoke 临时产物（含会话 cookie，绝不入库）
+.tmp-*
+smoke.txt
+lt.txt
+lt-inject.json
+%SystemDrive%/
