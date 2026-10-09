@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { PROVIDERS, type AIConfig } from "@/lib/ai/providers";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
+import { getSessionUser } from "@/lib/server/auth";
+import { checkAndCountServerKey } from "@/lib/server/quota";
 import * as P from "@/lib/ai/prompts";
 import { logEvent } from "@/lib/server/config";
 import {
@@ -259,6 +261,20 @@ export async function POST(req: NextRequest) {
     body = { messages: [] };
   }
   const cfg = resolveConfig(req);
+  // 服务端 Key 配额（商业化前置）：没带 BYOK 头=烧部署者的钱,按用户(未登录按 IP)限每日次数;
+  // BYOK 用户不受此限。超限文案直接给出解法(等明天/自带 Key),不报"系统错误"。
+  if (!req.headers.get("x-mentora-key") && cfg.apiKey) {
+    const session = await getSessionUser();
+    const q = await checkAndCountServerKey(session?.email || clientIp(req));
+    if (!q.ok) {
+      return Response.json(
+        {
+          error: `今日 AI 调用已达上限（${q.limit} 次/天）。明天恢复，或在 设置→模型 填入你自己的 Key（BYOK）不限次。`,
+        },
+        { status: 429 }
+      );
+    }
+  }
   // 双契约：客户端发 args(新,核心任务)→服务端组装提示词；发 system(旧,council)→沿用。
   // 当前客户端仍发 system,故此改动行为零变化,仅为迁移备好服务端能力。
   const system =
