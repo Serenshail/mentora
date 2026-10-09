@@ -32,13 +32,13 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "review-ask": return P.REVIEW_PROMPT(s("items"));
     case "review-grade": return P.REVIEW_GRADE(s("ctx"));
     case "reading-plan": return P.READING_PLAN(s("desc"));
-    case "reading-chat":
-      return (
-        P.READING_CHAT(s("bookCtx")) +
-        (s("ragCtx")
-          ? `\n\n## 你的主人的第二大脑里有这些相关笔记（聊天时自然引用，别硬塞）\n${s("ragCtx")}`
-          : "")
-      );
+    case "reading-chat": {
+      const rag = s("ragCtx")
+        ? `\n\n## 你的主人的第二大脑里有这些相关笔记（聊天时自然引用，别硬塞）\n${s("ragCtx")}`
+        : "";
+      // 五模式引擎：显式 mode 走模式硬契约；未传 mode 保留旧的按知识类型自适应
+      return s("mode") ? P.READING_MODE_CHAT(s("mode") as never, s("bookCtx")) + rag : P.READING_CHAT(s("bookCtx")) + rag;
+    }
     case "verify-score": return P.VERIFY_SCORE(args as Parameters<typeof P.VERIFY_SCORE>[0]);
     case "insight": return P.INSIGHT_EXTRACT(s("text"));
     case "autolink": return P.AUTOLINK({ note: s("note"), candidates: s("candidates") });

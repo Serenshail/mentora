@@ -287,6 +287,8 @@ export interface Book {
   profile?: BookProfile; // 深度解剖档案
   pastedText?: string; // 用户粘贴的原文/笔记
   status: "want" | "reading" | "done";
+  /** 读书对话模式（五模式引擎;socratic/feynman/collision/close-read/recall-check） */
+  chatMode?: string;
   planSummary?: string;
   chapters: BookChapter[];
   insights: BookInsight[];

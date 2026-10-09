@@ -116,6 +116,22 @@ describe.skipIf(!run)("E2E 学习教练全链路(需 E2E=1 + dev server)", () =>
     }
   }, 180_000);
 
+  it("读书五模式:苏格拉底契约(必须提问、不得代讲)", async () => {
+    const bookCtx = JSON.stringify({
+      title: "思考，快与慢", author: "卡尼曼", planSummary: "四单元",
+      currentChapter: { title: "单元1 双系统", focusQuestion: "双系统解释了什么?", knowledgeType: "concept", coreIdea: "系统1快系统2慢" },
+    });
+    const full = await chat({
+      task: "reading-chat",
+      args: { bookCtx, ragCtx: "", mode: "socratic" },
+      messages: [{ role: "user", content: "我读完第一章了，大概就是人有快慢两套思考吧。" }],
+      temperature: 0.4,
+    });
+    // 苏格拉底模式硬契约：回复必须含提问，且不许超长代讲
+    expect(full.includes("？") || full.includes("?")).toBe(true);
+    expect(full.length).toBeLessThan(500);
+  }, 180_000);
+
   it("资源修复:坏链能得到可访问替代或被置空", async () => {
     const bad = [{ title: "失效资源", url: "https://example.com/definitely-dead-xyz", why: "学习用", reason: "HTTP 404 已失效" }];
     const full = await chat({

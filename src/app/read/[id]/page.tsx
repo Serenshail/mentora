@@ -8,6 +8,7 @@ import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
 import { extractJson, insightsSchema } from "@/lib/ai/client";
 import { heuristicVerify } from "@/lib/verify-heuristic";
+import { READING_MODES, defaultReadingMode, type ReadingMode } from "@/lib/ai/reading-modes";
 import { ragContext, wikiRetrieve } from "@/lib/rag";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
@@ -62,6 +63,8 @@ export default function BookPage() {
   }
 
   const chapter = book.chapters.find((c) => c.id === currentChapter) ?? book.chapters.find((c) => c.status === "todo") ?? null;
+  /* 五模式：book 级锁定;未锁定按章节知识类型推荐 */
+  const activeMode: ReadingMode = (book.chatMode as ReadingMode) || defaultReadingMode(chapter?.knowledgeType);
 
   const bookCtx = () =>
     JSON.stringify(
@@ -100,7 +103,7 @@ export default function BookPage() {
     );
     const ragCtx = ragContext(hits);
     void send({
-      args: { bookCtx: bookCtx(), ragCtx },
+      args: { bookCtx: bookCtx(), ragCtx, mode: activeMode },
       userText: text,
       task: "reading-chat",
       onDone: (full) => {
@@ -488,6 +491,35 @@ export default function BookPage() {
               <p className="mt-2 text-sm text-ink-dim">
                 本章带着这个问题读：<b className="text-ink">{chapter.focusQuestion}</b>
               </p>
+              {/* 五模式引擎：切换=换底层交互契约(只提问/只听讲/站对面/逐段带/合书检验),非口吻切换 */}
+              <div className="mt-3 border-t border-border/60 pt-2.5">
+                <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim/70">
+                  对话模式{!book.chatMode && "（按章节类型默认，点一下锁定）"}
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {READING_MODES.map((m) => (
+                    <button
+                      key={m.id}
+                      title={m.hint}
+                      onClick={() => {
+                        updateBook(book.id, { chatMode: book.chatMode === m.id ? undefined : m.id });
+                        toast(book.chatMode === m.id ? "已恢复自动模式" : `本书记为「${m.label}」模式`);
+                      }}
+                      className={cn(
+                        "cursor-pointer rounded-full border px-2.5 py-1 text-[11.5px] transition",
+                        activeMode === m.id
+                          ? "border-accent/50 bg-accent/[0.08] font-semibold text-accent"
+                          : "border-border text-ink-dim hover:bg-black/[0.04] hover:text-ink"
+                      )}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-dim/70">
+                  {READING_MODES.find((m) => m.id === activeMode)?.hint}
+                </p>
+              </div>
             </Card>
           )}
 
