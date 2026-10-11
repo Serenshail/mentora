@@ -199,6 +199,7 @@ export default function GoalDetailPage() {
   const hydrated = useHydrated();
   const { id } = useParams<{ id: string }>();
   const goal = useAppStore((s) => s.goals.find((g) => g.id === id));
+  const settings = useAppStore((s) => s.settings);
   const router = useRouter();
   const [viewDayId, setViewDayId] = useState<string | null>(null);
 
@@ -225,6 +226,28 @@ export default function GoalDetailPage() {
     Object.values(goal.plan?.days ?? {}).find((d) => d.status === "active") ?? null;
   const activePhase = goal.plan?.phases.find((p) => p.status === "active") ?? null;
   const viewDay = (viewDayId ? goal.plan?.days[viewDayId] : null) ?? activeDay;
+  /* 日程投影（视图层，不进目标卡 schema）：用户给一个目标日期,反推每天节奏 */
+  const [deadline, setDeadline] = useState<string>(() => {
+    try { return localStorage.getItem(`mentora-deadline-${goal.id}`) ?? ""; } catch { return ""; }
+  });
+  const setDeadlineDate = (v: string) => {
+    setDeadline(v);
+    try { localStorage.setItem(`mentora-deadline-${goal.id}`, v); } catch { /* 忽略 */ }
+  };
+  const remainingDays = goal.plan
+    ? Object.values(goal.plan.days).filter((d) => d.status === "active" || d.status === "locked").length
+    : 0;
+  const projection = (() => {
+    if (!deadline || !remainingDays) return null;
+    const days = Math.ceil((new Date(deadline).getTime() - Date.now()) / 86400000);
+    if (days <= 0) return { verdict: "已过期", perDay: 0, days: 0 };
+    const perDay = remainingDays / days;
+    return {
+      verdict: perDay <= 1 ? "按正常节奏可达" : perDay <= 1.6 ? "偏紧——需要加时间或砍范围" : "以现在的节奏到不了",
+      perDay: Math.round(perDay * 10) / 10,
+      days,
+    };
+  })();
 
   return (
     <div>
@@ -244,6 +267,30 @@ export default function GoalDetailPage() {
           </div>
         }
       />
+
+      {/* 日程投影（可选,视图层）：给有硬 deadline 的用户一个节奏反推,不改变 Day N 计划本身 */}
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-sm font-bold text-ink">日程投影</p>
+          <span className="text-[11px] text-ink-dim/70">可选：有硬截止日期才填,计划本身不承诺日期</span>
+          <input
+            type="date"
+            value={deadline}
+            onChange={(e) => setDeadlineDate(e.target.value)}
+            className="ml-auto rounded-lg border border-border bg-white px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent/50"
+          />
+        </div>
+        {projection && (
+          <p className="mt-2.5 text-[13px] leading-relaxed text-ink-dim">
+            剩 <b className="tabular text-ink">{remainingDays}</b> 个学习日，距 {deadline} 还有{" "}
+            <b className="tabular text-ink">{projection.days}</b> 天 → 平均每天要完成{" "}
+            <b className={cn("tabular", projection.perDay > 1.6 ? "text-bad" : projection.perDay > 1 ? "text-warn" : "text-ok")}>
+              {projection.perDay}
+            </b>{" "}
+            个学习日。{projection.verdict}。
+          </p>
+        )}
+      </Card>
 
       <div className="mb-6 flex flex-wrap gap-2">
         <Badge tone="accent">{DOMAIN_LABELS[goal.domainKind]}</Badge>
@@ -265,7 +312,7 @@ export default function GoalDetailPage() {
               onSelect={setViewDayId}
             />
           </div>
-          <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={viewDay.id !== activeDay?.id} onGoToDay={setViewDayId} />
+          <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={viewDay.id !== activeDay?.id} onGoToDay={setViewDayId} tone={settings.coachTone} />
         </div>
       )}
       {goal.plan && !viewDay && activePhase && !activePhase.planned && activePhase.dayIds.length === 0 && (
@@ -569,10 +616,13 @@ function DayPanel({
   day,
   readOnly = false,
   onGoToDay,
+  tone = "standard" as "standard" | "gentle",
 }: {
   goal: Goal;
   day: DayPlan;
   readOnly?: boolean;
+  /** 严厉度：判分与讲义语气（判分标准不变） */
+  tone?: "standard" | "gentle";
   /** 跳过成功后让父组件把视图切到新解锁的一天(传 null=回阶段视图) */
   onGoToDay?: (dayId: string | null) => void;
 }) {

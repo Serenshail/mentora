@@ -29,8 +29,8 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "intake": return P.SOCRATIC_INTAKE(s("topic"), s("userName"));
     case "plan":
       return args.mode === "master" ? P.PLANNER_MASTER(s("cardJson")) : P.PLANNER_PHASE(s("ctx"));
-    case "lesson": return P.DAILY_LESSON(s("ctx"));
-    case "quiz-grade": return P.QUIZ_GRADE(s("ctx"));
+    case "lesson": return P.DAILY_LESSON(s("ctx")) + P.TONE_LESSON_BLOCK(s("tone"));
+    case "quiz-grade": return P.QUIZ_GRADE(s("ctx"), s("tone") === "gentle" ? "gentle" : "standard");
     case "review-ask": return P.REVIEW_PROMPT(s("items"));
     case "review-grade": return P.REVIEW_GRADE(s("ctx"));
     case "reading-plan": return P.READING_PLAN(s("desc"));

@@ -333,4 +333,6 @@ export interface Settings {
   model: string;
   baseUrl: string; // custom 时使用
   userName: string;
+  /** 教练严厉度（Learn Anything 反馈策略）：standard=不放水不吹毛求疵；gentle=先具体肯定再指缺口，判分标准不变 */
+  coachTone?: "standard" | "gentle";
 }

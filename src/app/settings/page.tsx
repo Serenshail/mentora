@@ -36,6 +36,8 @@ async function fileToAvatar(file: File): Promise<string> {
 function AccountSection() {
   const { user, checking, updateProfile, logout } = useAuth();
   const setSettings = useAppStore((s) => s.setSettings);
+  const coachTone = useAppStore(useShallow((s) => s.settings.coachTone ?? "standard"));
+  const setTone = (t: "standard" | "gentle") => setSettings({ coachTone: t });
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
@@ -214,6 +216,30 @@ function AccountSection() {
               </span>
             </p>
           </div>
+        </div>
+      </Card>
+
+      {/* 教练严厉度：只改语气，不改判分标准 */}
+      <Card>
+        <p className="text-sm font-bold text-ink">教练风格</p>
+        <p className="mt-1 text-xs text-ink-dim">
+          标准：直接指出缺口，不铺垫。温和：先具体说做对了什么，再把缺口说成"还差一步"。判分标准两档完全一致——只差语气。
+        </p>
+        <div className="mt-3 flex gap-2">
+          {(["standard", "gentle"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTone(t)}
+              className={cn(
+                "cursor-pointer rounded-lg border px-4 py-2 text-[13px] transition",
+                coachTone === t
+                  ? "border-accent/50 bg-accent/[0.08] font-semibold text-accent"
+                  : "border-border text-ink-dim hover:bg-black/[0.04] hover:text-ink"
+              )}
+            >
+              {t === "standard" ? "标准 · 直接" : "温和 · 先扬后抑"}
+            </button>
+          ))}
         </div>
       </Card>
 

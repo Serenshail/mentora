@@ -11,7 +11,7 @@ import { StudyHeatmap } from "@/components/learn/study-heatmap";
 import { periodOf, PERIOD_GREETING } from "@/lib/period";
 import { cn, streakFrom } from "@/lib/utils";
 import {
-  ArrowRight, BookOpen, Brain, Compass, Flame, GraduationCap, Zap,
+  ArrowRight, BookOpen, Brain, Compass, Flame, GraduationCap, Play, Zap,
 } from "lucide-react";
 
 export default function Home() {
@@ -47,6 +47,7 @@ function Dashboard() {
 
   if (!hydrated) return <div className="h-64 animate-pulse rounded-2xl bg-surface/60" />;
 
+  const seedSampleGoal = useAppStore((s) => s.seedSampleGoal);
   const isEmpty = goals.length === 0 && books.length === 0 && knowledge.length === 0;
 
   return (
@@ -59,16 +60,20 @@ function Dashboard() {
       {isEmpty ? (
         <Card className="border-accent/25 bg-accent/[0.035]">
           <h2 className="text-lg font-bold text-ink">欢迎来到 Mentora</h2>
-          <div className="mt-4 space-y-2 text-sm text-ink-dim">
-            <p><b className="text-ink">① 说出你想学的。</b>教练问你几句，就排出计划。</p>
-            <p><b className="text-ink">② 每天一课。</b>验收通过才放行，笔记自动进你的知识库。</p>
-            <p><b className="text-ink">③ 拿不定的事</b>，找几位说真话的老朋友。</p>
+          <p className="mt-1 text-xs text-ink-dim">三步走完第一次完整闭环。不想从零开始？直接用下面的示例目标试。</p>
+          <div className="mt-4 space-y-2.5 text-sm text-ink-dim">
+            <p><b className="text-ink">① 说出你想学的。</b>教练问你一两个关键问题，就排出计划。<span className="ml-1 text-[11px] text-ink-dim/70">（找不到方向？教练页有「聊出方向」）</span></p>
+            <p><b className="text-ink">② 每天一课。</b>做完产出、通过验收才放行，笔记自动进你的知识库。</p>
+            <p><b className="text-ink">③ 验收通过的会流进第二大脑</b>，按遗忘曲线提醒复习，学习日历上留下你的格子。</p>
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
             <Button onClick={() => router.push("/learn")}>
               <GraduationCap className="size-4" /> 开始第一个目标
             </Button>
-            <Button variant="outline" onClick={() => router.push("/settings")}>
+            <Button variant="outline" onClick={() => router.push(`/learn/${seedSampleGoal()}`)}>
+              <Play className="size-4" /> 用示例目标试一试
+            </Button>
+            <Button variant="ghost" onClick={() => router.push("/settings")}>
               先连接模型（或用演示模式）
             </Button>
           </div>

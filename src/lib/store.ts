@@ -6,6 +6,8 @@ import { fsrs, generatorParameters, createEmptyCard, Rating, State } from "ts-fs
 import { useShallow } from "zustand/react/shallow";
 import {
   MASTERY_ORDER,
+  NodeStatus,
+  DayPlan,
 } from "@/lib/types";
 import type {
   Book,
@@ -30,6 +32,7 @@ export const DEFAULT_SETTINGS: Settings = {
   model: "",
   baseUrl: "",
   userName: "",
+  coachTone: "standard" as const,
 };
 
 /* ---- FSRS 自适应间隔调度（目标记忆率 90%；开源算法 ts-fsrs） ---- */
@@ -130,6 +133,7 @@ interface AppState {
   setSettings: (patch: Partial<Settings>) => void;
   importData: (data: Partial<AppState>) => void;
   resetAll: () => void;
+  seedSampleGoal: () => string;
 }
 
 /** 通过某天后解锁同阶段下一天 / 下一阶段首天 */
@@ -787,6 +791,77 @@ export const useAppStore = create<AppState>()(
           customPersonas: data.customPersonas ?? s.customPersonas,
           settings: { ...s.settings, ...(data.settings ?? {}) },
         })),
+      seedSampleGoal: () => {
+        const id = uid("g");
+        const kp = (t: string, kt: KnowledgeType) => ({ id: uid("kp"), text: t, knowledgeType: kt });
+        const day = (n: number, title: string, kps: string[], st: NodeStatus): DayPlan => ({
+          id: `d${n}`,
+          phaseId: "p1",
+          title: `Day ${n}：${title}`,
+          knowledgePoints: kps.map((t) => kp(t, "concept")),
+          resources: [
+            { title: "Prompt Engineering Guide（官方）", url: "https://www.promptingguide.ai/zh", why: "系统性框架，当手册用", kind: "doc" as const, year: 2025 },
+            { title: "Learn Prompting（免费开源课）", url: "https://learnprompting.org/zh/docs/introduction", why: "小步interactive", kind: "course" as const, year: 2025 },
+          ],
+          method: "读官方小节→写一个最小 prompt→跑一遍→按验收双轨自测",
+          acceptance: [
+            { id: uid("a"), kind: "explain" as const, question: "用自己的话说清：什么是 zero-shot / few-shot，差别在哪" },
+            { id: uid("a"), kind: "apply" as const, question: "写一个让模型稳定输出 JSON 的 prompt，并贴出你跑通的结果" },
+          ],
+          status: st,
+          attempts: 0,
+          lesson: st === "active" ? `## 今日任务与用户背景
+体验示例目标：把一个真实小技能走完「学习→产出→验收」闭环。
+
+## ① 直接可学的资料
+- [Prompt Engineering Guide 中文版](https://www.promptingguide.ai/zh) —— 先读 Zero-Shot 与 Few-Shot 两节
+- [Learn Prompting 入门](https://learnprompting.org/zh/docs/introduction) —— 只看 Basics
+
+## ② 知识点穷尽
+- **zero-shot**：不给例子，直接下指令。适合任务边界清晰、模型见过的套路
+- **few-shot**：给 2-3 个输入输出示例，让模型模仿格式
+- **角色设定**：一句"你是…"能显著稳定输出风格
+- **输出约束**：明确"只输出 JSON/不超过 100 字"比事后修剪省一半时间
+
+## ③ 完整可运行示例
+
+\`\`\`text
+你是产品文案。
+任务：把下面的功能点改写成一条朋友圈文案。
+要求：不超过 50 字，带一个具体场景，不要形容词堆砌。
+功能点：离线可用，数据存在本机。
+\`\`\`
+把上面的 prompt 原样粘进任意对话模型跑一遍，再改功能点重跑。
+
+## ④ 验收
+完成上方"验收标准"里的两题，提交评分。` : undefined,
+        });
+        const goal: Goal = {
+          id,
+          topic: "示例 · Prompt 编写入门",
+          direction: "三天走通「学习→产出→验收」闭环（可随时删除）",
+          domainKind: "coding",
+          motivation: "体验产品流程",
+          successCriteria: ["走完 Day1-3 并通过验收"],
+          background: "会用聊天 AI，没系统学过提示词",
+          weeklyHours: 3,
+          status: "active",
+          createdAt: new Date().toISOString(),
+          quizLog: [],
+          intakeTranscript: [],
+          plan: {
+            startDate: new Date().toISOString().slice(0, 10),
+            createdAt: new Date().toISOString(),
+            summary: "三天体验闭环：Day1 提示词基础 → Day2 结构化输出 → Day3 小项目验收",
+            totalDays: 3,
+            weeklyHours: 3,
+            phases: [{ id: "p1", title: "阶段1 · 体验闭环", outcome: "能独立写出结构化 prompt 并通过验收", status: "active", dayIds: ["d1", "d2", "d3"], outline: ["基础", "结构化", "小项目"] }],
+            days: { d1: day(1, "提示词基础：zero-shot / few-shot / 角色", ["zero-shot 与 few-shot 的区别", "角色设定与输出约束"], "active"), d2: day(2, "结构化输出与常见坑", ["JSON 输出约束", "失败模式与修复"], "locked"), d3: day(3, "小项目：把一个真实需求 prompt 化", ["需求→prompt 的转译"], "locked") },
+          },
+        };
+        set((s) => ({ goals: [goal, ...s.goals] }));
+        return id;
+      },
       resetAll: () =>
         set({
           goals: [],

@@ -372,7 +372,7 @@ export const DAILY_LESSON = (ctx: string) => {
 
 /* ---------------- 4. 验收评分 ---------------- */
 
-export const QUIZ_GRADE = (ctx: string) => `你是 Mentora 的验收官，独立、严格、公平。逐条评判用户对验收题的回答。
+export const QUIZ_GRADE = (ctx: string, tone: "standard" | "gentle" = "standard") => `你是 Mentora 的验收官，独立、严格、公平。逐条评判用户对验收题的回答。
 
 ## 验收题与用户回答
 ${ctx}
@@ -391,6 +391,7 @@ ${ctx}
 3. hintLevel 记录：如果模型在题目或讲解中已提供了关键提示（L0 自检/L1 位置/L2 原则/L3 结构/L4 示范关键步/L5 完整示范），请在 hintLevel 中记录最大提示等级（0-5）。未提供提示则不填。
 4. fail 时 feedback 必须给出：卡在哪 + 下一步只修哪一点（不超过一句）。
 5. 不放水，不吹毛求疵。overall：全部 correct 或 partially_correct 算 pass，有 incorrect 算 fail。
+6. 反馈语气 = ${tone === "gentle" ? "温和档：先引用用户回答里做对的具体部分（一到两句，落到实处）,再把缺口说成「还差一步」,最后只给一个下一步;不空泛夸奖,不改变判分标准" : "标准档：直接指出缺口与下一步,不铺垫"}。
 
 只输出一个 json 代码块：
 \`\`\`json
@@ -1059,6 +1060,15 @@ ${MODE_RULES[mode] ?? MODE_RULES.socratic}
 
 通用约束:中文;每轮 ≤150 字+至多 2 问;抛观点必抛回问题;用户理解有漏洞不许顺着说。`;
 
+
+/* 讲义语气块（严厉度开关的讲义侧;判分侧在 QUIZ_GRADE） */
+export const TONE_LESSON_BLOCK = (tone: string) =>
+  tone === "gentle"
+    ? `
+
+## 语气档位：温和
+讲义保持标准质量,但表述上：先说清这节课"做完你能多会什么";卡点处用「常见的一步是…」替代「你容易错」;结尾加一句绑定本日具体内容的鼓励（不许空泛）。验收标准本身不放水。`
+    : "";
 export const NOTE_ASSIST = (mode: string, text: string) => `你是 Mentora 第二大脑的写作助手。用户对下面这段笔记发起「${mode}」操作。
 - mode=rewrite: 在**不改变原意与事实**的前提下润色改写:更清晰、更简洁、保留 Markdown 格式与 [[双链]]/#标签;直接输出改写后的全文,不要任何解释。
 - mode=summarize: 输出 3-6 条要点式摘要(Markdown 列表),抓住结论与因果,不要废话;直接输出摘要。
