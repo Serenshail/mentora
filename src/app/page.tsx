@@ -29,6 +29,8 @@ function Dashboard() {
   const books = useAppStore((s) => s.books);
   const knowledge = useAppStore((s) => s.knowledge);
   const due = useDueReviews();
+  // hooks 必须全部在任何提前 return 之前（踩坑 #9 的第三次踩：hydration 翻转→hook 数量+1→React #310 白屏）
+  const seedSampleGoal = useAppStore((s) => s.seedSampleGoal);
 
   const activeGoal = goals.find((g) => g.status === "active");
   const readingBook = books.find((b) => b.status === "reading");
@@ -47,7 +49,6 @@ function Dashboard() {
 
   if (!hydrated) return <div className="h-64 animate-pulse rounded-2xl bg-surface/60" />;
 
-  const seedSampleGoal = useAppStore((s) => s.seedSampleGoal);
   const isEmpty = goals.length === 0 && books.length === 0 && knowledge.length === 0;
 
   return (
