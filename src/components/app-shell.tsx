@@ -7,15 +7,18 @@ import { useAppStore } from "@/lib/store";
 import {
   BookOpen,
   Brain,
+  ChevronLeft,
+  ChevronRight,
   Compass,
   LayoutDashboard,
   GraduationCap,
+  Search,
   Settings2,
   LogOut,
-  PanelLeftOpen,
   ShieldCheck,
   Footprints,
 } from "lucide-react";
+import { CmdK } from "@/components/cmdk";
 import { FeedbackWidget } from "@/components/feedback-widget";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { toast } from "sonner";
@@ -62,6 +65,29 @@ export function AppShell({ children }: { children: ReactNode }) {
       window.localStorage.setItem("mentora-sidebar-collapsed", collapsed ? "1" : "0");
     } catch {}
   }, [collapsed]);
+
+  /* 全局命令面板（⌘K）：搜索/跳转任意页面、目标、笔记、书籍 */
+  const [cmdkOpen, setCmdkOpen] = useState(false);
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCmdkOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /* 移动顶栏的滚动边缘：滚过 8px 才显发丝线 */
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   /* 学习时段主题：按本地时间切换氛围色,每 10 分钟校准一次 */
   const [period, setPeriod] = useState(periodOf);
@@ -123,15 +149,28 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen w-full">
-      {/* 侧边栏 */}
+      {/* 侧边栏：Apple 玻璃配方（saturate 180% + blur 20px）——玻璃只用于真正层叠处 */}
       <aside
         className={cn(
-          "sticky top-0 hidden h-screen shrink-0 flex-col border-r border-border bg-white/80 backdrop-blur-xl transition-[width] duration-200 md:flex",
+          "glass-chrome sticky top-0 relative hidden h-screen shrink-0 flex-col border-r border-border transition-[width] duration-200 [transition-timing-function:var(--ease-spring)] md:flex",
           collapsed ? "w-14" : "w-64"
         )}
       >
+        {/* 收起/展开把手：贴右缘外置（Notion/Linear 式）——收起后把手仍悬在屏幕左缘，永远可见可点 */}
+        <button
+          onClick={() => setCollapsed((v) => !v)}
+          title={collapsed ? "展开侧栏" : "收起侧栏"}
+          aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+          className="absolute -right-3.5 top-[72px] z-50 grid size-7 cursor-pointer place-items-center rounded-full border border-border bg-surface text-ink-dim shadow-card transition-all duration-200 [transition-timing-function:var(--ease-out-quart)] hover:scale-110 hover:text-ink active:scale-95"
+        >
+          {collapsed ? (
+            <ChevronRight className="size-4" />
+          ) : (
+            <ChevronLeft className="size-4" />
+          )}
+        </button>
         {!collapsed ? (
-          <div className="flex items-center px-3 pb-4 pt-5">
+          <div className="flex items-center justify-between px-3 pb-3 pt-5">
             <Link href="/" className="flex items-baseline px-2">
               <span className="font-brand text-[30px] leading-none text-ink">Mentora</span>
             </Link>
@@ -144,6 +183,29 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           </div>
         )}
+
+        {/* 全局搜索入口：收起状态下也能直达任意目录/笔记/目标/书籍（⌘K） */}
+        <div className={cn("pb-2", collapsed ? "px-1.5" : "px-3")}>
+          <button
+            onClick={() => setCmdkOpen(true)}
+            title="搜索（Ctrl/Cmd+K）"
+            aria-label="搜索（Ctrl/Cmd+K）"
+            className={cn(
+              "flex cursor-pointer items-center rounded-lg border border-border bg-white/70 text-ink-3 transition hover:border-black/[0.14] hover:text-ink",
+              collapsed ? "h-10 justify-center" : "h-9 gap-2 px-3 text-[13px]"
+            )}
+          >
+            <Search className="size-4 shrink-0" />
+            {!collapsed && (
+              <>
+                <span>搜索…</span>
+                <kbd className="ml-auto rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] tabular">
+                  {isMac ? "⌘K" : "Ctrl K"}
+                </kbd>
+              </>
+            )}
+          </button>
+        </div>
 
         <div>
           <nav className={cn("space-y-0.5", collapsed ? "px-1.5" : "px-3")}>
@@ -160,7 +222,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 aria-label={collapsed ? label : undefined}
                 className={cn(
                   "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
-                  collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
+                  collapsed ? "justify-center px-2 py-3" : "px-3.5 py-2.5",
                   isActive(href)
                     ? "bg-black/[0.05] font-semibold text-ink"
                     : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
@@ -214,20 +276,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className={cn("mt-auto pb-4 pt-2", collapsed ? "px-1.5" : "px-3")}>
-          {/* 收起/展开：位于「反馈」上方、水平右移对齐「退出」所在列；收起态居中 */}
-          <button
-            onClick={() => setCollapsed((v) => !v)}
-            title={collapsed ? "展开侧栏" : "收起侧栏"}
-            aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
-            className={cn(
-              "mb-1 flex items-center rounded-lg py-1.5 text-ink-dim/70 transition hover:bg-black/[0.05] hover:text-ink cursor-pointer",
-              collapsed ? "justify-center px-1.5" : "justify-end px-2.5"
-            )}
-          >
-            <PanelLeftOpen
-              className={cn("size-5 transition-transform duration-200", collapsed && "rotate-180")}
-            />
-          </button>
           {!collapsed && <FeedbackWidget />}
           {user ? (
             <div className="mt-1 flex items-center gap-2 rounded-xl px-2.5 py-2">
@@ -239,7 +287,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   className="size-7 shrink-0 rounded-lg border border-border object-cover"
                 />
               ) : (
-                <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#1a1a1a] text-[11px] font-bold text-white">
+                <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#1d1d1f] text-[11px] font-bold text-white">
                   {(user.name || user.email).slice(0, 1).toUpperCase()}
                 </div>
               )}
@@ -281,11 +329,17 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <AssistantWidget />
+      <CmdK open={cmdkOpen} onOpenChange={setCmdkOpen} />
 
       {/* 主区（未登录时全屏渲染：落地页/登录页自带结构） */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* 移动端顶栏 */}
-        <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-white/85 px-4 py-3 backdrop-blur-xl md:hidden">
+        {/* 移动端顶栏：玻璃配方 + 滚动边缘（内容滚到下面才显发丝线，顶部时无痕） */}
+        <header
+          className={cn(
+            "glass-chrome sticky top-0 z-40 flex items-center justify-between border-b border-transparent px-4 py-3 transition-[border-color,box-shadow] duration-300 md:hidden",
+            scrolled && "scrolled-chrome"
+          )}
+        >
           <Link href="/" className="flex items-baseline">
             <span className="font-brand text-[22px] leading-none text-ink">Mentora</span>
           </Link>

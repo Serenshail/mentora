@@ -265,7 +265,7 @@ export default function AdminPage() {
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={u.avatar} alt={u.name} className="size-7 rounded-lg border border-border object-cover" />
                           ) : (
-                            <div className="flex size-7 items-center justify-center rounded-lg bg-[#1a1a1a] text-[11px] font-bold text-white">
+                            <div className="flex size-7 items-center justify-center rounded-lg bg-[#1d1d1f] text-[11px] font-bold text-white">
                               {u.name.slice(0, 1).toUpperCase()}
                             </div>
                           )}

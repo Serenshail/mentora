@@ -58,7 +58,7 @@ function PersonaAvatar({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-xl bg-[#1a1a1a] font-black text-white",
+        "flex shrink-0 items-center justify-center rounded-xl bg-[#1d1d1f] font-black text-white",
         className
       )}
     >
@@ -429,7 +429,7 @@ export default function CouncilPage() {
                   className="group rounded-2xl border border-accent/25 bg-accent/[0.04] p-5 text-left transition hover:border-accent/45 cursor-pointer sm:col-span-2 lg:col-span-3"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="flex size-11 items-center justify-center rounded-xl bg-[#1a1a1a]">
+                    <div className="flex size-11 items-center justify-center rounded-xl bg-[#1d1d1f]">
                       <Users className="size-5 text-white" />
                     </div>
                     <div>
@@ -512,7 +512,7 @@ export default function CouncilPage() {
               <Card className="mb-4 flex items-center gap-3">
                 {isRoundtable ? (
                   <>
-                    <div className="flex size-10 items-center justify-center rounded-xl bg-[#1a1a1a]">
+                    <div className="flex size-10 items-center justify-center rounded-xl bg-[#1d1d1f]">
                       <Users className="size-5 text-white" />
                     </div>
                     <div>
@@ -537,7 +537,7 @@ export default function CouncilPage() {
                 {messages.map((m) => (
                   <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                     {m.role === "user" ? (
-                      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1a1a1a] px-4 py-2.5 text-sm text-white">
+                      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-4 py-2.5 text-sm text-white">
                         {m.content}
                       </div>
                     ) : (

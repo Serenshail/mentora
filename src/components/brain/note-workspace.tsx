@@ -5,7 +5,7 @@
  * 左栏：搜索 / 标签筛选 / 笔记列表 / 新建
  * 中栏：标题 + 工具栏 + [[双链]] 自动补全的编辑器 / 预览（点击双链跳转或建新笔记）
  * 右栏：反向链接 · 出链 · 大纲 · 标签（Obsidian 右侧面板四件套）
- * Ctrl+K 快速切换器；自动保存（改动即写入，无需手动保存）
+ * 全局命令面板（⌘K，cmdk.tsx）负责任意跳转；自动保存（改动即写入，无需手动保存）
  * ============================================================ */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -314,7 +314,6 @@ export function NoteWorkspace({
   const [rightTab, setRightTab] = useState<RightTab>("backlinks");
   const [tagEdit, setTagEdit] = useState(false);
   const [newTag, setNewTag] = useState("");
-  const [switcher, setSwitcher] = useState(false);
   const [rightOpen, setRightOpen] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [newFolder, setNewFolder] = useState<string | null>(null);
@@ -435,19 +434,6 @@ export function NoteWorkspace({
     if (!domain) toast.success("已新建，标题点一下就能改。");
     else setExpanded((s) => new Set(s).add(domain));
   };
-
-  /* Ctrl+K 快速切换器 */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setSwitcher((v) => !v);
-      }
-      if (e.key === "Escape") setSwitcher(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
 
   /* ---- 编辑器：自动保存 + [[ 补全 + 工具栏 ---- */
@@ -840,7 +826,7 @@ export function NoteWorkspace({
         <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-dim" />
         <input
           className="w-full rounded-lg border border-border bg-white py-1.5 pl-8 pr-2 text-[13px] outline-none transition focus:border-accent/50"
-          placeholder="搜索笔记…  (Ctrl+K)"
+          placeholder="搜索笔记…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -1219,7 +1205,7 @@ export function NoteWorkspace({
               <Empty
                 icon={<FileText className="size-7" />}
                 title="选一篇笔记，或新建一篇"
-                desc="双链 [[]]、#标签、反向链接、大纲——都在这套工作台里。Ctrl+K 快速跳转。"
+                desc="双链 [[]]、#标签、反向链接、大纲——都在这套工作台里。Ctrl/Cmd+K 全局快速跳转。"
               />
               <Button size="sm" onClick={() => createNote()}>
                 <Plus className="size-4" /> 新笔记
@@ -1511,109 +1497,10 @@ export function NoteWorkspace({
         </div>
       </div>
 
-      {/* Ctrl+K 快速切换器 */}
-      {switcher && (
-        <QuickSwitcher
-          onClose={() => setSwitcher(false)}
-          onPick={(id) => {
-            onOpenNote(id);
-            onModeChange("preview");
-            setSwitcher(false);
-          }}
-          onCreate={(title) => {
-            openByTitle(title, true);
-            setSwitcher(false);
-          }}
-        />
-      )}
     </div>
   );
 
   /* AI 建联建议面板见上方编辑区 */
 }
 
-/* ================= 快速切换器 ================= */
-function QuickSwitcher({
-  onClose,
-  onPick,
-  onCreate,
-}: {
-  onClose: () => void;
-  onPick: (id: string) => void;
-  onCreate: (title: string) => void;
-}) {
-  const knowledge = useAppStore((s) => s.knowledge);
-  const [q, setQ] = useState("");
-  const [idx, setIdx] = useState(0);
-  const list = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    if (!query) return knowledge.slice(0, 8);
-    return knowledge.filter((k) => k.title.toLowerCase().includes(query)).slice(0, 8);
-  }, [knowledge, q]);
-  const exact = knowledge.find((k) => normTitle(k.title) === normTitle(q.trim()));
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[12vh] backdrop-blur-[2px]" onClick={onClose}>
-      <div
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-white shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <input
-          autoFocus
-          className="w-full border-b border-border px-4 py-3 text-sm outline-none"
-          placeholder="跳到笔记…（输入标题，回车打开）"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setIdx(0);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setIdx((i) => (i + 1) % Math.max(1, list.length));
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setIdx((i) => (i - 1 + list.length) % Math.max(1, list.length));
-            } else if (e.key === "Enter") {
-              if (list[idx]) onPick(list[idx].id);
-              else if (q.trim() && !exact) onCreate(q.trim());
-            } else if (e.key === "Escape") {
-              onClose();
-            }
-          }}
-        />
-        <div className="max-h-72 overflow-y-auto p-1.5">
-          {list.map((k, i) => (
-            <button
-              key={k.id}
-              onClick={() => onPick(k.id)}
-              className={cn(
-                "block w-full rounded-lg px-3 py-2 text-left cursor-pointer",
-                i === idx ? "bg-accent/[0.09]" : "hover:bg-black/[0.03]"
-              )}
-            >
-              <span className="text-[13px] font-medium text-ink">{k.title}</span>
-              <span className="ml-2 text-[10.5px] text-ink-dim/60">{k.domain}</span>
-            </button>
-          ))}
-          {q.trim() && !exact && (
-            <button
-              onClick={() => onCreate(q.trim())}
-              className="block w-full rounded-lg px-3 py-2 text-left text-[13px] text-accent hover:bg-accent/[0.06] cursor-pointer"
-            >
-              ＋ 新建「{q.trim()}」
-            </button>
-          )}
-          {list.length === 0 && exact && (
-            <button onClick={() => onPick(exact.id)} className="block w-full rounded-lg px-3 py-2 text-left text-[13px] cursor-pointer">
-              {exact.title}
-            </button>
-          )}
-        </div>
-        <p className="border-t border-border bg-surface-2 px-3 py-1.5 text-[10px] text-ink-dim/60">
-          ↑↓ 选择 · Enter 打开 · Esc 关闭
-        </p>
-      </div>
-    </div>
-  );
-}
+/* （原 Ctrl+K 快速切换器已由全局命令面板 components/cmdk.tsx 接管——同键位更强功能，避免双 ⌘K 抢键） */

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Badge, Button, Card, Modal,
 } from "@/components/ui";
@@ -25,6 +25,23 @@ export default function BrainPage() {
   const [tab, setTab] = useState<Tab>("notes");
   const [openId, setOpenId] = useState<string | null>(null);
   const [wsMode, setWsMode] = useState<"preview" | "edit">("preview");
+
+  /* URL 直达（⌘K 命令面板的跳转契约）：/brain?note=<id> 直接打开该笔记；?tab=graph 进图谱 */
+  useEffect(() => {
+    // 挪一拍：effect 同步 setState 是级联渲染红线（lint）
+    const raf = requestAnimationFrame(() => {
+      const p = new URLSearchParams(window.location.search);
+      const note = p.get("note");
+      const tabParam = p.get("tab");
+      if (note) {
+        setTab("notes");
+        setOpenId(note);
+      } else if (tabParam === "graph") {
+        setTab("graph");
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // 复习会话
   const [reviewQueue, setReviewQueue] = useState<string[]>([]);

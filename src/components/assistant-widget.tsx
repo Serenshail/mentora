@@ -25,8 +25,9 @@ const FEATURE_CTX = `- 第二大脑 = 内嵌 Obsidian：三栏（文件夹树/�
 - 常见问题：页面空白先强刷（Ctrl+F5）；数据没同步点侧栏「退出」重登；Obsidian 导入后笔记不进复习队列是设计如此（参考类笔记）。`;
 
 function defaultPos() {
-  if (typeof window === "undefined") return { x: 16, y: 600 };
-  return { x: 16, y: window.innerHeight - BTN - 80 };
+  /* 右下角：左下是侧栏用户区/提示条，压住它们=挡信息；右下空旷，面板向上展开 */
+  if (typeof window === "undefined") return { x: 600, y: 600 };
+  return { x: window.innerWidth - BTN - 16, y: window.innerHeight - BTN - 16 };
 }
 
 function loadPos() {
@@ -121,7 +122,7 @@ export function AssistantWidget() {
         style={{ left: pos.x, top: pos.y, width: BTN, height: BTN, touchAction: "none" }}
         className={cn(
           "fixed z-40 flex items-center justify-center rounded-full shadow-lg transition-colors select-none",
-          open ? "bg-ink text-white" : "bg-[#1a1a1a] text-white hover:bg-black/80 cursor-grab active:cursor-grabbing"
+          open ? "bg-ink text-white" : "bg-[#1d1d1f] text-white hover:bg-black/80 cursor-grab active:cursor-grabbing"
         )}
       >
         {open ? <X className="size-5" /> : <MessageCircleQuestion className="size-5" />}
@@ -149,7 +150,7 @@ export function AssistantWidget() {
             {messages.map((m) => (
               <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                 {m.role === "user" ? (
-                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#1a1a1a] px-3 py-2 text-[12.5px] text-white">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-3 py-2 text-[12.5px] text-white">
                     {m.content}
                   </div>
                 ) : (
@@ -188,7 +189,7 @@ export function AssistantWidget() {
               <button
                 onClick={doSend}
                 disabled={streaming || !input.trim()}
-                className="shrink-0 rounded-xl bg-[#1a1a1a] px-3 text-white transition hover:bg-black/80 disabled:opacity-40 cursor-pointer"
+                className="shrink-0 rounded-xl bg-[#1d1d1f] px-3 text-white transition hover:bg-black/80 disabled:opacity-40 cursor-pointer"
               >
                 <Send className="size-4" />
               </button>

@@ -269,7 +269,7 @@ function DirectionGuideCard() {
             <div
               className={
                 t.role === "user"
-                  ? "max-w-[85%] rounded-2xl rounded-br-md bg-[#1a1a1a] px-3 py-2 text-[12.5px] text-white"
+                  ? "max-w-[85%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-3 py-2 text-[12.5px] text-white"
                   : "max-w-[92%] whitespace-pre-wrap rounded-2xl rounded-bl-md bg-surface-2 px-3 py-2 text-[12.5px] leading-relaxed text-ink"
               }
             >

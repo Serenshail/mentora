@@ -422,7 +422,7 @@ export default function Landing() {
           </p>
           <Link
             href="/login?mode=register"
-            className="mt-8 inline-flex items-center gap-2 rounded-full bg-[#1a1a1a] px-6 py-3 text-[15px] font-medium text-white transition-colors duration-200 hover:bg-black/80"
+            className="mt-8 inline-flex items-center gap-2 rounded-full bg-[#1d1d1f] px-6 py-3 text-[15px] font-medium text-white transition-colors duration-200 hover:bg-black/80"
           >
             说出你想学的东西 <ArrowRight className="size-4" />
           </Link>

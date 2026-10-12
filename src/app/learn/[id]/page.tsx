@@ -112,7 +112,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
             {qa.map((m) => (
               <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                 {m.role === "user" ? (
-                  <div className="max-w-[85%] rounded-xl rounded-br-sm bg-[#1a1a1a] px-3 py-2 text-xs text-white">
+                  <div className="max-w-[85%] rounded-xl rounded-br-sm bg-[#1d1d1f] px-3 py-2 text-xs text-white">
                     {m.content}
                   </div>
                 ) : (

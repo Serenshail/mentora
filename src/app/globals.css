@@ -66,24 +66,57 @@ html {
  *       无渐变泛光、无 AI 感装饰——质感来自克制与精确。
  * ============================================================ */
 @theme inline {
-  /* 底色：微灰纸面，浮起纯白卡片 */
-  --color-bg: #fafafa;
+  /* 底色：苹果冷调灰白（绝不用暖米色），浮起纯白面板 */
+  --color-bg: #f5f5f7;
   --color-surface: #ffffff;
   --color-surface-2: #f4f4f5;
-  --color-border: #e8e8e6;
-  /* 墨色：近黑而非纯黑（Apple HIG） */
-  --color-ink: #1a1a1a;
+  /* 发丝分隔线：一切的边界（Apple Liquid Glass hairline） */
+  --color-border: rgba(0, 0, 0, 0.07);
+  /* 墨色阶：#1d1d1f 主文字（Apple HIG），次级 #6e6e73，三级 #86868b，占位 #aeaeb2 */
+  --color-ink: #1d1d1f;
   --color-ink-dim: #6e6e73;
-  /* 强调：Linear 式靛蓝，只用于聚焦、激活、链接 */
+  --color-ink-3: #86868b;
+  --color-faint: #d2d2d7;
+  /* 部件灰：进度轨/开关关闭态的"可见但安静"填充 */
+  --color-track: #e8e8ed;
+  /* 强调：靛蓝，只用于聚焦、激活、链接（正文世界保持灰阶） */
   --color-accent: #5b54e6;
   --color-accent-2: #0e7490;
   /* 语义色：白底可读版本 */
   --color-ok: #047857;
   --color-warn: #b45309;
   --color-bad: #dc2626;
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, "PingFang SC",
-    "Microsoft YaHei", sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  /* 系统字体栈（Apple 规范：系统字体即品牌字体，SF/PingFang 优先，不用网络字体） */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  /* 圆角档位：卡片 18px（Apple card tier），不再自造中间值 */
+  --radius-2xl: 1.125rem;
+  /* 阴影：一律两层（紧凑接触层 + 柔和扩散层），从不用单层硬阴影 */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.05);
+  --shadow-panel: 0 1px 3px rgba(0, 0, 0, 0.05), 0 14px 40px rgba(0, 0, 0, 0.05);
+  --shadow-lift: 0 12px 32px rgba(0, 0, 0, 0.1);
+  --shadow-overlay: 0 2px 8px rgba(0, 0, 0, 0.1), 0 30px 80px rgba(0, 0, 0, 0.24);
+}
+
+/* 动效曲线（Apple fluid interfaces 的 CSS 近似）：
+ * spring=弹层/面板入场（快起长收尾）；out-quart=悬停等小幅移动 */
+:root {
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* 玻璃配方：只用在真正层叠的地方（侧栏/吸顶栏/弹层）——普通内容永远实心白+柔和阴影 */
+.glass-chrome {
+  background: rgba(245, 245, 247, 0.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+/* 吸顶层的"滚动边缘"：内容滚到下面才出现发丝线与投影，顶部时贴合无痕 */
+.scrolled-chrome {
+  border-bottom-color: rgba(0, 0, 0, 0.07) !important;
+  box-shadow: 0 1px 12px rgba(0, 0, 0, 0.04);
 }
 
 html {
@@ -95,6 +128,8 @@ body {
   background: var(--color-bg);
   color: var(--color-ink);
   min-height: 100vh;
+  font-family: var(--font-sans);
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   letter-spacing: 0.005em;
@@ -254,7 +289,7 @@ h1, h2, h3 {
   }
 }
 .animate-rise {
-  animation: rise 0.35s ease both;
+  animation: rise 0.4s var(--ease-spring) both;
 }
 
 /* 验收通过即时正反馈：印章式"过"字,一次性缩放盖章后静止(克制,不彩带) */
@@ -314,12 +349,12 @@ h1, h2, h3 {
   to { opacity: 1; transform: none; }
 }
 .page-fade {
-  animation: pageRise 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: pageRise 0.36s var(--ease-spring) both;
 }
 
 /* 级联入场：区块依次浮现（Linear/Things 级精致感），仅前 5 个，避免长页拖沓 */
 .page-fade > * {
-  animation: pageRise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: pageRise 0.45s var(--ease-spring) both;
 }
 .page-fade > *:nth-child(2) { animation-delay: 45ms; }
 .page-fade > *:nth-child(3) { animation-delay: 90ms; }
@@ -354,19 +389,58 @@ h1, h2, h3 {
 
 /* 卡片浮起：位移收敛、投影为浅灰而非黑雾 */
 .card-lift {
-  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.18s, box-shadow 0.18s;
+  transition: transform 0.2s var(--ease-out-quart), border-color 0.2s, box-shadow 0.2s;
 }
 .card-lift:hover {
-  transform: translateY(-1px);
+  transform: translateY(-2px);
   border-color: #d8d8dc;
-  box-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.1), 0 2px 6px -2px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-lift);
 }
 
 /* ---- 学习时段主题（借鉴 alice.fans time-of-day）----
  * 按本地时间自动切换页面氛围：只动背景/主色的环境层,不改内容可读性。
  * 早读 5-9 / 上午 9-12 / 午后 12-17 / 晚自习 17-23 / 深夜 23-5 */
-html[data-period="morning"] { --color-bg: #fbf9f4; --color-accent: #b45309; }
-html[data-period="forenoon"] { --color-bg: #fafafa; --color-accent: #5b54e6; }
-html[data-period="afternoon"] { --color-bg: #fafaf7; --color-accent: #0e7490; }
-html[data-period="evening"] { --color-bg: #f7f6f3; --color-accent: #4338ca; }
-html[data-period="night"] { --color-bg: #f4f4f6; --color-accent: #6d28d9; }
+html[data-period="morning"] { --color-bg: #f7f4ee; --color-accent: #b45309; }
+html[data-period="forenoon"] { --color-bg: #f5f5f7; --color-accent: #5b54e6; }
+html[data-period="afternoon"] { --color-bg: #f4f5f6; --color-accent: #0e7490; }
+html[data-period="evening"] { --color-bg: #f3f3f7; --color-accent: #4338ca; }
+html[data-period="night"] { --color-bg: #f1f1f5; --color-accent: #6d28d9; }
+
+/* 交互层 materialize：弹层作为"材质"凝聚出现（模糊+缩放+透明度同步），
+ * 而非普通淡入；仅动 transform/opacity/filter，可被打断（transition 而非 keyframes） */
+.materialize {
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+  filter: blur(6px);
+  transition: opacity 0.4s var(--ease-spring), transform 0.4s var(--ease-spring), filter 0.4s var(--ease-spring);
+}
+.materialize.open {
+  opacity: 1;
+  transform: none;
+  filter: blur(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .materialize {
+    transition: opacity 0.2s ease;
+    transform: none !important;
+    filter: none !important;
+  }
+}
+
+/* 玻璃的可访问性退化（三信号独立处理） */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-chrome {
+    background: #fff;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  .glass-chrome {
+    background: #fff;
+    border-right: 1px solid rgba(0, 0, 0, 0.35);
+  }
+  .scrolled-chrome {
+    border-bottom-color: rgba(0, 0, 0, 0.35) !important;
+  }
+}

@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { Loader2, X } from "lucide-react";
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
@@ -28,7 +28,7 @@ export function Button({
 }) {
   const variants: Record<BtnVariant, string> = {
     primary:
-      "bg-[#1a1a1a] text-white hover:bg-[#333336] shadow-[0_1px_2px_rgba(0,0,0,0.14)] font-medium",
+      "bg-[#1d1d1f] text-white hover:bg-[#333336] shadow-[0_1px_2px_rgba(0,0,0,0.14)] font-medium",
     ghost: "text-ink-dim hover:text-ink hover:bg-black/[0.045]",
     outline:
       "border border-border bg-white text-ink hover:bg-[#fafafa] hover:border-[#d4d4d8] shadow-[0_1px_2px_rgba(0,0,0,0.04)]",
@@ -67,7 +67,7 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-2xl border border-border bg-surface shadow-[0_1px_2px_rgba(0,0,0,0.04)] p-5",
+        "rounded-2xl border border-border bg-surface shadow-card p-5",
         className
       )}
       {...props}
@@ -233,14 +233,24 @@ export function Empty({
  * 键盘/读屏用户开了门出不去。 */
 const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-export function Modal({
-  open,
+export function Modal(props: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  wide?: boolean;
+}) {
+  /* open=false 时整块卸载：内层 state 自然重置，重开必有 materialize 入场（且无同步 setState） */
+  if (!props.open) return null;
+  return <ModalDialog {...props} />;
+}
+
+function ModalDialog({
   onClose,
   title,
   children,
   wide,
 }: {
-  open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
@@ -248,10 +258,14 @@ export function Modal({
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const labelId = useId();
+  const [shown, setShown] = useState(false);
 
-  // ⚠️ hook 必须在 `if (!open)` 提前 return 之前（踩坑 #9，别再踩第四次）
+  // 下一拍再开：让 materialize 从当前值过渡（rAF 回调里 setState 合规）
   useEffect(() => {
-    if (!open) return;
+    const raf = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     const focusables = () =>
       Array.from(boxRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
@@ -289,9 +303,8 @@ export function Modal({
       document.body.style.overflow = prevOverflow;
       prev?.focus();
     };
-  }, [open, onClose]);
+  }, [onClose]);
 
-  if (!open) return null;
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px] p-4"
@@ -304,7 +317,8 @@ export function Modal({
         aria-labelledby={labelId}
         tabIndex={-1}
         className={cn(
-          "animate-rise w-full rounded-2xl border border-border bg-white p-4 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] max-h-[88vh] overflow-y-auto md:p-6 outline-none",
+          "materialize w-full rounded-2xl border border-border bg-white p-4 shadow-overlay max-h-[88vh] overflow-y-auto md:p-6 outline-none",
+          shown && "open",
           wide ? "max-w-3xl" : "max-w-lg"
         )}
         onClick={(e) => e.stopPropagation()}

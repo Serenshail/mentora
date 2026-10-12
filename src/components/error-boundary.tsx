@@ -29,7 +29,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
           <div className="mt-4 flex justify-center gap-2">
             <button
               onClick={() => this.setState({ err: null })}
-              className="cursor-pointer rounded-xl bg-[#1a1a1a] px-4 py-2 text-[13px] text-white transition hover:bg-black/80"
+              className="cursor-pointer rounded-xl bg-[#1d1d1f] px-4 py-2 text-[13px] text-white transition hover:bg-black/80"
             >
               重试
             </button>

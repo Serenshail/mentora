@@ -103,7 +103,7 @@ export default function LifePage() {
       <Card className="mb-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="flex size-9 items-center justify-center rounded-xl bg-[#1a1a1a] text-[13px] font-bold text-white">M</div>
+            <div className="flex size-9 items-center justify-center rounded-xl bg-[#1d1d1f] text-[13px] font-bold text-white">M</div>
             <div>
               <p className="text-[13px] font-bold text-ink">Mentora 教练</p>
               <p className="text-[11px] text-ink-dim/70">你的学习教练 · 每次进来会更新动态</p>

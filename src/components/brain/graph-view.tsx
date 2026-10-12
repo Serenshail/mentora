@@ -301,7 +301,7 @@ export function GraphView({
           ctx.fillStyle = t > 0.5 ? "#232326" : t > 0.15 ? "#55555c" : "#8f8f96";
           ctx.fill();
           if (hover === n.id) {
-            ctx.strokeStyle = "#1a1a1a";
+            ctx.strokeStyle = "#1d1d1f";
             ctx.lineWidth = 1.6;
             ctx.stroke();
           }
@@ -311,7 +311,7 @@ export function GraphView({
           const label = n.title.length > 14 ? n.title.slice(0, 14) + "…" : n.title;
           ctx.font = `${11 * Math.max(0.85, zoom)}px ui-sans-serif, system-ui, sans-serif`;
           ctx.textAlign = "center";
-          ctx.fillStyle = hover === n.id ? "#1a1a1a" : active ? "#77777d" : "#c4c4ca";
+          ctx.fillStyle = hover === n.id ? "#1d1d1f" : active ? "#77777d" : "#c4c4ca";
           ctx.fillText(label, x, y + r + 12 * Math.max(0.85, zoom));
         }
         ctx.globalAlpha = 1;

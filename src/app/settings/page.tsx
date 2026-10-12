@@ -154,7 +154,7 @@ function AccountSection() {
                   className="size-20 rounded-2xl border border-border object-cover"
                 />
               ) : (
-                <div className="flex size-20 items-center justify-center rounded-2xl bg-[#1a1a1a] text-2xl font-black text-white">
+                <div className="flex size-20 items-center justify-center rounded-2xl bg-[#1d1d1f] text-2xl font-black text-white">
                   {(name || user.email).slice(0, 1).toUpperCase()}
                 </div>
               )}
