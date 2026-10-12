@@ -1,32 +1,18 @@
 import { NextRequest } from "next/server";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
+import { assertSafePublicUrl } from "@/lib/server/url-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
 /* 链接体检:检测推荐资源是否 失效(dead) / 疑似广告(ad)。
- * 服务端代发请求并做 SSRF 防护(只允许公网 http/https,禁内网/回环/元数据地址)。 */
+ * SSRF 防护 v17 起接入统一 url-guard：形态黑名单之外再做 **DNS 解析取证**
+ * （十进制 IP 2130706433、任意解析到内网的域名都过不了），并**跟随重定向后
+ * 复检最终落点**（旧实现只查入口一次，redirect:follow 能把请求带进内网）。 */
 
 const AD_TITLE = /(广告|推广|优惠|折扣|购买|选购|注册送|免费领取|coupon|sale|buy now|sponsor)/i;
 const AD_DOMAIN = /(doubleclick|adservice|adserver|affiliate|commission-junction|clickbank)/i;
 const AFFILIATE_PARAM = /(utm_source|utm_medium|aff=|affiliate|ref=affiliate|campaign=)/i;
-
-function isSafeUrl(raw: string): boolean {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-  const host = u.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return false;
-  if (/^(127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return false;
-  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd")) return false;
-  const port = u.port;
-  if (port && port !== "80" && port !== "443") return false;
-  return true;
-}
 
 interface CheckResult {
   url: string;
@@ -41,7 +27,8 @@ interface CheckResult {
 
 async function checkOne(raw: string): Promise<CheckResult> {
   const base: CheckResult = { url: raw, ok: false, dead: false, ad: false, status: 0, title: "", finalUrl: raw, reason: "" };
-  if (!isSafeUrl(raw)) return { ...base, dead: true, reason: "链接格式不受支持" };
+  const entry = await assertSafePublicUrl(raw, { allowHttp: true });
+  if (!entry.ok) return { ...base, dead: true, reason: "链接格式不受支持" };
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
@@ -53,6 +40,11 @@ async function checkOne(raw: string): Promise<CheckResult> {
     clearTimeout(timer);
     base.status = res.status;
     base.finalUrl = res.url || raw;
+    // 重定向落点复检：入口合法不代表终点合法（302 → 元数据地址是经典 SSRF 跳板）
+    if (base.finalUrl && base.finalUrl !== raw) {
+      const hop = await assertSafePublicUrl(base.finalUrl, { allowHttp: true });
+      if (!hop.ok) return { ...base, dead: true, reason: "重定向到不安全地址" };
+    }
     if (res.status >= 400 || res.status === 404 || res.status === 410) {
       return { ...base, dead: true, reason: `HTTP ${res.status} 已失效` };
     }

@@ -284,7 +284,7 @@ function DirectionGuideCard() {
         )}
         {turns.length === 0 && !busy && (
           <p className="rounded-xl bg-surface-2 p-3 text-[12.5px] leading-relaxed text-ink-dim">
-            先从一个小事实开始：抛开"应该学什么"，最近哪件事让你做起来忘记时间？或者哪个问题让你反复烦躁、想解决它？
+            先从一个小事实开始：抛开「应该学什么」，最近哪件事让你做起来忘记时间？或者哪个问题让你反复烦躁、想解决它？
           </p>
         )}
       </div>
@@ -300,7 +300,7 @@ function DirectionGuideCard() {
         </Button>
       </div>
       <p className="mt-2 text-[11px] text-ink-dim/70">
-        聊出方向后，把方向填进下面的"想学点什么"，教练接着排计划。
+        聊出方向后，把方向填进下面的「想学点什么」，教练接着排计划。
       </p>
     </Card>
   );

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { inject } from "@vercel/analytics";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 import { Toaster } from "sonner";
@@ -21,6 +22,8 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
+  // v17：页面访问计数（匿名聚合，无个人标识）——先有漏斗数据再谈增长
+  inject();
   return (
     <html
       lang="zh-CN"

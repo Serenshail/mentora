@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { Loader2, X } from "lucide-react";
+import { useEffect, useId, useRef } from "react";
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
@@ -226,7 +227,12 @@ export function Empty({
   );
 }
 
-/* ---------- Modal ---------- */
+/* ---------- Modal ----------
+ * v17 无障碍补齐：role=dialog + aria-modal + 焦点陷阱（Tab 环回）+ Esc 关闭
+ * + 打开时锁滚动 + 关闭后焦点归还触发元素。此前只有 backdrop 点击可关，
+ * 键盘/读屏用户开了门出不去。 */
+const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
 export function Modal({
   open,
   onClose,
@@ -240,6 +246,51 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
 }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const labelId = useId();
+
+  // ⚠️ hook 必须在 `if (!open)` 提前 return 之前（踩坑 #9，别再踩第四次）
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      Array.from(boxRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
+    const t = setTimeout(() => {
+      const items = focusables();
+      (items[0] ?? boxRef.current)?.focus();
+    }, 0);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const firstEl = items[0];
+      const lastEl = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      prev?.focus();
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div
@@ -247,14 +298,19 @@ export function Modal({
       onClick={onClose}
     >
       <div
+        ref={boxRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelId}
+        tabIndex={-1}
         className={cn(
-          "animate-rise w-full rounded-2xl border border-border bg-white p-4 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] max-h-[88vh] overflow-y-auto md:p-6",
+          "animate-rise w-full rounded-2xl border border-border bg-white p-4 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] max-h-[88vh] overflow-y-auto md:p-6 outline-none",
           wide ? "max-w-3xl" : "max-w-lg"
         )}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-ink tracking-[-0.02em]">{title}</h3>
+          <h3 id={labelId} className="text-lg font-bold text-ink tracking-[-0.02em]">{title}</h3>
           <button
             onClick={onClose}
             className="rounded-lg p-1.5 text-ink-dim hover:bg-black/[0.045] hover:text-ink cursor-pointer transition"

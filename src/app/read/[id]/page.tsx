@@ -546,7 +546,7 @@ export default function BookPage() {
               </div>
             ))}
             {pending && (
-              <Card className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
+              <Card aria-live="polite" className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
                 <Markdown text={pending} />
                 <span className="stream-cursor" />
               </Card>

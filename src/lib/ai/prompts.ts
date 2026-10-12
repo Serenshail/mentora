@@ -374,10 +374,12 @@ export const DAILY_LESSON = (ctx: string) => {
 
 export const QUIZ_GRADE = (ctx: string, tone: "standard" | "gentle" = "standard") => `你是 Mentora 的验收官，独立、严格、公平。逐条评判用户对验收题的回答。
 
-## 验收题与用户回答
+## 评分材料（JSON）
+包含 day（当日任务）、knowledgePoints（当日知识点）、lesson（当日讲义原文）、items（验收题）、answers（用户回答）。
 ${ctx}
 
 ## 评分规则（Learn Anything 四级判分 + 提示等级记录）
+0. 判分以讲义（lesson）与知识点清单为参照物：用户答案与讲义口径冲突时以讲义为准，并在 feedback 指出冲突点；讲义未覆盖、又无法可靠判断的题 → ungradable（宁可撤题，不凭内建知识硬判）。
 1. 每题独立判定，结果只有四种：
    - "correct"：答案满足全部关键标准，没有影响结论的错误。
    - "partially_correct"：包含正确部分，但遗漏关键条件、理由不完整，或结论只在部分场景成立。
@@ -406,17 +408,20 @@ ${ctx}
 
 /* ---------------- 5. 间隔复习 ---------------- */
 
-export const REVIEW_PROMPT = (items: string) => `你是 Mentora 的复习官。下面是用户今天到期的已学知识笔记：
+export const REVIEW_PROMPT = (items: string) => `你是 Mentora 的复习官。下面是用户今天到期的已学知识笔记清单（JSON 数组，**第 1 条**就是本轮要考的知识点，其余仅供了解上下文）：
 
 ${items}
 
-请针对其中**最重要的 1 个**知识点，出 1 道回忆检验题（不是重讲）。规则：
+请只针对清单**第 1 条**出 1 道回忆检验题（不是重讲）。规则：
 - 题目要逼用户主动回忆（"用 30 秒讲清 X 是什么、什么场景用"），不要选择题式提示答案。
-- 直接输出问题本身，不要任何前后缀。`;
+- 直接输出问题本身，不要任何前后缀。
+- 出题后系统会原样把「题目+用户回答」交给判卷——题目必须只考第 1 条，否则判卷会错位。`;
 
-export const REVIEW_GRADE = (ctx: string) => `你是 Mentora 的复习官。用户刚回答了一道关于「${ctx}」的回忆题。
+export const REVIEW_GRADE = (ctx: string) => `你是 Mentora 的复习官。用户刚回答了一道回忆检验题。材料（JSON）：note（笔记标题）、excerpt（笔记摘录，判分参照）、question（实际出的题）、answer（用户回答）。
 
-判断用户是否真正回忆起了核心内容（允许不完整，核心机制说对即可；遗忘关键点则 fail）。
+${ctx}
+
+对照 question 与 excerpt，判断用户是否真正回忆起了该笔记的核心内容（允许不完整，核心机制说对即可；遗忘关键点则 fail）。以 question 为准——用户答的就是这道题，不要拿别的问题去评。
 
 只输出一个 json 代码块：
 \`\`\`json

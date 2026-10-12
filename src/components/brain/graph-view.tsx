@@ -12,7 +12,7 @@
  *   5. 稳定后停止重绘（CPU 归零），交互/数据变化自动唤醒
  * ============================================================ */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/lib/store";
 import { toast } from "sonner";
@@ -105,7 +105,20 @@ export function GraphView({
   const dirtyRef = useRef(true);
   const sizeRef = useRef({ w: 920, h: 560 });
   const countsRef = useRef({ nodes: 0, edges: 0 });
-  const [, forceRender] = useState(0);
+  /* v17：HUD 展示值（节点/边计数、缩放百分比）从"渲染期读 ref"迁到 state。
+   * React Compiler 禁止渲染读 ref——此前 zoom% 标签读 camRef，滚轮缩放时不会重渲染，
+   * 显示是坏的（forceRender 黑客只覆盖数据变化，覆盖不到相机变化）。
+   * 规则同时禁止 effect 同步 setState：统一走 rAF 一拍后同步。 */
+  const [viewStats, setViewStats] = useState({ zoom: 100, nodes: 0, edges: 0 });
+  const syncStats = useCallback(() => {
+    requestAnimationFrame(() =>
+      setViewStats({
+        zoom: Math.round(camRef.current.zoom * 100),
+        nodes: countsRef.current.nodes,
+        edges: countsRef.current.edges,
+      })
+    );
+  }, []);
 
   /* ---- 数据 → 仿真节点（保留旧位置，新增节点螺旋散布） ---- */
   useEffect(() => {
@@ -137,8 +150,8 @@ export function GraphView({
     countsRef.current = { nodes: nodesRef.current.length, edges: edgeList.length };
     alphaRef.current = 1;
     dirtyRef.current = true;
-    forceRender((t) => t + 1);
-  }, [visibleNotes, edgeList]);
+    syncStats();
+  }, [visibleNotes, edgeList, syncStats]);
 
   /* ---- 主循环：物理（网格分桶）+ 按需渲染 ---- */
   useEffect(() => {
@@ -358,6 +371,7 @@ export function GraphView({
       const n = nodesRef.current.find((x) => x.id === focusId);
       if (n) {
         camRef.current = { x: n.x, y: n.y, zoom: 1.35 };
+        syncStats();
         dirtyRef.current = true;
         if (++tries > 2) clearInterval(iv);
       } else if (++tries > 20) {
@@ -453,15 +467,17 @@ export function GraphView({
     cam.x = world.x - (sx - sizeRef.current.w / 2) / cam.zoom;
     cam.y = world.y - (sy - sizeRef.current.h / 2) / cam.zoom;
     dirtyRef.current = true;
+    syncStats();
   };
 
   const zoomBy = (factor: number) => {
     const cam = camRef.current;
     cam.zoom = Math.max(0.06, Math.min(5, cam.zoom * factor));
     dirtyRef.current = true;
+    syncStats();
   };
 
-  const fitView = () => {
+  function fitView() {
     const nodes = nodesRef.current;
     if (nodes.length === 0) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -477,7 +493,8 @@ export function GraphView({
     camRef.current.x = (minX + maxX) / 2;
     camRef.current.y = (minY + maxY) / 2;
     dirtyRef.current = true;
-  };
+    syncStats();
+  }
 
   const onClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -501,7 +518,7 @@ export function GraphView({
     }
   };
 
-  const shownCount = showOrphans ? countsRef.current.nodes : nodesRef.current.filter((n) => !orphanIds.has(n.id)).length;
+  const shownCount = showOrphans ? viewStats.nodes : visibleNotes.filter((n) => !orphanIds.has(n.id)).length;
 
   return (
     <div className="relative" ref={wrapRef}>
@@ -572,7 +589,7 @@ export function GraphView({
           </div>
         ) : (
           <p className="text-[10.5px] text-ink-dim/70">
-            {shownCount} 节点 · {countsRef.current.edges} 连接
+            {shownCount} 节点 · {viewStats.edges} 连接
           </p>
         )}
       </div>
@@ -580,8 +597,8 @@ export function GraphView({
       {/* 右下角缩放控件（Obsidian 同款） */}
       <div className="absolute bottom-3 right-3 z-10 flex overflow-hidden rounded-lg border border-border bg-white/95 shadow-sm backdrop-blur">
         <button onClick={() => zoomBy(1 / 1.3)} title="缩小" className="px-2.5 py-1.5 text-sm text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">−</button>
-        <button onClick={() => { camRef.current.zoom = 1; dirtyRef.current = true; }} title="重置缩放" className="border-x border-border px-2.5 py-1.5 text-[11px] tabular text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">
-          {Math.round(camRef.current.zoom * 100)}%
+        <button onClick={() => { camRef.current.zoom = 1; dirtyRef.current = true; syncStats(); }} title="重置缩放" aria-label={`重置缩放为 100%，当前 ${viewStats.zoom}%`} className="border-x border-border px-2.5 py-1.5 text-[11px] tabular text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">
+          {viewStats.zoom}%
         </button>
         <button onClick={() => zoomBy(1.3)} title="放大" className="px-2.5 py-1.5 text-sm text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">+</button>
         <button onClick={fitView} title="适应全图" className="border-l border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">适应</button>

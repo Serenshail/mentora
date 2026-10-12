@@ -133,6 +133,11 @@ export interface DayPlan {
   attempts: number; // 验收尝试次数
   lesson?: string; // 已生成的每日学习文档（缓存）
   qa?: ChatMsg[]; // 本日答疑对话（学习中随问随答）
+  /** 迁移题真门（v17）：验收已判过但迁移题未答——本日已记录，下一天暂不解锁。
+   *  旧数据无此字段 = 不受门控（历史已完成的天不会被新规则反锁）。 */
+  pendingUnlock?: boolean;
+  transferQuestion?: string; // 迁移题原文（刷新/换设备后仍能作答）
+  transferAnswer?: string; // 迁移题作答（过门时落档）
 }
 
 export interface Phase {

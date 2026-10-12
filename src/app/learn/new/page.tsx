@@ -35,6 +35,8 @@ function IntakeInner() {
   useEffect(() => {
     if (kicked.current) return;
     kicked.current = true;
+    // v17：初始化挪出 effect 同步体（effect 里直接 setState 会级联渲染，lint 红线）；一帧后执行，无感知
+    const raf = requestAnimationFrame(() => {
     const store = useAppStore.getState();
 
     if (resumeId) {
@@ -75,6 +77,8 @@ function IntakeInner() {
       userText: `我想学${t}`,
       task: "intake",
     });
+    });
+    return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -212,7 +216,7 @@ function IntakeInner() {
           </div>
         ))}
         {pending && (
-          <Card className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
+          <Card aria-live="polite" className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
             <Markdown text={pending.split("<!--GOAL_READY-->")[0]} />
             <span className="stream-cursor" />
           </Card>

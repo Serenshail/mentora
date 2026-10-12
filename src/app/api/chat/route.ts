@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { PROVIDERS, type AIConfig } from "@/lib/ai/providers";
-import { rateLimit, clientIp } from "@/lib/server/rate-limit";
-import { getSessionUser } from "@/lib/server/auth";
+import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
+import { verifySession, type SessionUser } from "@/lib/server/auth";
+import { assertSafePublicUrl } from "@/lib/server/url-guard";
 import { checkAndCountServerKey } from "@/lib/server/quota";
 import * as P from "@/lib/ai/prompts";
 import { logEvent } from "@/lib/server/config";
@@ -73,54 +74,78 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
   }
 }
 
-function resolveConfig(req: NextRequest): AIConfig {
-  const header = (n: string) => req.headers.get(n) || "";
-  let provider = header("x-mentora-provider") as string;
-  let apiKey = header("x-mentora-key");
-  let baseUrl = header("x-mentora-baseurl");
-  let model = header("x-mentora-model");
-
-  const envKeys: Record<string, string> = {
+function envKeys(): Record<string, string> {
+  return {
     zai: process.env.ZAI_API_KEY || "",
     deepseek: process.env.DEEPSEEK_API_KEY || "",
     moonshot: process.env.MOONSHOT_API_KEY || "",
     openai: process.env.OPENAI_API_KEY || "",
   };
+}
 
-  // 用户选了具体 provider 但没填 Key → 服务端同名 Key 兜底
-  if (provider && !["demo", "custom"].includes(provider) && !apiKey && envKeys[provider]) {
-    apiKey = envKeys[provider];
+/* ============================================================
+ * 模型配置解析（v17 安全重构）
+ *
+ * 旧版的洞：客户端头可以拼出"服务端 Key + 攻击者 baseUrl"的组合
+ * （provider=deepseek 不带 key → env Key 装上车，baseurl 头无白名单 →
+ * Bearer <部署者 Key> 直接发给攻击者 URL）——公开提款机。
+ *
+ * 新版铁律：**Key 与 baseUrl 必须同源**，不存在任何混配路径：
+ *  · BYOK：客户端给了自己的 Key。baseUrl 只来自①内置服务商表（服务端常量）
+ *    或②custom 端点（必须过 url-guard：公网 https + DNS 解析取证）。
+ *    外发的 Authorization 里只有用户自己的 Key，泄的是他自己。
+ *  · 服务端模式：客户端没给 Key。provider/baseUrl/model **全部来自 env**，
+ *    客户端头一概无视。未配置任何 Key → 演示脚本（不花钱，不登录也能玩）。
+ * ============================================================ */
+
+type ErrRes = { error: string; status: number };
+
+function resolveByok(req: NextRequest, userKey: string): Promise<AIConfig | ErrRes> | AIConfig | ErrRes {
+  const header = (n: string) => req.headers.get(n) || "";
+  const provider = header("x-mentora-provider");
+  const model = header("x-mentora-model");
+
+  if (provider === "custom") {
+    // custom 端点唯一允许客户端指定 baseUrl 的地方——必须过出网守卫（禁 https 之外/内网/元数据）
+    const raw = header("x-mentora-baseurl");
+    return (async () => {
+      const guard = await assertSafePublicUrl(raw, { allowHttp: false });
+      if (!guard.ok) return { error: `自定义端点不可用：${guard.reason}（需为公网 HTTPS 地址）`, status: 400 } satisfies ErrRes;
+      if (!model) return { error: "自定义端点请同时填写模型名", status: 400 } satisfies ErrRes;
+      return { provider: "custom", baseUrl: raw, apiKey: userKey, model } satisfies AIConfig;
+    })();
   }
-  if (provider === "custom" && !apiKey) {
+
+  if (provider && provider !== "demo" && provider in PROVIDERS) {
+    const info = PROVIDERS[provider as keyof typeof PROVIDERS];
+    return { provider: info.id, baseUrl: info.baseUrl, apiKey: userKey, model: model || info.defaultModel };
+  }
+  return { error: "已提供 API Key，但没有选择对应的服务商", status: 400 };
+}
+
+function serverConfig(): AIConfig {
+  const keys = envKeys();
+  const envProvider = process.env.AI_PROVIDER || "";
+  let provider = "";
+  let apiKey = "";
+  let baseUrl = "";
+  if (envProvider === "custom" && process.env.AI_BASE_URL) {
+    provider = "custom";
+    baseUrl = process.env.AI_BASE_URL;
     apiKey = process.env.CUSTOM_API_KEY || "";
-  }
-
-  // 未选择（或选"自动"）→ 跟随服务端配置；服务端无任何 Key → 演示模式
-  if (!provider || provider === "demo") {
-    const envProvider = process.env.AI_PROVIDER || "";
-    if (envProvider === "custom" && process.env.AI_BASE_URL) {
-      provider = "custom";
-      baseUrl = baseUrl || process.env.AI_BASE_URL;
-      apiKey = process.env.CUSTOM_API_KEY || "";
-    } else if (envProvider && envKeys[envProvider]) {
-      provider = envProvider;
-      apiKey = envKeys[envProvider];
-    } else {
-      for (const [p, k] of Object.entries(envKeys)) {
-        if (k) { provider = p; apiKey = k; break; }
-      }
+  } else if (envProvider && keys[envProvider]) {
+    provider = envProvider;
+    apiKey = keys[envProvider];
+  } else {
+    for (const [p, k] of Object.entries(keys)) {
+      if (k) { provider = p; apiKey = k; break; }
     }
-    if (!model) model = process.env.AI_MODEL || "";
   }
-  if (provider === "custom" && !baseUrl) baseUrl = process.env.AI_BASE_URL || "";
-
-  const info = PROVIDERS[(provider as keyof typeof PROVIDERS) in PROVIDERS ? (provider as keyof typeof PROVIDERS) : "demo"];
-  return {
-    provider: info.id,
-    baseUrl: baseUrl || info.baseUrl,
-    apiKey: apiKey,
-    model: model || info.defaultModel,
-  };
+  if (!provider || !apiKey) return { provider: "demo", baseUrl: "", apiKey: "", model: "demo" };
+  const info = PROVIDERS[provider as keyof typeof PROVIDERS] ?? PROVIDERS.demo;
+  const model = process.env.AI_MODEL || info.defaultModel;
+  if (!model) return { provider: "demo", baseUrl: "", apiKey: "", model: "demo" };
+  return { provider: info.id, baseUrl: baseUrl || info.baseUrl, apiKey, model };
 }
 
 function demoTask(
@@ -169,14 +194,30 @@ const MAX_ATTEMPTS = 3;
 
 class FatalUpstream extends Error { fatal = true; }
 
-/** 带超时 + 指数退避重试的上游请求（仅在尚未产出任何增量前重试，保证幂等） */
-async function fetchUpstream(cfg: AIConfig, body: Body): Promise<Response> {
+interface UpstreamStats {
+  promptTokens?: number;
+  completionTokens?: number;
+}
+
+/** 带超时 + 指数退避重试的上游请求（仅在尚未产出任何增量前重试，保证幂等）。
+ *  parentSignal：客户端断开时由流的 cancel() 触发，向上游传递中止，停止白烧 token。 */
+async function fetchUpstream(
+  cfg: AIConfig,
+  body: Body,
+  stats: UpstreamStats,
+  parentSignal?: AbortSignal
+): Promise<Response> {
   const url = `${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`;
+  // OpenAI 官方与 DeepSeek 支持流式回带 usage；其余 provider 保守不发这个字段（防 400）
+  const wantsUsage = cfg.provider === "deepseek" || cfg.provider === "openai";
   let lastErr = "";
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
+    const onParentAbort = () => ctrl.abort();
+    parentSignal?.addEventListener("abort", onParentAbort);
     try {
+      if (parentSignal?.aborted) throw new DOMException("Aborted", "AbortError");
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
@@ -188,6 +229,7 @@ async function fetchUpstream(cfg: AIConfig, body: Body): Promise<Response> {
           ],
           stream: true,
           temperature: body.temperature ?? 0.7,
+          ...(wantsUsage ? { stream_options: { include_usage: true } } : {}),
         }),
         signal: ctrl.signal,
       });
@@ -202,10 +244,13 @@ async function fetchUpstream(cfg: AIConfig, body: Body): Promise<Response> {
     } catch (e) {
       clearTimeout(timer);
       if (e instanceof FatalUpstream) throw e;
+      if (e instanceof DOMException && e.name === "AbortError" && parentSignal?.aborted) throw e; // 客户端断开：不重试
       lastErr =
         e instanceof Error && e.name === "AbortError"
           ? `上游模型响应超时（>${UPSTREAM_TIMEOUT_MS / 1000}s）`
           : e instanceof Error ? e.message : "网络错误";
+    } finally {
+      parentSignal?.removeEventListener("abort", onParentAbort);
     }
     if (attempt < MAX_ATTEMPTS - 1) {
       await new Promise((r) => setTimeout(r, 500 * 2 ** attempt)); // 500ms → 1s
@@ -215,8 +260,13 @@ async function fetchUpstream(cfg: AIConfig, body: Body): Promise<Response> {
   throw new Error(`${lastErr || "上游模型不可用"}（已重试 ${MAX_ATTEMPTS} 次）`);
 }
 
-async function* upstreamDeltas(cfg: AIConfig, body: Body) {
-  const res = await fetchUpstream(cfg, body);
+async function* upstreamDeltas(
+  cfg: AIConfig,
+  body: Body,
+  stats: UpstreamStats,
+  parentSignal?: AbortSignal
+) {
+  const res = await fetchUpstream(cfg, body, stats, parentSignal);
   const streamBody = res.body;
   if (!streamBody) return; // fetchUpstream 已保证 ok+body,此处仅为类型收窄
 
@@ -236,6 +286,11 @@ async function* upstreamDeltas(cfg: AIConfig, body: Body) {
       if (payload === "[DONE]") return;
       try {
         const j = JSON.parse(payload);
+        // usage 通常在最后一个不带 choices 的块里
+        if (j.usage) {
+          stats.promptTokens = j.usage.prompt_tokens ?? stats.promptTokens;
+          stats.completionTokens = j.usage.completion_tokens ?? stats.completionTokens;
+        }
         const delta = j.choices?.[0]?.delta;
         const piece: string = delta?.content || "";
         if (piece) yield { piece };
@@ -245,8 +300,8 @@ async function* upstreamDeltas(cfg: AIConfig, body: Body) {
 }
 
 export async function POST(req: NextRequest) {
-  // 防滥用/防打崩：每 IP 突发 30 次、每分钟回填 30 次
-  if (!rateLimit(`chat:${clientIp(req)}`, { capacity: 30, refillPerSec: 30 / 60 })) {
+  // 防滥用/防打崩：每 IP 突发 30 次、每分钟回填 30 次（跨 isolate 一致的持久桶）
+  if (!(await rateLimitPersistent(`chat:${clientIp(req)}`, { capacity: 30, refillPerSec: 30 / 60 }))) {
     return Response.json({ error: "请求太频繁，请稍后再试" }, { status: 429 });
   }
   // 请求体上限，防超大 payload 打爆内存
@@ -260,28 +315,55 @@ export async function POST(req: NextRequest) {
   } catch {
     body = { messages: [] };
   }
-  const cfg = resolveConfig(req);
-  // 服务端 Key 配额（商业化前置）：没带 BYOK 头=烧部署者的钱,按用户(未登录按 IP)限每日次数;
-  // BYOK 用户不受此限。超限文案直接给出解法(等明天/自带 Key),不报"系统错误"。
-  if (!req.headers.get("x-mentora-key") && cfg.apiKey) {
-    const session = await getSessionUser();
-    const q = await checkAndCountServerKey(session?.email || clientIp(req));
-    if (!q.ok) {
+
+  const byok = (req.headers.get("x-mentora-key") ?? "").trim();
+  // 仅 Vercel 部署（production/preview）强制登录；本地开发（VERCEL_ENV 未设）放行，保 e2e 冒烟链路
+  const enforceLogin = Boolean(process.env.VERCEL_ENV);
+  // 没带 cookie 就不必查库吊销版本（省一次读）
+  let session: SessionUser | null = null;
+  if (req.headers.get("cookie")?.includes("mentora_session")) session = await verifySession();
+
+  let cfg: AIConfig;
+  if (byok) {
+    if (enforceLogin && !session) {
+      return Response.json({ error: "请先登录后再使用自己的 API Key" }, { status: 401 });
+    }
+    const r = await resolveByok(req, byok);
+    if ("error" in r) return Response.json({ error: r.error }, { status: r.status });
+    cfg = r;
+  } else {
+    cfg = serverConfig();
+    // 服务端 Key 是部署者的钱：真实模型调用必须有登录态（演示脚本不限，注册后自动升级）
+    if (enforceLogin && !session && cfg.provider !== "demo") {
       return Response.json(
-        {
-          error: `今日 AI 调用已达上限（${q.limit} 次/天）。明天恢复，或在 设置→模型 填入你自己的 Key（BYOK）不限次。`,
-        },
-        { status: 429 }
+        { error: "注册或登录后即可使用 AI 功能（免费）。演示模式无需账号。" },
+        { status: 401 }
       );
     }
+    // 服务端 Key 配额（商业化前置）：烧部署者的钱按用户(未登录按 IP)限每日次数;BYOK 不受此限。
+    // 超限文案给解法(等明天/自带 Key),不报"系统错误"。
+    if (cfg.provider !== "demo" && cfg.apiKey) {
+      const q = await checkAndCountServerKey(session?.email || clientIp(req));
+      if (!q.ok) {
+        return Response.json(
+          {
+            error: `今日 AI 调用已达上限（${q.limit} 次/天）。明天恢复，或在 设置→模型 填入你自己的 Key（BYOK）不限次。`,
+          },
+          { status: 429 }
+        );
+      }
+    }
   }
+
   // 双契约：客户端发 args(新,核心任务)→服务端组装提示词；发 system(旧,council)→沿用。
-  // 当前客户端仍发 system,故此改动行为零变化,仅为迁移备好服务端能力。
   const system =
     body.args && Object.keys(body.args).length > 0
       ? buildSystem(body.task, body.args)
       : (body.system ?? "");
   body.system = system;
+
+  const stats: UpstreamStats = {};
+  const outer = new AbortController();
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -294,25 +376,45 @@ export async function POST(req: NextRequest) {
         } else if (!cfg.apiKey || !cfg.model) {
           push({ t: "e", v: "未配置模型：请在 设置 页填写 API Key，或使用演示模式" });
         } else {
-          for await (const piece of upstreamDeltas(cfg, body)) {
+          for await (const piece of upstreamDeltas(cfg, body, stats, outer.signal)) {
             if ("error" in piece) push({ t: "e", v: piece.error });
             else push({ t: "d", v: piece.piece });
           }
         }
       } catch (e) {
-        logEvent({ route: "chat", task: body.task, error: e instanceof Error ? e.message : "unknown" });
-        push({ t: "e", v: e instanceof Error ? e.message : "未知错误" });
+        if (!(e instanceof DOMException && e.name === "AbortError" && outer.signal.aborted)) {
+          logEvent({ route: "chat", task: body.task, error: e instanceof Error ? e.message : "unknown" });
+          try { push({ t: "e", v: e instanceof Error ? e.message : "未知错误" }); } catch { /* 流已取消 */ }
+        }
       } finally {
-        push({ t: "end" });
-        controller.close();
+        // token 计量落日志（成本可见性）：每次真实上游调用一条
+        if (cfg.provider !== "demo") {
+          logEvent({
+            route: "chat-usage",
+            task: body.task ?? "generic",
+            provider: cfg.provider,
+            account: session?.email ?? clientIp(req),
+            byok: byok ? 1 : 0,
+            prompt_tokens: stats.promptTokens ?? 0,
+            completion_tokens: stats.completionTokens ?? 0,
+          });
+        }
+        try {
+          push({ t: "end" });
+          controller.close();
+        } catch { /* cancel 后控制器已关闭 */ }
       }
+    },
+    cancel() {
+      // 客户端断开 → 中止上游，停止白烧 token（旧实现缺这条：断连后上游继续跑完）
+      outer.abort();
     },
   });
 
   return new Response(stream, {
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-store",
     },
   });
 }

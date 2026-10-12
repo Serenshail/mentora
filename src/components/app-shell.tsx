@@ -157,6 +157,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 key={href}
                 href={href}
                 title={collapsed ? label : undefined}
+                aria-label={collapsed ? label : undefined}
                 className={cn(
                   "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
                   collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
@@ -179,6 +180,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 key={href}
                 href={href}
                 title={collapsed ? label : undefined}
+                aria-label={collapsed ? label : undefined}
                 className={cn(
                   "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
                   collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
@@ -195,6 +197,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Link
                 href="/admin"
                 title={collapsed ? "管理后台" : undefined}
+                aria-label={collapsed ? "管理后台" : undefined}
                 className={cn(
                   "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
                   collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
@@ -215,6 +218,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <button
             onClick={() => setCollapsed((v) => !v)}
             title={collapsed ? "展开侧栏" : "收起侧栏"}
+            aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
             className={cn(
               "mb-1 flex items-center rounded-lg py-1.5 text-ink-dim/70 transition hover:bg-black/[0.05] hover:text-ink cursor-pointer",
               collapsed ? "justify-center px-1.5" : "justify-end px-2.5"
@@ -247,6 +251,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 }}
                 className={cn("text-[11px] text-ink-dim hover:text-ink cursor-pointer", !collapsed && "ml-auto")}
                 title="退出登录"
+                aria-label="退出登录"
               >
                 {collapsed ? <LogOut className="size-3.5" /> : "退出"}
               </button>

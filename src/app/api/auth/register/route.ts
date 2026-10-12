@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbPut, emailHash } from "@/lib/server/db";
-import { hashPassword, setSessionCookie } from "@/lib/server/auth";
+import { hashPassword, mintSession } from "@/lib/server/auth";
 import { checkEmailDeliverable } from "@/lib/email-check";
 import { verifyCode } from "@/lib/server/mail";
-import { rateLimit, clientIp } from "@/lib/server/rate-limit";
+import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -14,11 +14,13 @@ interface UserRecord {
   salt: string;
   hash: string;
   createdAt: string;
+  /** 会话版本号：改密/重置时递增，携带旧值的 cookie 全部作废 */
+  sv?: number;
 }
 
 export async function POST(req: NextRequest) {
-  // 注册成本高（邮箱取证+写库）：每 IP 突发 5 次、每分钟回填 5 次
-  if (!rateLimit(`register:${clientIp(req)}`, { capacity: 5, refillPerSec: 5 / 60 })) {
+  // 注册成本高（邮箱取证+写库）：每 IP 突发 5 次、每分钟回填 5 次（跨 isolate 持久桶）
+  if (!(await rateLimitPersistent(`register:${clientIp(req)}`, { capacity: 5, refillPerSec: 5 / 60 }))) {
     return Response.json({ error: "注册太频繁，请稍后再试" }, { status: 429 });
   }
   const body = await req.json().catch(() => ({}));
@@ -40,7 +42,7 @@ export async function POST(req: NextRequest) {
   /* 邮箱归属验证码：证明"这个邮箱是你的"。dev 模式(未配 RESEND_API_KEY)下由
    * send-code 返回 devCode,前端自动填入——链路可测,上线配 Key 即全量生效。 */
   const code = String(body.code ?? "").trim();
-  if (!verifyCode(email, "register", code)) {
+  if (!(await verifyCode(email, "register", code))) {
     return Response.json({ error: "验证码不对或已过期，请重新获取" }, { status: 401 });
   }
 
@@ -63,6 +65,7 @@ export async function POST(req: NextRequest) {
     salt,
     hash,
     createdAt: new Date().toISOString(),
+    sv: 0,
   };
   try {
     await dbPut(path, record, { encrypted: true });
@@ -70,7 +73,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "注册写入失败，稍后再试" }, { status: 503 });
   }
 
-  const user = { userId: record.userId, email, name };
-  await setSessionCookie(user);
-  return Response.json({ user });
+  const user = { userId: record.userId, email, name, sv: 0 };
+  await mintSession(user);
+  return Response.json({ user: { userId: user.userId, email, name } });
 }

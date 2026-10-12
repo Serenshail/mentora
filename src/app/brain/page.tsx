@@ -120,9 +120,18 @@ export default function BrainPage() {
     setBusy(true);
     try {
       const { streamChat } = await import("@/lib/ai/client");
+      /* v17 修错位：出题时模型可能挑队列里任意一条、判卷过去只看 reviewQueue[0] 的标题——
+       * 问的和判的对不上。现在把出题原文+笔记摘录+用户回答一起交给复习官。 */
       const full = await streamChat({
         task: "review-grade",
-        args: { ctx: `${item.title}${item.body ? "（" + item.body.slice(0, 150) + "）" : ""}` },
+        args: {
+          ctx: JSON.stringify({
+            note: item.title,
+            excerpt: item.body.slice(0, 800),
+            question,
+            answer,
+          }),
+        },
         messages: [{ role: "user", content: answer }],
         temperature: 0.2,
         onDelta: () => {},
@@ -133,9 +142,9 @@ export default function BrainPage() {
       if (g.verdict === "pass") setCorrectCount((c) => c + 1);
       useAppStore.getState().recordReview(id, g.verdict === "pass");
     } catch {
-      useAppStore.getState().recordReview(id, true);
-      setVerdict({ verdict: "pass", feedback: "（评分服务异常，默认通过）" });
-      setPhase("graded");
+      /* v17 废除"评分异常默认通过"：那是给复习通过率灌水。
+       * 答案还在输入框里，重试即可；不记任何分。 */
+      toast.error("评分服务暂不可用，你的回答没有丢——稍等再点一次提交");
     } finally {
       setBusy(false);
     }

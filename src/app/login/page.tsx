@@ -72,8 +72,8 @@ function LoginInner() {
   const params = useSearchParams();
   const router = useRouter();
   const { user, checking, login, register } = useAuth();
-  const [mode, setMode] = useState<"login" | "register">(
-    params.get("mode") === "register" ? "register" : "login"
+  const [mode, setMode] = useState<"login" | "register" | "reset">(
+    params.get("mode") === "register" ? "register" : params.get("mode") === "reset" ? "reset" : "login"
   );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -114,16 +114,64 @@ function LoginInner() {
     if (busy) return;
     setBusy(true);
     try {
-      if (mode === "login") {
+      if (mode === "reset") {
+        // 忘记密码：验证码 + 新密码一步重置；成功后回登录态，不自动签发会话
+        const res = await fetch("/api/auth/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim(), code: code.trim(), newPassword: password }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || "重置失败");
+        toast.success("密码已重置，用新密码登录吧（其他设备需重新登录）");
+        setMode("login");
+        setPassword("");
+        setCode("");
+      } else if (mode === "login") {
         await login(email.trim(), password);
+        await afterAuth();
       } else {
         await register(email.trim(), password, name.trim(), code.trim());
+        await afterAuth();
       }
-      await afterAuth();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "出错了");
     } finally {
       setBusy(false);
+    }
+  };
+
+  /* 验证码发送（register / reset 共用一个入口，purpose 不同） */
+  const doSendCode = async () => {
+    if (codeBusy || codeCooldown > 0) return;
+    const em = email.trim();
+    if (!em) {
+      toast.error("先填邮箱再获取验证码");
+      return;
+    }
+    setCodeBusy(true);
+    try {
+      const res = await fetch("/api/auth/send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: em, purpose: mode === "reset" ? "reset" : "register" }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || "发送失败");
+      if (j.ignored) {
+        // 找回场景邮箱未注册：服务端静默处理，这里也给出无差别提示（防账号枚举）
+        toast.success("如果该邮箱注册过，验证码稍后送达");
+      } else if (j.devCode) {
+        setCode(String(j.devCode));
+        toast("开发模式：验证码已自动填入（线上需配置发信服务）");
+      } else {
+        toast.success("验证码已发送到你的邮箱，10 分钟内有效");
+      }
+      setCodeCooldown(60);
+    } catch (e2) {
+      toast.error(e2 instanceof Error ? e2.message : "发送失败");
+    } finally {
+      setCodeBusy(false);
     }
   };
 
@@ -141,10 +189,12 @@ function LoginInner() {
           </Link>
 
           <h2 className="font-heading text-2xl font-bold tracking-[-0.03em] text-ink">
-            {mode === "login" ? "欢迎回来" : "建一个账号"}
+            {mode === "login" ? "欢迎回来" : mode === "reset" ? "重置密码" : "建一个账号"}
           </h2>
           <p className="mt-2 text-sm leading-relaxed text-ink-dim">
-            登录后，你的学习计划、笔记和对话跟着你走——换设备也在。
+            {mode === "reset"
+              ? "用注册邮箱收验证码，设一个新密码。改完后其他设备都要重新登录。"
+              : "登录后，你的学习计划、笔记和对话跟着你走——换设备也在。"}
           </p>
 
           <Card className="mt-6">
@@ -162,13 +212,13 @@ function LoginInner() {
               />
               <Input
                 type="password"
-                placeholder="密码（至少 6 位）"
+                placeholder={mode === "login" ? "密码（至少 6 位）" : "新密码（至少 6 位）"}
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
               />
-              {mode === "register" && (
+              {mode !== "login" && (
                 <div>
                   <div className="flex gap-2">
                     <Input
@@ -184,35 +234,7 @@ function LoginInner() {
                       className="shrink-0"
                       disabled={codeCooldown > 0 || codeBusy}
                       loading={codeBusy}
-                      onClick={async () => {
-                        if (codeBusy || codeCooldown > 0) return;
-                        const em = email.trim();
-                        if (!em) {
-                          toast.error("先填邮箱再获取验证码");
-                          return;
-                        }
-                        setCodeBusy(true);
-                        try {
-                          const res = await fetch("/api/auth/send-code", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ email: em }),
-                          });
-                          const j = await res.json().catch(() => ({}));
-                          if (!res.ok) throw new Error(j.error || "发送失败");
-                          if (j.devCode) {
-                            setCode(String(j.devCode));
-                            toast("开发模式：验证码已自动填入（线上需配置发信服务）");
-                          } else {
-                            toast.success("验证码已发送到你的邮箱，10 分钟内有效");
-                          }
-                          setCodeCooldown(60);
-                        } catch (e2) {
-                          toast.error(e2 instanceof Error ? e2.message : "发送失败");
-                        } finally {
-                          setCodeBusy(false);
-                        }
-                      }}
+                      onClick={doSendCode}
                     >
                       {codeCooldown > 0 ? `${codeCooldown}s` : "获取验证码"}
                     </Button>
@@ -223,7 +245,7 @@ function LoginInner() {
                 </div>
               )}
               <Button className="w-full" size="lg" onClick={submit} loading={busy}>
-                {mode === "login" ? "登录" : "注册并登录"}
+                {mode === "login" ? "登录" : mode === "reset" ? "重置密码" : "注册并登录"}
               </Button>
             </div>
             <p className="mt-4 text-center text-xs text-ink-dim">
@@ -232,6 +254,10 @@ function LoginInner() {
                   没有账号？{" "}
                   <button onClick={() => setMode("register")} className="cursor-pointer text-accent hover:underline">
                     注册一个
+                  </button>
+                  {" · "}
+                  <button onClick={() => setMode("reset")} className="cursor-pointer text-accent hover:underline">
+                    忘记密码？
                   </button>
                 </>
               ) : (

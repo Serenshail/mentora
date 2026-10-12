@@ -223,7 +223,7 @@ function AccountSection() {
       <Card>
         <p className="text-sm font-bold text-ink">教练风格</p>
         <p className="mt-1 text-xs text-ink-dim">
-          标准：直接指出缺口，不铺垫。温和：先具体说做对了什么，再把缺口说成"还差一步"。判分标准两档完全一致——只差语气。
+          标准：直接指出缺口，不铺垫。温和：先具体说做对了什么，再把缺口说成「还差一步」。判分标准两档完全一致——只差语气。
         </p>
         <div className="mt-3 flex gap-2">
           {(["standard", "gentle"] as const).map((t) => (
@@ -461,7 +461,7 @@ function ModelSection() {
               <Input
                 className="mt-1"
                 type="password"
-                placeholder={settings.provider === "custom" ? "（若端点无需鉴权可留空）" : "sk-..."}
+                placeholder={settings.provider === "custom" ? "（端点需公网 HTTPS；转发鉴权用你自己的 Key）" : "sk-..."}
                 value={settings.apiKey}
                 onChange={(e) => setSettings({ apiKey: e.target.value })}
               />
@@ -682,7 +682,11 @@ export default function SettingsPage() {
 function InviteSection() {
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
-  useEffect(() => setOrigin(window.location.origin), []);
+  useEffect(() => {
+    // v17：SSR 期拿不到 window，客户端一帧后补 origin（effect 同步 setState 是 lint 红线）
+    const t = setTimeout(() => setOrigin(window.location.origin), 0);
+    return () => clearTimeout(t);
+  }, []);
   return (
     <Card className="p-6">
       <p className="text-sm font-bold text-ink">加入 Mentora 交流群</p>

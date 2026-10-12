@@ -1,33 +1,18 @@
 import { NextRequest } from "next/server";
-import crypto from "node:crypto";
 import { dbGet, dbList } from "@/lib/server/db";
-import { getSessionUser } from "@/lib/server/auth";
-import { isAdminEmail } from "@/lib/admin-emails";
+import { authorizeAdmin } from "@/lib/server/admin-auth";
+import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
+import { logEvent } from "@/lib/server/config";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-/* 两条进入后台的路：
-   1) 管理员账号登录（白名单会话）；
-   2) 独立后台密码（x-admin-password 请求头，比对 ADMIN_PASSWORD 环境变量）。
-   会话残留/登录跳转死循环都与后台无关——输对密码就能看数据。 */
-function timingSafeEq(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
-}
-
+/* 两条进入后台的路（v17：收口到 admin-auth.ts 单一实现，此前本文件复制过一份——漂移即事故隐患）：
+   1) 管理员账号登录（白名单会话，且未被 sv 吊销）；
+   2) 独立后台密码（x-admin-password 请求头，timing-safe 比对 ADMIN_PASSWORD）。
+   后台密码通道此前 GET 无任何限流，可被慢慢爆破：现在每 IP 10/min 跨进程桶先挡一道。 */
 async function authorize(req: NextRequest): Promise<{ email: string; name: string } | null> {
-  const expected = process.env.ADMIN_PASSWORD || "";
-  const given = req.headers.get("x-admin-password") ?? "";
-  if (expected && given && timingSafeEq(given, expected)) {
-    return { email: "后台密码登录", name: "管理员" };
-  }
-  const session = await getSessionUser();
-  if (session && isAdminEmail(session.email, process.env.ADMIN_EMAILS)) {
-    return { email: session.email, name: session.name };
-  }
-  return null;
+  return authorizeAdmin(req);
 }
 
 interface UserRecord {
@@ -50,12 +35,15 @@ interface DataRecord {
 }
 
 export async function GET(req: NextRequest) {
+  if (!(await rateLimitPersistent(`admin:${clientIp(req)}`, { capacity: 10, refillPerSec: 10 / 60 }))) {
+    return Response.json({ error: "操作太频繁，请稍后再试" }, { status: 429 });
+  }
   const you = await authorize(req);
   if (!you) {
-    console.log("[admin/overview] denied");
+    logEvent({ ev: "admin", msg: "denied", ip: clientIp(req) });
     return Response.json({ error: "未登录" }, { status: 401 });
   }
-  console.log("[admin/overview] authed:", you.email);
+  logEvent({ ev: "admin", msg: "overview", by: you.email });
 
   /* ---- 用户列表 ---- */
   const users: {

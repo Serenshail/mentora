@@ -895,6 +895,7 @@ export function NoteWorkspace({
           />
           <button
             title="上传文档（.docx / .md / .txt → 笔记；旧 .doc/.wps 请先另存为 .docx）"
+            aria-label="上传文档"
             onClick={() => docInputRef.current?.click()}
             className="rounded-md p-1 text-ink-dim/70 transition hover:text-ink cursor-pointer"
           >
@@ -902,6 +903,7 @@ export function NoteWorkspace({
           </button>
           <button
             title="新建文件夹"
+            aria-label="新建文件夹"
             onClick={() => setNewFolder(" ")}
             className="rounded-md p-1 text-ink-dim/70 transition hover:text-ink cursor-pointer"
           >
@@ -1272,6 +1274,7 @@ export function NoteWorkspace({
                     <button
                       key={b.title}
                       title={b.title}
+                      aria-label={b.title}
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => b.run(h)}
                       disabled={b.id === "autolink" && linking}

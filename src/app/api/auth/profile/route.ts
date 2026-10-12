@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbPut, emailHash } from "@/lib/server/db";
-import { getSessionUser, setSessionCookie } from "@/lib/server/auth";
+import { verifySession, mintSession } from "@/lib/server/auth";
 
 export const runtime = "nodejs";
 
@@ -12,6 +12,8 @@ interface UserRecord {
   hash: string;
   createdAt: string;
   avatar?: string;
+  /** 会话版本号（改资料不递增，仅透传） */
+  sv?: number;
   _sha?: string;
 }
 
@@ -27,7 +29,7 @@ function publicUser(r: UserRecord) {
 const EMAIL_HASH_PATH = (email: string) => `users/${emailHash(email)}.json`;
 
 export async function GET() {
-  const session = await getSessionUser();
+  const session = await verifySession();
   if (!session) return Response.json({ error: "未登录" }, { status: 401 });
 
   let record: UserRecord | null = null;
@@ -41,7 +43,7 @@ export async function GET() {
 }
 
 export async function PATCH(req: NextRequest) {
-  const session = await getSessionUser();
+  const session = await verifySession();
   if (!session) return Response.json({ error: "未登录" }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
@@ -91,7 +93,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   const user = publicUser(next);
-  // 名字写进了会话 cookie：重签后所有页面立即显示新称呼
-  await setSessionCookie({ userId: user.userId, email: user.email, name: user.name });
+  // 名字写进了会话 cookie：重签后所有页面立即显示新称呼；sv 保持不变（改资料不踢设备）
+  await mintSession({ userId: user.userId, email: user.email, name: user.name, sv: next.sv ?? 0 });
   return Response.json({ user });
 }

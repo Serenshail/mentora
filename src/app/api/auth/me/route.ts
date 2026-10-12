@@ -1,10 +1,11 @@
-import { getSessionUser } from "@/lib/server/auth";
+import { verifySession } from "@/lib/server/auth";
 import { dbGet, emailHash } from "@/lib/server/db";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  const session = await getSessionUser();
+  // verifySession：签名+过期+sv 版本三重校验；DB 故障降级为"仅校验签名"（不因故障踢人）
+  const session = await verifySession();
   if (!session) return Response.json({ user: null });
 
   // 头像存在用户档案里（base64 data-URL），为守住 cookie 4096 上限不进会话；

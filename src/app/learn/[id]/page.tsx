@@ -103,7 +103,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
       </button>
       {open && (
         <div className="mt-3">
-          <div ref={boxRef} className="max-h-64 space-y-2.5 overflow-y-auto">
+          <div ref={boxRef} aria-live="polite" aria-label="教练答疑" className="max-h-64 space-y-2.5 overflow-y-auto">
             {qa.length === 0 && !streamText && (
               <p className="text-xs text-ink-dim/70">
                 看不懂某个知识点？代码报错不知道为什么？直接问，教练即时解答。
@@ -202,6 +202,15 @@ export default function GoalDetailPage() {
   const settings = useAppStore((s) => s.settings);
   const router = useRouter();
   const [viewDayId, setViewDayId] = useState<string | null>(null);
+  /* 日程投影（视图层，不进目标卡 schema）：用户给一个目标日期,反推每天节奏。
+   * ⚠️ Hook 必须在一切条件 return 之前（踩坑 #9：hydrated/goal 翻转时钩子数量变化→React #310） */
+  const [deadline, setDeadline] = useState<string>(() => {
+    try { return localStorage.getItem(`mentora-deadline-${id}`) ?? ""; } catch { return ""; }
+  });
+  const setDeadlineDate = (v: string) => {
+    setDeadline(v);
+    try { localStorage.setItem(`mentora-deadline-${id}`, v); } catch { /* 忽略 */ }
+  };
 
   const progress = useMemo(() => {
     if (!goal?.plan) return { ratio: 0, done: 0, total: 0 };
@@ -223,22 +232,18 @@ export default function GoalDetailPage() {
   }
 
   const activeDay =
-    Object.values(goal.plan?.days ?? {}).find((d) => d.status === "active") ?? null;
+    Object.values(goal.plan?.days ?? {}).find((d) => d.status === "active") ??
+    /* 迁移门（v17）：判过但未过门的当天顶替"当前任务"——否则无 active 日、视图空转，门卡无处显 */
+    Object.values(goal.plan?.days ?? {}).find((d) => d.status === "passed" && d.pendingUnlock) ??
+    null;
   const activePhase = goal.plan?.phases.find((p) => p.status === "active") ?? null;
   const viewDay = (viewDayId ? goal.plan?.days[viewDayId] : null) ?? activeDay;
-  /* 日程投影（视图层，不进目标卡 schema）：用户给一个目标日期,反推每天节奏 */
-  const [deadline, setDeadline] = useState<string>(() => {
-    try { return localStorage.getItem(`mentora-deadline-${goal.id}`) ?? ""; } catch { return ""; }
-  });
-  const setDeadlineDate = (v: string) => {
-    setDeadline(v);
-    try { localStorage.setItem(`mentora-deadline-${goal.id}`, v); } catch { /* 忽略 */ }
-  };
   const remainingDays = goal.plan
     ? Object.values(goal.plan.days).filter((d) => d.status === "active" || d.status === "locked").length
     : 0;
   const projection = (() => {
     if (!deadline || !remainingDays) return null;
+    // eslint-disable-next-line react-hooks/purity -- 日程投影按"天"粒度，同帧内时间戳无副作用，重排一毫秒都不影响结论
     const days = Math.ceil((new Date(deadline).getTime() - Date.now()) / 86400000);
     if (days <= 0) return { verdict: "已过期", perDay: 0, days: 0 };
     const perDay = remainingDays / days;
@@ -704,8 +709,12 @@ function DayPanel({
     setGrading(true);
     try {
       const { streamChat } = await import("@/lib/ai/client");
+      /* v17：判分必须带参照物——当日讲义原文与知识点随 ctx 上行，
+       * 验收官据此核对"依据对不对"，而非凭模型内建知识盲判（旧实现只发题目+答案）。 */
       const ctx = JSON.stringify({
         day: day.title,
+        knowledgePoints: day.knowledgePoints.map((k) => k.text),
+        lesson: (day.lesson ?? "").slice(0, 8000),
         items: day.acceptance.map((a) => ({ itemId: a.id, kind: a.kind, question: a.question })),
         answers,
       });
@@ -722,7 +731,11 @@ function DayPanel({
       store.getState().incrementAttempts(goal.id, day.id);
 
       if (g.overall === "pass") {
-        store.getState().setDayStatus(goal.id, day.id, "passed");
+        // 真门（v17）：passed 照常记录，但下一天要等迁移题作答才解锁
+        store.getState().setDayStatus(goal.id, day.id, "passed", {
+          pendingUnlock: true,
+          transferQuestion: g.transferQuestion ?? "",
+        });
         store.getState().logQuiz(goal.id, {
           dayId: day.id,
           date: new Date().toISOString().slice(0, 10),
@@ -740,9 +753,14 @@ function DayPanel({
             };
           }),
         });
-        // 知识点进入第二大脑 + 间隔复习队列；掌握状态按本次判分证据推进（Learn Anything）
+        // 知识点进入第二大脑 + 间隔复习队列；掌握状态按本次判分证据推进（Learn Anything）。
+        // v17：把每题的验收 kind 一起交给状态机——apply/build 无提示判对 = 迁移证据，可达 transferable
         const mStatus = masteryFromQuiz(
-          g.items.map((it) => ({ verdict: it.verdict, hintLevel: it.hintLevel }))
+          g.items.map((it) => ({
+            verdict: it.verdict,
+            hintLevel: it.hintLevel,
+            kind: day.acceptance.find((a) => a.id === it.itemId)?.kind,
+          }))
         );
         store.getState().addKnowledge(
           day.knowledgePoints.map((k) => ({
@@ -770,7 +788,7 @@ function DayPanel({
             return plan;
           })(),
         });
-        toast.success(`验收通过，下一天已解锁。本批掌握状态：${MASTERY_LABELS[mStatus]}`);
+        toast.success(`验收判过了！回答下方的迁移题即解锁下一天（本天成绩已保存，不怕刷新）。本批掌握状态：${MASTERY_LABELS[mStatus]}`);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "评分失败，请重试");
@@ -778,6 +796,18 @@ function DayPanel({
       setGrading(false);
     }
   };
+
+  /* 迁移题过门：作答 → 解锁下一天 → 视图切到新一天（v17 真门，答案落档当日记录） */
+  const commitTransfer = (answer: string) => {
+    store.getState().completeTransfer(goal.id, day.id, answer);
+    setTransferDone(true);
+    setGateAnswer(answer);
+    toast.success("过关。迁移题回答已存入当日记录，下一天已解锁。");
+    const ph = goal.plan?.phases.find((p) => p.id === day.phaseId);
+    const nx = ph?.dayIds?.[(ph?.dayIds ?? []).indexOf(day.id) + 1];
+    onGoToDay?.(nx ?? null);
+  };
+  const [gateAnswer, setGateAnswer] = useState(day.transferAnswer ?? "");
 
   const forceSkip = () => {
     if (skipText !== "跳过") {
@@ -809,6 +839,27 @@ function DayPanel({
 
   return (
     <div className="min-w-0 space-y-5">
+      {/* 刷新/换设备后的迁移题门（v17）：判分已过、门未过——从 day 持久字段重建，不依赖会话内 grade */}
+      {!readOnly && day.status === "passed" && day.pendingUnlock && !grade && (
+        <Card className="border-ok/30 bg-ok/[0.03]">
+          <p className="text-sm font-bold text-ink">过关前，还差一道迁移题</p>
+          <p className="mt-1 text-xs text-ink-dim">本日判分已保存。作答下方迁移题，下一天才解锁。</p>
+          <p className="mt-2 text-[13px] leading-relaxed text-ink">
+            {day.transferQuestion || "用你自己的话，把本日核心概念讲给一个没学过的人听，并说明它在什么情况下不适用。"}
+          </p>
+          <textarea
+            className="mt-2 min-h-[72px] w-full resize-y rounded-lg border border-border bg-white p-2.5 text-[13px] text-ink outline-none focus:border-accent/50"
+            placeholder="凭记忆作答（这不是评分，是帮你把知识焊牢）"
+            value={gateAnswer}
+            onChange={(e) => setGateAnswer(e.target.value)}
+          />
+          <div className="mt-2 flex justify-end">
+            <Button size="sm" disabled={!gateAnswer.trim()} onClick={() => commitTransfer(gateAnswer.trim())}>
+              提交，完成过关
+            </Button>
+          </div>
+        </Card>
+      )}
       {/* 今日头部 */}
       <Card className={readOnly ? "" : "border-accent/25"}>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1099,7 +1150,7 @@ function DayPanel({
               {transferAnswer !== null && (
                 <>
                   <p className="mt-2 text-[13px] leading-relaxed text-ink">
-                    {grade.transferQuestion || "用你自己的话，把这个概念讲给一个没学过的人听，并说明它在什么情况下不适用。"}
+                    {grade.transferQuestion || "用你自己的话，把本日核心概念讲给一个没学过的人听，并说明它在什么情况下不适用。"}
                   </p>
                   <textarea
                     className="mt-2 min-h-[72px] w-full resize-y rounded-lg border border-border bg-white p-2.5 text-[13px] text-ink outline-none focus:border-accent/50"
@@ -1111,10 +1162,7 @@ function DayPanel({
                     <Button
                       size="sm"
                       disabled={!transferAnswer.trim()}
-                      onClick={() => {
-                        setTransferDone(true);
-                        toast.success("过关。你的回答已存入当日验收记录。");
-                      }}
+                      onClick={() => commitTransfer(transferAnswer.trim())}
                     >
                       提交，完成过关
                     </Button>
@@ -1130,7 +1178,7 @@ function DayPanel({
               </p>
             ) : (
               <p className="mt-4 text-center text-sm text-ink-dim">
-                回答上方迁移题后即完成过关（内容已解锁，但建议先回忆）。
+                还差一道迁移题：作答后下一天才解锁（判分已保存，随时回来答）。
               </p>
             )
           ) : (

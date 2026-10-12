@@ -8,10 +8,13 @@ export function useTypewriter(text: string, speed = 38, startDelay = 600) {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    setDisplayed("");
-    setDone(false);
     let i = 0;
     let interval: ReturnType<typeof setInterval> | null = null;
+    // v17：重置挪到 rAF（effect 同步 setState 是 lint 红线）；对使用者仅一帧差异，打字起始观感不变
+    const raf = requestAnimationFrame(() => {
+      setDisplayed("");
+      setDone(false);
+    });
     const timer = setTimeout(() => {
       interval = setInterval(() => {
         i += 1;
@@ -23,6 +26,7 @@ export function useTypewriter(text: string, speed = 38, startDelay = 600) {
       }, speed);
     }, startDelay);
     return () => {
+      cancelAnimationFrame(raf);
       clearTimeout(timer);
       if (interval) clearInterval(interval);
     };

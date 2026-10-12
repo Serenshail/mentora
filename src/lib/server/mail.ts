@@ -1,8 +1,19 @@
 import "server-only";
 import crypto from "node:crypto";
+import { dbGet, dbPut, dbDelete, emailHash, hasHealthyRemoteDb } from "./db";
 
-/* 邮箱验证码：生成/校验,存内存(单实例内一致;Vercel 多实例概率极低且验证码本就短时效)。
- * RESEND_API_KEY 存在 → 真实发信;不存在 → dev 模式,验证码打到服务端日志(本地/演示可跑通全链路)。 */
+/* ============================================================
+ * 邮箱验证码：生成/校验。
+ * v17 起存远端 KV（D1/Upstash），跨 isolate 一致——
+ * 旧实现在进程内存，Vercel 多实例下 send-code 和 register 落在不同
+ * isolate 时验证码必然查不到（注册时好时坏的隐性根因）。
+ * RESEND_API_KEY 存在 → 真实发信；不存在 → dev 模式：
+ *   · 非生产：验证码回给前端自动填入（本地全链路可测）；
+ *   · 生产：绝不外发验证码（send-code 路由负责 503 挡住）。
+ * 无远端 KV 时（纯本地开发）回退进程内存，行为与旧版一致。
+ * ============================================================ */
+
+export type CodePurpose = "register" | "reset";
 
 interface CodeEntry {
   code: string;
@@ -10,35 +21,74 @@ interface CodeEntry {
   attempts: number;
 }
 
-const STORE = new Map<string, CodeEntry>();
 const TTL_MS = 10 * 60_000; // 10 分钟
 const MAX_ATTEMPTS = 5;
 
-export function issueCode(email: string, purpose: "register" | "login"): string {
-  const key = `${purpose}:${email.toLowerCase()}`;
+const codePath = (purpose: CodePurpose, email: string): string =>
+  `code/${process.env.VERCEL_ENV || "dev"}/${purpose}/${emailHash(email.trim().toLowerCase())}.json`;
+
+/* 本地回退（仅无远端 KV 时启用） */
+const MEM = new Map<string, CodeEntry>();
+
+export async function issueCode(email: string, purpose: CodePurpose): Promise<string> {
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
-  STORE.set(key, { code, expiresAt: Date.now() + TTL_MS, attempts: 0 });
-  // 顺手清理过期,防内存增长
-  if (STORE.size > 5000) {
-    for (const [k, v] of STORE) if (v.expiresAt < Date.now()) STORE.delete(k);
+  const entry: CodeEntry = { code, expiresAt: Date.now() + TTL_MS, attempts: 0 };
+  let remoteOk = false;
+  if (hasHealthyRemoteDb()) {
+    try {
+      await dbPut(codePath(purpose, email), entry, { encrypted: true });
+      remoteOk = true;
+    } catch { /* 远端不可用 → 内存兜底（单实例内可完成注册/找回；熔断计数已在 db 层完成） */ }
+  }
+  if (!remoteOk) {
+    MEM.set(`${purpose}:${email.toLowerCase()}`, entry);
+    if (MEM.size > 5000) {
+      for (const [k, v] of MEM) if (v.expiresAt < Date.now()) MEM.delete(k);
+    }
   }
   return code;
 }
 
-export function verifyCode(email: string, purpose: "register" | "login", input: string): boolean {
-  const key = `${purpose}:${email.toLowerCase()}`;
-  const e = STORE.get(key);
-  if (!e || e.expiresAt < Date.now()) {
-    STORE.delete(key);
+export async function verifyCode(email: string, purpose: CodePurpose, input: string): Promise<boolean> {
+  const given = input.trim();
+  if (!given) return false;
+  if (!hasHealthyRemoteDb()) {
+    const key = `${purpose}:${email.toLowerCase()}`;
+    const e = MEM.get(key);
+    if (!e || e.expiresAt < Date.now()) {
+      MEM.delete(key);
+      return false;
+    }
+    e.attempts++;
+    if (e.attempts > MAX_ATTEMPTS) {
+      MEM.delete(key);
+      return false;
+    }
+    if (e.code !== given) return false;
+    MEM.delete(key); // 一次性
+    return true;
+  }
+  const path = codePath(purpose, email);
+  let entry: CodeEntry | null = null;
+  try {
+    entry = await dbGet<CodeEntry>(path, { encrypted: true });
+  } catch {
     return false;
   }
-  e.attempts++;
-  if (e.attempts > MAX_ATTEMPTS) {
-    STORE.delete(key);
+  if (!entry || entry.expiresAt < Date.now()) {
+    await dbDelete(path, null).catch(() => {});
     return false;
   }
-  if (e.code !== input.trim()) return false;
-  STORE.delete(key); // 一次性
+  if (entry.attempts >= MAX_ATTEMPTS) {
+    await dbDelete(path, null).catch(() => {});
+    return false;
+  }
+  if (entry.code !== given) {
+    entry.attempts++;
+    await dbPut(path, entry, { encrypted: true }).catch(() => {});
+    return false;
+  }
+  await dbDelete(path, null).catch(() => {}); // 一次性
   return true;
 }
 
@@ -46,9 +96,14 @@ export function hasSmtp(): boolean {
   return Boolean(process.env.RESEND_API_KEY);
 }
 
-/** 发信：有 RESEND_API_KEY 走 Resend;否则 dev 模式打日志 */
-export async function sendCodeEmail(email: string, code: string, purpose: "register" | "login"): Promise<{ sent: boolean; devCode?: string }> {
-  const subject = purpose === "register" ? "Mentora 注册验证码" : "Mentora 登录验证码";
+/** 发信：有 RESEND_API_KEY 走 Resend；否则 dev 模式打日志并回 devCode（由路由决定能否外发） */
+export async function sendCodeEmail(
+  email: string,
+  code: string,
+  purpose: CodePurpose
+): Promise<{ sent: boolean; devCode?: string }> {
+  const subject =
+    purpose === "register" ? "Mentora 注册验证码" : "Mentora 重置密码验证码";
   if (!hasSmtp()) {
     console.log(`[dev-mail] ${subject} → ${email}: ${code}`);
     return { sent: false, devCode: code };

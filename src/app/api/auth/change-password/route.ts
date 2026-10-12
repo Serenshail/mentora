@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbPut, emailHash } from "@/lib/server/db";
-import { getSessionUser, verifyPassword, hashPassword, setSessionCookie } from "@/lib/server/auth";
-import { rateLimit, clientIp } from "@/lib/server/rate-limit";
+import { verifySession, verifyPassword, hashPassword, mintSession } from "@/lib/server/auth";
+import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -13,17 +13,18 @@ interface UserRecord {
   hash: string;
   createdAt: string;
   avatar?: string;
+  /** 会话版本号 */
+  sv?: number;
   _sha?: string;
 }
 
-/** 修改密码：必须验旧密码；成功后重签当前会话。
- *  说明：会话是无状态 HMAC，其他已登录设备的旧 cookie 在 30 天有效期内仍有效——
- *  要立即失效所有设备需引入密码版本号(pv)入库并在每个鉴权点比对，当前规模先不做，UI 已注明。 */
+/** 修改密码：必须验旧密码；成功后 sv+1 并重签当前会话——
+ *  其他设备携带旧 sv 的 cookie 立即失效（v17 起会话可吊销，此前 30 天内照用）。 */
 export async function POST(req: NextRequest) {
-  if (!rateLimit(`chpwd:${clientIp(req)}`, { capacity: 5, refillPerSec: 5 / 60 })) {
+  if (!(await rateLimitPersistent(`chpwd:${clientIp(req)}`, { capacity: 5, refillPerSec: 5 / 60 }))) {
     return Response.json({ error: "尝试太频繁，请稍后再试" }, { status: 429 });
   }
-  const session = await getSessionUser();
+  const session = await verifySession();
   if (!session) return Response.json({ error: "未登录" }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
@@ -51,8 +52,9 @@ export async function POST(req: NextRequest) {
 
   const { salt, hash } = hashPassword(newPassword);
   const { _sha, ...clean } = record;
+  const sv = (record.sv ?? 0) + 1;
   try {
-    await dbPut(path, { ...clean, salt, hash }, {
+    await dbPut(path, { ...clean, salt, hash, sv }, {
       encrypted: true,
       sha: _sha ?? null,
       overwriteOnConflict: true,
@@ -61,7 +63,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "保存失败，稍后再试" }, { status: 503 });
   }
 
-  // 重签当前会话（其他设备按上面说明处理）
-  await setSessionCookie({ userId: record.userId, email: record.email, name: record.name });
-  return Response.json({ ok: true });
+  // 重签当前会话（携带新 sv）；其他设备下次请求即被 verifySession 挡下，需重新登录
+  await mintSession({ userId: record.userId, email: record.email, name: record.name, sv });
+  return Response.json({ ok: true, revokedOtherDevices: true });
 }

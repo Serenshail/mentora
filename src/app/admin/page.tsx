@@ -110,7 +110,10 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    if (!checking) void load();
+    if (checking) return;
+    // v17：load 同步 setState（loading）挪出 effect 体一拍，避免级联渲染告警
+    const t = setTimeout(() => void load(), 0);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checking]);
 

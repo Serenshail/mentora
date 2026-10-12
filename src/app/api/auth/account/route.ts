@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbDelete, emailHash } from "@/lib/server/db";
-import { getSessionUser, verifyPassword, clearSessionCookie } from "@/lib/server/auth";
-import { rateLimit, clientIp } from "@/lib/server/rate-limit";
+import { verifySession, verifyPassword, clearSessionCookie } from "@/lib/server/auth";
+import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -9,10 +9,10 @@ export const maxDuration = 60;
 /** 注销账号（自助删除）：必须密码二次确认；删除用户档案 + 云端数据，清除会话。
  *  与管理端删除同后果：不可恢复。本地设备数据由前端在成功后自行清仓。 */
 export async function DELETE(req: NextRequest) {
-  if (!rateLimit(`delacc:${clientIp(req)}`, { capacity: 3, refillPerSec: 3 / 60 })) {
+  if (!(await rateLimitPersistent(`delacc:${clientIp(req)}`, { capacity: 3, refillPerSec: 3 / 60 }))) {
     return Response.json({ error: "操作太频繁，请稍后再试" }, { status: 429 });
   }
-  const session = await getSessionUser();
+  const session = await verifySession();
   if (!session) return Response.json({ error: "未登录" }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));

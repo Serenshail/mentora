@@ -48,21 +48,48 @@ export function decrypt<T>(payload: string): T {
   return JSON.parse(json.toString("utf8")) as T;
 }
 
-/* ---------------- 通用：重试（指数退避） ---------------- */
+/* ---------------- 通用：重试（指数退避）+ 网络健康熔断 ---------------- */
 
 const RETRY_STATUS = new Set([403, 429, 500, 502, 503, 504]);
 const RETRY_DELAYS = [300, 600, 1200]; // ms
+const REMOTE_FETCH_TIMEOUT_MS = 5_000; // 单次 fetch 硬超时：连不上的服务不该拖死请求
+
+/* 熔断器：远端 KV（D1/Upstash）连续网络失败后 60s 内判定"不健康"。
+ * best-effort 调用方（限流桶/验证码/配额/登录失败计数）应走 hasHealthyRemoteDb()：
+ * 不健康时直接降级为进程内存——否则本地开发（连不上 Cloudflare）与线上 D1 抖动时，
+ * 每个请求都要陪着重试烧 20 秒。数据主路径（用户档案/同步）不受此闸约束：
+ * 那是必须真读写的，失败如实报错。 */
+let lastNetFailAt = 0;
+let netFailStreak = 0;
+function recordNetResult(ok: boolean): void {
+  if (ok) {
+    netFailStreak = 0;
+    lastNetFailAt = 0;
+  } else {
+    netFailStreak += 1;
+    if (netFailStreak >= 2) lastNetFailAt = Date.now();
+  }
+}
+
+export function hasHealthyRemoteDb(): boolean {
+  if (!hasRemoteDb()) return false;
+  return !(lastNetFailAt && Date.now() - lastNetFailAt < 60_000);
+}
 
 async function withRetry<T>(fn: () => Promise<Response>): Promise<Response> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
       const res = await fn();
-      if (!RETRY_STATUS.has(res.status)) return res;
+      if (!RETRY_STATUS.has(res.status)) {
+        recordNetResult(true);
+        return res;
+      }
       lastErr = new Error(`status ${res.status}`);
       /* 消费 body 释放连接 */
       await res.text().catch(() => {});
     } catch (e) {
+      recordNetResult(false); // 连接失败/超时：网络层问题，计入熔断
       lastErr = e;
     }
     if (attempt < RETRY_DELAYS.length) {
@@ -70,6 +97,13 @@ async function withRetry<T>(fn: () => Promise<Response>): Promise<Response> {
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("网络错误");
+}
+
+/** 给 fetch 加硬超时（serverless 里连接挂起会吃满 maxDuration，用户端看到的是"卡死"） */
+function timed(): { signal: AbortSignal; done: () => void } {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REMOTE_FETCH_TIMEOUT_MS);
+  return { signal: ctrl.signal, done: () => clearTimeout(timer) };
 }
 
 /* ---------------- 主通道：Upstash Redis REST ---------------- */
@@ -81,15 +115,20 @@ const hasUpstash = () => Boolean(UPSTASH_URL && UPSTASH_TOKEN);
 async function upstash<T = unknown>(
   command: (string | number)[]
 ): Promise<{ result: T }> {
-  const res = await withRetry(() =>
-    fetch(UPSTASH_URL, {
+  const res = await withRetry(() => {
+    const { signal, done } = timed();
+    return fetch(UPSTASH_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
       body: JSON.stringify(command),
       cache: "no-store",
-    })
-  );
-  if (!res.ok) throw new Error(`Upstash 请求失败（${res.status}）`);
+      signal,
+    }).finally(done);
+  });
+  if (!res.ok) {
+    recordNetResult(false); // 服务逻辑失败同样计入熔断（如凭据错误时次次 4xx，不该每个请求都撞一遍）
+    throw new Error(`Upstash 请求失败（${res.status}）`);
+  }
   return (await res.json()) as { result: T };
 }
 
@@ -129,23 +168,39 @@ function d1Init(): Promise<void> {
 }
 
 async function d1Raw<T = { k?: string; v?: string }>(sql: string, params: (string | number | null)[]): Promise<T[]> {
-  const res = await withRetry(() =>
-    fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/d1/database/${CF_DB_ID}/query`, {
+  const res = await withRetry(() => {
+    const { signal, done } = timed();
+    return fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/d1/database/${CF_DB_ID}/query`, {
       method: "POST",
       headers: { Authorization: `Bearer ${CF_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ sql, params }),
       cache: "no-store",
-    })
-  );
+      signal,
+    }).finally(done);
+  });
   const j = (await res.json().catch(() => null)) as
-    | { success?: boolean; result?: { results?: T[] }[] }
+    | { success?: boolean; errors?: { code?: number; message?: string }[]; result?: { results?: T[] }[] }
     | null;
-  if (!res.ok || !j?.success) throw new Error(`D1 请求失败（${res.status}）`);
+  if (!res.ok || !j?.success) {
+    recordNetResult(false); // 连上的 400（凭据/库 ID 错/语句拒绝）与断网同等对待：累计 2 次开熔断
+    const why = j?.errors?.[0]?.message ?? `status ${res.status}`;
+    // 带语句头部（我们自己的固定 SQL 文本）；绝不带参数——参数含邮箱等键路径，不该进日志
+    throw new Error(`D1 请求失败（${res.status}）：${why.slice(0, 180)} [${sql.slice(0, 70)}]`);
+  }
   return j.result?.[0]?.results ?? [];
 }
 
 /* D1 单条 SQL 有 1MB 上限，大值按块拆存：主行存 {"__chunks__":N}，块存 <path>#p0..#p(N-1) */
 const D1_CHUNK_SIZE = 380_000;
+
+/* D1 的 SQLite LIKE 模式匹配器实测间歇性抛 "LIKE or GLOB pattern too complex"
+ * （同一模式一次 400 一次 200，v17 冒烟复现）——前缀需求一律改 substr 相等比较绕开：
+ * kv 表量级小，全扫无感；行为等价且稳定。 */
+const PREFIX_SELECT = "SELECT k FROM kv WHERE substr(k, 1, ?) = ?";
+const PREFIX_LIKE = "SELECT k, v FROM kv WHERE substr(k, 1, ?) = ? ORDER BY k";
+const PREFIX_DELETE = "DELETE FROM kv WHERE k = ? OR substr(k, 1, ?) = ?";
+const PREFIX_DELETE_ONLY = "DELETE FROM kv WHERE substr(k, 1, ?) = ?";
+const prefixOf = (dir: string): [number, string] => [dir.length, dir];
 
 async function d1Get(path: string): Promise<string | null> {
   await d1Init();
@@ -156,8 +211,8 @@ async function d1Get(path: string): Promise<string | null> {
   if (!m) return v;
   const n = Number(m[1]);
   const parts = await d1Raw<{ k?: string; v?: string }>(
-    "SELECT k, v FROM kv WHERE k LIKE ? ORDER BY k",
-    [`${path}#p%`]
+    PREFIX_LIKE,
+    prefixOf(`${path}#p`)
   );
   const byIdx = new Map<number, string>();
   for (const p of parts) {
@@ -173,7 +228,7 @@ async function d1Put(path: string, content: string): Promise<void> {
   await d1Init();
   if (content.length <= D1_CHUNK_SIZE) {
     // 若此前是分块存储，先清理旧块
-    await d1Raw("DELETE FROM kv WHERE k LIKE ?", [`${path}#p%`]);
+    await d1Raw(PREFIX_DELETE_ONLY, prefixOf(`${path}#p`));
     await d1Raw(
       "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
       [path, content]
@@ -199,7 +254,7 @@ async function d1Put(path: string, content: string): Promise<void> {
 
 async function d1List(dir: string): Promise<string[]> {
   await d1Init();
-  const rows = await d1Raw<{ k?: string }>("SELECT k FROM kv WHERE k LIKE ?", [`${dir}/%`]);
+  const rows = await d1Raw<{ k?: string }>(PREFIX_SELECT, prefixOf(`${dir}/`));
   return (rows.map((r) => r.k ?? "").filter(Boolean) as string[])
     .filter((k) => !k.includes("#")) // 分块行不属于任何文件名
     .map((k) => k.slice(dir.length + 1));
@@ -207,7 +262,8 @@ async function d1List(dir: string): Promise<string[]> {
 
 async function d1Delete(path: string): Promise<void> {
   await d1Init();
-  await d1Raw("DELETE FROM kv WHERE k = ? OR k LIKE ?", [path, `${path}#p%`]);
+  const [len, pre] = prefixOf(`${path}#p`);
+  await d1Raw(PREFIX_DELETE, [path, len, pre]);
 }
 
 /* ---------------- 回退通道：GitHub Contents API ---------------- */
@@ -216,8 +272,9 @@ const REPO = process.env.GITHUB_DB_REPO || "";
 const TOKEN = process.env.GITHUB_DB_TOKEN || "";
 
 async function ghApi(path: string, method: string, body?: unknown): Promise<{ status: number; json: unknown }> {
-  const res = await withRetry(() =>
-    fetch(`https://api.github.com/repos/${REPO}/contents/${path}`, {
+  const res = await withRetry(() => {
+    const { signal, done } = timed();
+    return fetch(`https://api.github.com/repos/${REPO}/contents/${path}`, {
       method,
       headers: {
         Authorization: `token ${TOKEN}`,
@@ -227,8 +284,9 @@ async function ghApi(path: string, method: string, body?: unknown): Promise<{ st
       },
       body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
-    })
-  );
+      signal,
+    }).finally(done);
+  });
   let json: unknown = null;
   try {
     json = await res.json();
@@ -349,6 +407,11 @@ export async function dbDelete(path: string, sha: string | null): Promise<void> 
 
 export function emailHash(email: string): string {
   return crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 24);
+}
+
+/** 是否存在跨进程可用的远端 KV（D1/Upstash 任一）；纯 GitHub 兜底时返回 false（写放大不值当） */
+export function hasRemoteDb(): boolean {
+  return hasUpstash() || hasD1();
 }
 
 /** 反馈双写（GitHub Issues 为主通道，D1 存一份冗余；任何失败都不抛出） */

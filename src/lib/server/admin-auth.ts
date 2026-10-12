@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
-import { getSessionUser } from "@/lib/server/auth";
+import { verifySession } from "@/lib/server/auth";
 import { isAdminEmail } from "@/lib/admin-emails";
 
 /* 管理员双鉴权(与 overview 同源逻辑,供 feedback-state 等复用):
@@ -23,7 +23,7 @@ export async function authorizeAdmin(
   if (expected && given && timingSafeEq(given, expected)) {
     return { email: "admin-password", name: "后台密码" };
   }
-  const session = await getSessionUser();
+  const session = await verifySession();
   if (session && isAdminEmail(session.email, process.env.ADMIN_EMAILS)) {
     return { email: session.email, name: session.name };
   }

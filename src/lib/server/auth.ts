@@ -1,6 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
+import { dbGet, emailHash } from "./db";
 
 const COOKIE = "mentora_session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 天
@@ -9,6 +10,9 @@ export interface SessionUser {
   userId: string;
   email: string;
   name: string;
+  /** 会话版本号：改密/重置密码时档案里的 sv+1，旧 cookie（携带旧 sv）全部作废。
+   *  无状态 HMAC 会话自此可吊销（v17 前只有"30 天到期"这一种失效方式）。 */
+  sv?: number;
 }
 
 function secret(): string {
@@ -53,7 +57,12 @@ export function readSessionToken(token: string | undefined): SessionUser | null 
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (typeof data.exp !== "number" || data.exp < Date.now()) return null;
-    return { userId: data.userId, email: data.email, name: data.name };
+    return {
+      userId: data.userId,
+      email: data.email,
+      name: data.name,
+      sv: typeof data.sv === "number" ? data.sv : 0,
+    };
   } catch {
     return null;
   }
@@ -78,4 +87,27 @@ export async function clearSessionCookie() {
 export async function getSessionUser(): Promise<SessionUser | null> {
   const jar = await cookies();
   return readSessionToken(jar.get(COOKIE)?.value);
+}
+
+/** 校验会话是否仍然有效：签名 + 过期 + 账号存在 + sv 版本号比对。
+ *  改密/重置密码后档案 sv 递增，旧设备 cookie 至此全部吊销（此前 30 天内照用）。
+ *  数据库故障时降级放行（v11 事故纪律：绝不因临时故障把在线用户判成未登录）。 */
+export async function verifySession(): Promise<SessionUser | null> {
+  const u = await getSessionUser();
+  if (!u) return null;
+  try {
+    const rec = await dbGet<{ sv?: number }>(`users/${emailHash(u.email)}.json`, {
+      encrypted: true,
+    });
+    if (!rec) return null; // 账号已注销
+    if ((rec.sv ?? 0) !== (u.sv ?? 0)) return null; // 密码已改/已重置：旧会话作废
+    return u;
+  } catch {
+    return u;
+  }
+}
+
+/** 签发带版本号的会话 */
+export async function mintSession(user: { userId: string; email: string; name: string; sv?: number }) {
+  await setSessionCookie({ userId: user.userId, email: user.email, name: user.name, sv: user.sv ?? 0 });
 }

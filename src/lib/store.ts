@@ -5,7 +5,6 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 import { fsrs, generatorParameters, createEmptyCard, Rating, State } from "ts-fsrs";
 import { useShallow } from "zustand/react/shallow";
 import {
-  MASTERY_ORDER,
   NodeStatus,
   DayPlan,
 } from "@/lib/types";
@@ -17,14 +16,13 @@ import type {
   Goal,
   KnowledgeItem,
   MasteryStatus,
-  GradingResult,
   KnowledgeSource,
   KnowledgeType,
   Plan,
   QuizResult,
   Settings,
 } from "./types";
-import { nextReviewDate, todayISO, uid } from "./utils";
+import { todayISO, uid } from "./utils";
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: "demo", // "自动"：跟随服务端配置，无配置时回退演示模式
@@ -90,8 +88,12 @@ interface AppState {
   setDayStatus: (
     goalId: string,
     dayId: string,
-    status: "active" | "passed" | "skipped"
+    status: "active" | "passed" | "skipped",
+    /** 迁移题真门（v17）：passed 时不再立即解锁下一天，留 pendingUnlock；
+     *  由 completeTransfer 答题后解锁。进度照常保存，刷新不丢。 */
+    opts?: { pendingUnlock?: boolean; transferQuestion?: string }
   ) => void;
+  completeTransfer: (goalId: string, dayId: string, answer: string) => void;
   incrementAttempts: (goalId: string, dayId: string) => void;
   logQuiz: (goalId: string, result: QuizResult) => void;
 
@@ -265,50 +267,10 @@ function linkifyBodies(knowledge: KnowledgeItem[]): KnowledgeItem[] {
   });
 }
 
-/* ========= 掌握状态推进（Learn Anything assessment-integrity） =========
- * 规则：L1-L4 提示下完成最高只记 guided；L5 完整示范后原题不得记 independent；
- * 结论对但依据错不升级；一次偶然答对不覆盖此前引导证据（historicalHighest 保底）。
- * ungradable 不算任何证据。 */
-export function advanceMastery(
-  cur: MasteryStatus | undefined,
-  hist: MasteryStatus | undefined,
-  verdict: GradingResult,
-  hintLevel: number | undefined
-): { next: MasteryStatus; hist: MasteryStatus } {
-  const order = MASTERY_ORDER;
-  const idx = (m: MasteryStatus) => order.indexOf(m);
-  const h = hist ?? cur ?? "unknown";
-  if (verdict === "ungradable") return { next: cur ?? "unknown", hist: h };
-  const hl = typeof hintLevel === "number" ? hintLevel : 0;
-  const base: MasteryStatus = cur ?? "unknown";
-  let next: MasteryStatus = base;
-  if (verdict === "correct") {
-    if (hl >= 5) next = base === "unknown" ? "exposed" : base; // L5 完整示范：原题不升级过 exposed
-    else if (hl >= 1) next = maxStatus("guided", base); // L1-L4：guided 封顶
-    else next = maxStatus("independent", base); // 无提示答对
-  } else if (verdict === "partially_correct") {
-    next = maxStatus("guided", base === "unknown" ? "exposed" : base);
-  } else {
-    // incorrect：不升级；连续错误由 FSRS/复习队列处理,不在此降级历史
-    next = base === "unknown" ? "exposed" : base;
-  }
-  return { next, hist: idx(next) > idx(h) ? next : h };
-}
-
-function maxStatus(a: MasteryStatus, b: MasteryStatus): MasteryStatus {
-  return MASTERY_ORDER.indexOf(a) >= MASTERY_ORDER.indexOf(b) ? a : b;
-}
-
-/** 验收通过后,把本日知识点按判分/提示等级推进掌握状态并同步进第二大脑的对应笔记 */
-export function masteryFromQuiz(items: { verdict: GradingResult; hintLevel?: number }[]): MasteryStatus {
-  // 取所有题里最弱的证据作为本日知识点的保守估计（Learn Anything:证据从紧不从松）
-  let worst: MasteryStatus = "durable";
-  for (const it of items) {
-    const { next } = advanceMastery("unknown", undefined, it.verdict, it.hintLevel);
-    if (MASTERY_ORDER.indexOf(next) < MASTERY_ORDER.indexOf(worst)) worst = next;
-  }
-  return worst === "durable" ? "independent" : worst; // 单日到不了 durable(需延迟复习)
-}
+/* ========= 掌握状态推进（v17 拆至纯模块 mastery.ts，可单测） =========
+ * store 内部与外部调用点都从这里拿：行为与原 store 内联版一致，新增复习接线与 apply 迁移证据。 */
+export { advanceMastery, masteryFromQuiz, masteryFromReview, maxStatus } from "./mastery";
+import { masteryFromReview } from "./mastery";
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -371,7 +333,7 @@ export const useAppStore = create<AppState>()(
             return { ...g, plan };
           }),
         })),
-      setDayStatus: (goalId, dayId, status) =>
+      setDayStatus: (goalId, dayId, status, opts) =>
         set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
@@ -380,8 +342,29 @@ export const useAppStore = create<AppState>()(
             if (!day) return g;
             day.status = status;
             day.completedAt = status === "active" ? undefined : todayISO();
-            if (status === "passed" || status === "skipped")
+            const gate = status === "passed" && opts?.pendingUnlock;
+            if (gate) {
+              // 真门：进度记录照常，解锁等迁移题
+              day.pendingUnlock = true;
+              day.transferQuestion = opts?.transferQuestion ?? "";
+            } else if (status === "passed") {
+              delete day.pendingUnlock;
+            }
+            if ((status === "passed" && !gate) || status === "skipped")
               unlockNext({ ...g, plan }, dayId);
+            return { ...g, plan };
+          }),
+        })),
+      completeTransfer: (goalId, dayId, answer) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const plan = structuredClone(g.plan);
+            const day = plan.days[dayId];
+            if (!day || day.status !== "passed") return g;
+            day.pendingUnlock = false;
+            day.transferAnswer = answer;
+            unlockNext({ ...g, plan }, dayId);
             return { ...g, plan };
           }),
         })),
@@ -695,6 +678,14 @@ export const useAppStore = create<AppState>()(
         done(next.toISOString().slice(0, 10), {
           fsrs: fsrsState,
           reviewStage: stageOf(c.scheduled_days),
+          // v17 接线：复习通过会推进掌握状态（此前 recordReview 从不碰 masteryStatus，
+          // 六级状态机的 durable 永远不可达——"复习固化记忆"的承诺在状态机里没有落点）
+          masteryStatus: masteryFromReview(
+            k.masteryStatus,
+            ok,
+            Math.max(0, c.reps - c.lapses),
+            c.stability
+          ),
         });
       },
       linkNotes: (fromId, toId) =>

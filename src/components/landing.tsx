@@ -78,13 +78,14 @@ function HeroVideo() {
         className="fixed inset-0 z-0 h-full w-full object-cover"
         style={{ objectPosition: "70% center" }}
       />
+      {/* v17：preload 降为 metadata——起播即可擦洗（range 按需取段），不再无条件拉 792KB 首包 */}
       <video
         ref={ref}
         src={VIDEO_SRC}
         poster="/hero-poster.jpg"
         muted
         playsInline
-        preload="auto"
+        preload="metadata"
         onLoadedData={() => setPlayable(true)}
         onError={(e) => {
           /* 加载/解码失败:隐藏视频,露出海报兜底(不黑屏) */
@@ -277,7 +278,8 @@ export default function Landing() {
         </button>
       </header>
 
-      {/* 移动端全屏菜单（z-9） */}
+      {/* 移动端全屏菜单（z-9）。v17：收起态移出 tab 序与可访问树（此前 opacity 隐藏
+       *  但链接仍可聚焦/朗读）——React 19 原生支持 inert。 */}
       <div
         className="fixed inset-0 z-[9] flex flex-col items-start justify-center bg-black/90 px-8 backdrop-blur-md md:hidden"
         style={{
@@ -285,6 +287,8 @@ export default function Landing() {
           pointerEvents: menuOpen ? "auto" : "none",
           transition: "opacity 300ms ease",
         }}
+        aria-hidden={!menuOpen}
+        inert={!menuOpen}
       >
         {NAV_LINKS.map((l) => (
           <a

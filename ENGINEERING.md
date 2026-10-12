@@ -72,7 +72,7 @@
 ## 8. 工程化基线（12-Factor 对齐，"去 demo 化"）
 
 对照 12-Factor 与生产就绪清单落的基线（2026-09-24）：
-- **测试（回归网）**：vitest 单测覆盖核心纯逻辑——`rag`(dedupeConflicts/wikiRetrieve 图导航/bm25 标题加权)、`utils`(rankResources 时效排序)、`ai/client`(extractJson 容忍围栏/前后缀/字符串内括号)。`npm run test`，CI 必跑。13 用例。
+- **测试（回归网）**：vitest 单测覆盖核心纯逻辑——`rag`(dedupeConflicts/wikiRetrieve 图导航/bm25 标题加权)、`utils`(rankResources 时效排序)、`ai/client`(extractJson 容忍围栏/前后缀/字符串内括号)、`mastery`(掌握状态机：判分/复习两条推进路径)。`npm run test`，CI 必跑。30 用例。
 - **CI**：`.github/workflows/ci.yml`——push/PR 触发 install→`tsc --noEmit`→`npm run test`。类型+测试不过不进主干。
 - **Config in env + fail-fast**：`server/config.ts envStatus()` 校验必需 env（AUTH_SECRET），可选通道只报数量不报内容（防泄露）；`/api/health` 暴露 ok/missing/optionalConfigured/build。
 - **Logs as event streams**：`logEvent()` 结构化 JSON 写 stdout（Vercel 捕获）；/api/chat 记录上游状态/重试/失败与任务级错误。

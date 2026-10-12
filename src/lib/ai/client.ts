@@ -20,9 +20,27 @@ export type ChatTask =
  * BYOK：provider/key/model 由请求头携带（客户端设置存储，服务端不落盘）。
  * task：显式任务类型，服务端 demo 模式按此分流（不嗅探提示词内容）。
  */
+/** v17：BYOK 真接线——设置里填了自己的 Key 就随请求带上
+ *  （此前这些头服务端支持但客户端从不发送，"BYOK"只是文案）。
+ *  动态 import：纯 Node 环境（vitest/e2e）拿不到浏览器 store 时静默降级为服务端模式。 */
+async function byokHeaders(): Promise<Record<string, string>> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  try {
+    const { useAppStore } = await import("@/lib/store");
+    const st = useAppStore.getState().settings;
+    if (st.apiKey && st.provider && st.provider !== "demo") {
+      h["x-mentora-key"] = st.apiKey.trim();
+      h["x-mentora-provider"] = st.provider;
+      if (st.model.trim()) h["x-mentora-model"] = st.model.trim();
+      if (st.provider === "custom" && st.baseUrl.trim()) h["x-mentora-baseurl"] = st.baseUrl.trim();
+    }
+  } catch { /* 无 store 环境：不带头，服务端走自身配置 */ }
+  return h;
+}
+
 export async function streamChat(
   opts: {
-    /** 纯数据参数；核心任务的系统提示词由服务端组装,前端不持有模板（IP 保护） */
+    /** 纯数据参数；核心任务的系统提示词由服务端按 task 组装,前端不持有模板（IP 保护） */
     args?: Record<string, unknown>;
     /** 遗留通道：仅 council 暂用 */
     system?: string;
@@ -35,7 +53,7 @@ export async function streamChat(
 ): Promise<string> {
   const res = await fetch("/api/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await byokHeaders(),
     body: JSON.stringify({
       args: opts.args,
       system: opts.system,

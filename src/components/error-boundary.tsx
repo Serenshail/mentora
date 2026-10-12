@@ -10,6 +10,7 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- 类组件的 state 字段初始化被 react-compiler 系新规则误报（这里没有 effect，也不会有级联渲染）
   state: State = { err: null };
 
   static getDerivedStateFromError(err: Error): State {
