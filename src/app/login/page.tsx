@@ -82,6 +82,7 @@ function LoginInner() {
   const [code, setCode] = useState("");
   const [codeCooldown, setCodeCooldown] = useState(0);
   const [codeBusy, setCodeBusy] = useState(false);
+  const [invite, setInvite] = useState("");
 
   /* 验证码 60s 倒计时 */
   useEffect(() => {
@@ -131,7 +132,7 @@ function LoginInner() {
         await login(email.trim(), password);
         await afterAuth();
       } else {
-        await register(email.trim(), password, name.trim(), code.trim());
+        await register(email.trim(), password, name.trim(), code.trim(), invite.trim());
         await afterAuth();
       }
     } catch (e) {
@@ -218,6 +219,13 @@ function LoginInner() {
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
               />
+              {mode === "register" && (
+                <Input
+                  placeholder="内测邀请码（可选——有它无需邮箱验证码）"
+                  value={invite}
+                  onChange={(e) => setInvite(e.target.value)}
+                />
+              )}
               {mode !== "login" && (
                 <div>
                   <div className="flex gap-2">

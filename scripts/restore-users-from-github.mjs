@@ -44,11 +44,8 @@ async function q(sql, params) {
   return j.result?.[0]?.results ?? [];
 }
 
-/* 探针/测试账号不搬（与 cleanup-probe-accounts.mjs 名单一致的历史残留） */
-const isProbe = (email) =>
-  /@mentora\.dev$/.test(email) ||
-  /^(e2e-|dbg-|ui-|probe|vc-test|adminprobe|smoke|v17-)/i.test(email) ||
-  /^@?e2e-acct@163\.com$/.test(email);
+/* v18.1：不再做探针过滤——是否测试账号由用户在 /admin 自行判断删除（教训：过滤动作必须先问主人）。
+ * 仅保留一个硬底线：绝不覆盖 D1 里已存在的档案。 */
 
 const list = await (await fetch(`https://api.github.com/repos/${GR}/contents/users`, { headers: GH, signal: AbortSignal.timeout(15000) })).json();
 console.log("GitHub users/ 文件:", list.length);
@@ -59,7 +56,6 @@ for (const f of list) {
   try { rec = decrypt(Buffer.from(raw.content, "base64").toString("utf8")); }
   catch (e) { console.log("  ✗ 解密失败", f.name, String(e).slice(0, 60)); skipped++; continue; }
   if (!rec?.email || !rec?.salt || !rec?.hash) { console.log("  ✗ 结构异常", f.name); skipped++; continue; }
-  if (isProbe(rec.email)) { console.log("  - 跳过探针/测试号:", rec.email); skipped++; continue; }
   const path = `users/${crypto.createHash("sha256").update(rec.email.trim().toLowerCase()).digest("hex").slice(0, 24)}.json`;
   const exist = await q("SELECT k FROM kv WHERE k = ?", [path]);
   if (exist.length) { console.log("  = D1 已存在，不动:", rec.email); skipped++; continue; }

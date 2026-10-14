@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import crypto from "node:crypto";
 import { dbGet, dbPut, emailHash } from "@/lib/server/db";
 import { hashPassword, mintSession } from "@/lib/server/auth";
 import { checkEmailDeliverable } from "@/lib/email-check";
@@ -27,6 +28,17 @@ export async function POST(req: NextRequest) {
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
   const name = String(body.name ?? "").trim() || email.split("@")[0];
+  /* 内测邀请码通道：配置 INVITE_CODE 后凭码免邮箱验证码。
+   * 内测期（未配发信服务）它是唯一注册路径；正式期与邮件验证码并存。
+   * 未配置 env 时通道自动关闭（无后门）。timing-safe 比对。 */
+  const inviteRaw = String(body.inviteCode ?? "").trim();
+  const inviteExpected = (process.env.INVITE_CODE || "").trim();
+  let invited = false;
+  if (inviteExpected && inviteRaw) {
+    const a = Buffer.from(inviteRaw);
+    const b = Buffer.from(inviteExpected);
+    invited = a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return Response.json({ error: "邮箱格式不对" }, { status: 400 });
@@ -42,7 +54,7 @@ export async function POST(req: NextRequest) {
   /* 邮箱归属验证码：证明"这个邮箱是你的"。dev 模式(未配 RESEND_API_KEY)下由
    * send-code 返回 devCode,前端自动填入——链路可测,上线配 Key 即全量生效。 */
   const code = String(body.code ?? "").trim();
-  if (!(await verifyCode(email, "register", code))) {
+  if (!invited && !(await verifyCode(email, "register", code))) {
     return Response.json({ error: "验证码不对或已过期，请重新获取" }, { status: 401 });
   }
 
