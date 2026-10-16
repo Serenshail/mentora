@@ -283,6 +283,10 @@ function LoginInner() {
             密码经单向加密存储，任何人（包括我们）看不到原文。
             <br />
             不想注册？数据照旧存在这台电脑上。
+            <br />
+            <Link href="/privacy" className="underline-offset-2 hover:underline">隐私政策</Link>
+            {" · "}
+            <Link href="/terms" className="underline-offset-2 hover:underline">用户协议</Link>
           </p>
         </div>
       </div>
