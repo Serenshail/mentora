@@ -15,6 +15,17 @@ function Step-Done { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
 function Step-Fail { param($m) Write-Host "[FAIL] $m" -ForegroundColor Red; Stop-Transcript | Out-Null; exit 1 }
 function Step-Info { param($m) Write-Host "[..] $m" -ForegroundColor Cyan }
 function Read-Secret { param($m) $s = Read-Host $m -AsSecureString; [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)) }
+# 自动化运行（stdin 重定向）时经管道读入、不回显；交互运行时走原生 Read-Host——两条路径凭据均不落盘
+function Read-Host {
+  param([string]$Prompt, [switch]$AsSecureString)
+  if ([Console]::IsInputRedirected) {
+    $line = [Console]::ReadLine()
+    if ($null -eq $line) { $line = "" }
+    if ($AsSecureString) { return ConvertTo-SecureString -String $line -AsPlainText -Force }
+    return $line
+  }
+  return Microsoft.PowerShell.Utility\Read-Host @PSBoundParameters
+}
 
 try {
   Set-Location $RepoRoot
