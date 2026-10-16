@@ -177,15 +177,18 @@ try {
     Write-Host "  RDS root 密码规则：8-32 位，至少含大写/小写/数字/特殊字符中三类，如 Mentora@2026"
     $rdsPwd = Read-Secret "  设置 RDS root 密码（输入不回显）"
     if ($rdsPwd.Length -lt 8) { Step-Fail "RDS 密码过短" }
-    # password/mode 与 KooCLI 系统参数同名——走 --cli-jsonInput（临时 JSON，用后即删）
+    # password/mode 与 KooCLI 系统参数同名——走 --cli-jsonInput（临时 JSON，用后即删；文件须按 path/query/body 分层）
     $rdsBody = @{
-      name = $RdsName; region = $Region
-      datastore = @{ type = "PostgreSQL"; version = $RdsDbVer }
-      mode = "Single"; flavor_ref = $RdsFlavor
-      volume = @{ type = "ULTRAHIGH"; size = [int]$RdsVolume }
-      vpc_id = $vpc.id; subnet_id = $subnet.id; security_group_id = $sg.id
-      password = $rdsPwd; port = [int]$RdsPort; availability_zone = $Az
-    } | ConvertTo-Json -Depth 4
+      path = @{ project_id = $projectId }
+      body = @{
+        name = $RdsName; region = $Region
+        datastore = @{ type = "PostgreSQL"; version = $RdsDbVer }
+        mode = "Single"; flavor_ref = $RdsFlavor
+        volume = @{ type = "ULTRAHIGH"; size = [int]$RdsVolume }
+        vpc_id = $vpc.id; subnet_id = $subnet.id; security_group_id = $sg.id
+        password = $rdsPwd; port = [int]$RdsPort; availability_zone = $Az
+      }
+    } | ConvertTo-Json -Depth 5
     $rds = Invoke-Hc "RDS CreateInstance" -BodyJson $rdsBody
     if (-not $rds) { Step-Fail "创建 RDS 失败（命令已打印，可把日志贴回排查）" }
     $rdsList = Invoke-Hc "RDS ListInstances --limit=100" -Quiet
@@ -244,13 +247,16 @@ try {
   } else {
     Write-Host "  DCS 密码规则：8-32 位，含字母与数字，如 Mentora2026"
     $dcsPwd = Read-Secret "  设置 DCS 访问密码（输入不回显）"
-    # DCS 的 password 同样与系统参数同名——走 --cli-jsonInput
+    # DCS 的 password 同样与系统参数同名——走 --cli-jsonInput（path/body 分层）
     $dcsBody = @{
-      name = $DcsName; engine = $DcsEngine; engine_version = $DcsVer
-      capacity = [int]$DcsCapacity; spec_code = $DcsSpecCode
-      vpc_id = $vpc.id; subnet_id = $subnet.id
-      password = $dcsPwd; az_codes = @($Az)
-    } | ConvertTo-Json -Depth 4
+      path = @{ project_id = $projectId }
+      body = @{
+        name = $DcsName; engine = $DcsEngine; engine_version = $DcsVer
+        capacity = [int]$DcsCapacity; spec_code = $DcsSpecCode
+        vpc_id = $vpc.id; subnet_id = $subnet.id
+        password = $dcsPwd; az_codes = @($Az)
+      }
+    } | ConvertTo-Json -Depth 5
     $dcs = Invoke-Hc "DCS CreateInstance" -BodyJson $dcsBody
     if (-not $dcs) { Step-Fail "创建 DCS 失败（命令已打印，可把日志贴回排查；单机规格名可按控制台可选值调整 `$DcsSpecCode）" }
     $dcsList = Invoke-Hc "DCS ListInstances --limit=100" -Quiet
