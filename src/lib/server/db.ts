@@ -741,3 +741,83 @@ export async function dbEventSave(rec: {
     );
   } catch { /* 埋点绝不影响主流程 */ }
 }
+/** chat-usage props 聚合（纯函数，可测）：解析最近窗口内 props JSON，按 provider 汇总 */
+export function aggregateChatUsage(propsList: string[]): {
+  window: number;
+  totalCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  byProvider: Record<string, { calls: number; promptTokens: number; completionTokens: number; byok: number }>;
+} {
+  const byProvider: Record<string, { calls: number; promptTokens: number; completionTokens: number; byok: number }> = {};
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let parsed = 0;
+  for (const raw of propsList) {
+    let p: Record<string, unknown> = {};
+    try { p = JSON.parse(raw); } catch { continue; }
+    parsed += 1;
+    const prov = typeof p.provider === "string" && p.provider ? p.provider : "unknown";
+    const pt = Number(p.prompt_tokens) || 0;
+    const ct = Number(p.completion_tokens) || 0;
+    const slot = (byProvider[prov] ??= { calls: 0, promptTokens: 0, completionTokens: 0, byok: 0 });
+    slot.calls += 1;
+    slot.promptTokens += pt;
+    slot.completionTokens += ct;
+    if (p.byok === 1 || p.byok === true) slot.byok += 1;
+    promptTokens += pt;
+    completionTokens += ct;
+  }
+  return { window: propsList.length, totalCalls: parsed, promptTokens, completionTokens, byProvider };
+}
+
+/** 漏斗与用量聚合（/api/admin/stats 专用）：只出计数与 token 汇总，绝不含 account/PII
+ *  通道感知：huawei 读 RDS，其余读 D1；远端库不可用时返回 null（端点如实报 503，不伪造数据） */
+export async function dbEventStats(): Promise<{
+  funnel: Record<string, number>;
+  chatUsage: ReturnType<typeof aggregateChatUsage>;
+} | null> {
+  const FUNNEL = ["intake_start", "intake_complete", "plan_generated", "day_pass", "review_done"];
+  try {
+    let funnelRows: { name: string; n: number | string }[] = [];
+    let propsList: string[] = [];
+    if (dbChannelEnv() === "huawei") {
+      if (!hasRds()) return null;
+      await rdsQuery(
+        "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+        []
+      );
+      funnelRows = await rdsQuery<{ name: string; n: number }>(
+        "SELECT name, COUNT(*)::int AS n FROM events WHERE name IN ($1, $2, $3, $4, $5)",
+        FUNNEL
+      );
+      propsList = (
+        await rdsQuery<{ props: string }>(
+          "SELECT props FROM events WHERE name = 'chat-usage' ORDER BY id DESC LIMIT 500",
+          []
+        )
+      ).map((r) => r.props);
+    } else {
+      if (!hasD1()) return null;
+      await d1Init();
+      funnelRows = await d1Raw(
+        "SELECT name, COUNT(*) AS n FROM events WHERE name IN (?, ?, ?, ?, ?) GROUP BY name",
+        FUNNEL
+      );
+      propsList = (
+        await d1Raw<{ props: string }>(
+          "SELECT props FROM events WHERE name = 'chat-usage' ORDER BY id DESC LIMIT 500",
+          []
+        )
+      ).map((r) => r.props);
+    }
+
+    const funnel: Record<string, number> = {};
+    for (const k of FUNNEL) funnel[k] = 0;
+    for (const r of funnelRows) if (r.name in funnel) funnel[r.name] = Number(r.n) || 0;
+
+    return { funnel, chatUsage: aggregateChatUsage(propsList) };
+  } catch {
+    return null;
+  }
+}
