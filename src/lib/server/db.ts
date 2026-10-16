@@ -666,7 +666,8 @@ export function hasRemoteDb(): boolean {
   return hasUpstash() || hasD1();
 }
 
-/** 反馈双写（GitHub Issues 为主通道，D1 存一份冗余；任何失败都不抛出） */
+/** 反馈双写（GitHub Issues 为主通道，KV 库存一份冗余；任何失败都不抛出）
+ *  通道感知：huawei 模式写 RDS，其余模式保持 D1（HW-S-01/V-02） */
 export async function dbFeedbackSave(rec: {
   number: number;
   type: string;
@@ -674,8 +675,20 @@ export async function dbFeedbackSave(rec: {
   contact: string;
   page: string;
 }): Promise<void> {
-  if (!hasD1()) return;
   try {
+    if (dbChannelEnv() === "huawei") {
+      if (!hasRds()) return;
+      await rdsQuery(
+        "CREATE TABLE IF NOT EXISTS feedback (number BIGINT PRIMARY KEY, type TEXT, content TEXT, contact TEXT, page TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+        []
+      );
+      await rdsQuery(
+        "INSERT INTO feedback (number, type, content, contact, page) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(number) DO NOTHING",
+        [rec.number, rec.type, rec.content, rec.contact, rec.page]
+      );
+      return;
+    }
+    if (!hasD1()) return;
     await d1Init();
     await d1Raw(
       "CREATE TABLE IF NOT EXISTS feedback (number INTEGER PRIMARY KEY, type TEXT, content TEXT, contact TEXT, page TEXT, created_at TEXT DEFAULT (datetime('now')))",
@@ -688,15 +701,28 @@ export async function dbFeedbackSave(rec: {
   } catch { /* 双写失败不影响反馈主流程 */ }
 }
 
-/** 漏斗埋点落档（/api/track 专用）：D1 events 表，best-effort，失败只丢事件不抛错 */
+/** 漏斗埋点落档（/api/track 专用）：events 表，best-effort，失败只丢事件不抛错
+ *  通道感知：huawei 模式写 RDS，其余模式保持 D1（切换主通道后埋点不静默丢档） */
 export async function dbEventSave(rec: {
   name: string;
   account: string;
   path: string;
   props: string;
 }): Promise<void> {
-  if (!hasD1()) return;
   try {
+    if (dbChannelEnv() === "huawei") {
+      if (!hasRds()) return;
+      await rdsQuery(
+        "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+        []
+      );
+      await rdsQuery(
+        "INSERT INTO events (name, account, path, props) VALUES ($1, $2, $3, $4)",
+        [rec.name, rec.account, rec.path, rec.props]
+      );
+      return;
+    }
+    if (!hasD1()) return;
     await d1Init();
     await d1Raw(
       "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT DEFAULT (datetime('now')))",
