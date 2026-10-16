@@ -11,7 +11,7 @@ $LogFile = Join-Path $LogDir ("step3-" + (Get-Date -Format "yyyyMMdd-HHmmss") + 
 Start-Transcript -Path $LogFile | Out-Null
 
 function Step-Done { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
-function Step-Fail { param($m) Write-Host "[FAIL] $m" -ForegroundColor Red; Stop-Transcript | Out-Null; exit 1 }
+function Step-Fail { param($m) Write-Host "[FAIL] $m" -ForegroundColor Red; exit 1 }
 function Step-Info { param($m) Write-Host "[..] $m" -ForegroundColor Cyan }
 # 自动化运行（stdin 重定向）时经管道读入、不回显；交互运行时走原生 Read-Host——两条路径凭据均不落盘
 function Read-Host {

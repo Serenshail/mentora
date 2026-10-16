@@ -34,7 +34,7 @@ $SwrOrg      = "mentora"
 # ===================================================================================
 
 function Step-Done { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
-function Step-Fail { param($m) Write-Host "[FAIL] $m" -ForegroundColor Red; Write-Host "     修复后可重跑本脚本（已创建资源会复用）。日志：$LogFile" -ForegroundColor Yellow; Stop-Transcript | Out-Null; exit 1 }
+function Step-Fail { param($m) Write-Host "[FAIL] $m" -ForegroundColor Red; Write-Host "     修复后可重跑本脚本（已创建资源会复用）。日志：$LogFile" -ForegroundColor Yellow; exit 1 }
 function Step-Info { param($m) Write-Host "[..] $m" -ForegroundColor Cyan }
 function Read-Secret { param($m) $s = Read-Host $m -AsSecureString; [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)) }
 # 自动化运行（stdin 重定向）时经管道读入、不回显；交互运行时走原生 Read-Host——两条路径凭据均不落盘
@@ -52,9 +52,11 @@ function Read-Host {
 # 执行 hcloud 命令：成功返回解析后的 JSON，失败返回 $null（打印错误）
 function Invoke-Hc {
   param([string]$ArgLine, [switch]$Quiet)
+  # KooCLI 7.x：每条命令显式带 --cli-region 兜底；且 USE_ERROR/CLI_ERROR 退出码为 0，须按输出判失败
+  if ($ArgLine -notmatch "--cli-region=") { $ArgLine = "$ArgLine --cli-region=$Region" }
   if (-not $Quiet) { Step-Info "hcloud $ArgLine" }
   $out = cmd /c "hcloud $ArgLine 2>&1" | Out-String
-  if ($LASTEXITCODE -ne 0) { Write-Host "    hcloud 失败：$($out.Trim())" -ForegroundColor Yellow; return $null }
+  if ($LASTEXITCODE -ne 0 -or $out -match "\[(USE|CLI|API)_ERROR\]") { Write-Host "    hcloud 失败：$($out.Trim())" -ForegroundColor Yellow; return $null }
   try { return ($out | ConvertFrom-Json) } catch { return $out.Trim() }
 }
 function ConvertTo-HcArg { param($hashtable) ($hashtable.GetEnumerator() | ForEach-Object { "--$($_.Key)=$($_.Value)" }) -join " " }
@@ -71,8 +73,9 @@ try {
   $ak = Read-Host "  Access Key Id (AK)"
   $sk = Read-Secret "  Secret Access Key (SK，输入不回显)"
   if (-not $ak -or -not $sk) { Step-Fail "AK/SK 不能为空" }
-  $r = Invoke-Hc "configure set --ak=$ak --sk=$sk --region=$Region" -Quiet
-  if ($null -eq $r -and $LASTEXITCODE -ne 0) { Step-Fail "hcloud configure set 失败（AK/SK 可能无效）" }
+  # KooCLI 7.x 参数名为 --cli-access-key/--cli-secret-key/--cli-region（旧 --ak/--sk/--region 会报"不正确的参数"且退出码 0）
+  $r = Invoke-Hc "configure set --cli-access-key=$ak --cli-secret-key=$sk --cli-mode=AKSK --cli-region=$Region" -Quiet
+  if ($null -eq $r) { Step-Fail "hcloud configure set 失败（AK/SK 可能无效，详见日志）" }
   $r = Invoke-Hc "configure list" -Quiet
   Step-Done "AK/SK 已配置（KooCLI 加密保存，不落明文）"
 
