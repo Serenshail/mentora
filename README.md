@@ -2,7 +2,7 @@
 
 > 把「学会任何东西」变成日常的系统：教练排计划、盯验收，笔记自己织成网，读书有人陪，困惑有人给你真话。
 
-**线上**：[https://mentora-orpin.vercel.app](https://mentora-orpin.vercel.app) ｜ **技术栈**：Next.js 16 · React 19 · Tailwind CSS 4 · TypeScript · zustand 5 · 自研 AI 流式层 · DeepSeek（BYOK 多服务商）
+**线上**：华为云 Demo（见 [部署指导](docs/DEPLOY-HUAWEICLOUD.md)，部署后回填 URL） ｜ [https://mentora-orpin.vercel.app](https://mentora-orpin.vercel.app)（Vercel 旧入口） ｜ **技术栈**：Next.js 16 · React 19 · Tailwind CSS 4 · TypeScript · zustand 5 · 自研 AI 流式层 · 华为云 ModelArts MaaS（DeepSeek 多服务商 BYOK）· RDS/DCS 双通道存储
 
 未登录访客看到的是产品落地页（手写体标题动效 + 产品讲解）；注册登录后进入应用。四个功能：
 
@@ -29,7 +29,7 @@ Obsidian 式双链笔记库。每条知识是独立笔记，正文支持 `[[标�
 
 - **账号**：邮箱 + 验证码注册、密码登录（scrypt 单向加盐哈希，HMAC 签名 HttpOnly cookie）；「忘记密码」邮箱找回；改密/重置后旧设备会话全部吊销（版本号机制）
 - **云同步**：登录后学习计划 / 笔记 / 对话自动加密同步；换设备登录即恢复；断网时本地排队、恢复后自动重发
-- **加密存储**：Cloudflare D1 为主通道，Upstash Redis / 私有 GitHub 仓库为可切换通道与兜底（同一套 key、同一套加密，随时平滑互迁）；所有数据 **AES-256-GCM 静态加密**，密文落库
+- **加密存储**：华为云 RDS PostgreSQL + DCS Redis 为主通道（`DB_CHANNEL=huawei`），Upstash Redis / Cloudflare D1 / 私有 GitHub 仓库为可切换通道与兜底（同一套 key、同一套加密，`DB_CHANNEL` 一个变量随时平滑互迁）；所有数据 **AES-256-GCM 静态加密**，密文落库
 - **版本快照**：云端覆盖写之前自动保留最近 10 份历史快照（`/api/sync?versions=1` 可列），多设备互抹不再等于数据消失
 - **Key 隐私（BYOK）**：设置→模型填入你自己的 Key 后，请求头携带、服务端只转发不落盘、不受每日配额——真正生效（v17 接线；未填则走服务端配置的模型并计入每日限额）
 - **作者后台**：`/admin`（管理密码门）查看全部注册用户与数据概况，行内菜单可删除用户（连云端数据一起清）
@@ -50,11 +50,21 @@ npm run dev        # http://localhost:3000
 
 | 服务商 | 默认模型 | 备注 |
 |--------|----------|------|
-| DeepSeek（部署默认） | deepseek-chat | |
+| 华为云 ModelArts MaaS（部署默认） | DeepSeek-V3.1 | `AI_PROVIDER=maas`，OpenAI 兼容端点 |
+| DeepSeek | deepseek-chat | |
 | Z.ai（智谱 GLM） | glm-4.6 | 可选 glm-5.3 / glm-5.3-flash |
 | Moonshot（Kimi） | kimi-k2-0905-preview | |
 | OpenAI | gpt-5-mini | |
 | 自定义 | — | 任意 OpenAI 兼容端点（OneAPI / Ollama / vLLM） |
+
+### 部署（双路径）
+
+| 路径 | 适用 | 指导 |
+|------|------|------|
+| 华为云（主） | 大赛部署：RDS/DCS/MaaS + CCE Autopilot（或 ECS）+ SWR 镜像 + FunctionGraph 定时 + LTS/Cloud Eye | [`docs/DEPLOY-HUAWEICLOUD.md`](docs/DEPLOY-HUAWEICLOUD.md) |
+| Vercel（旧入口，保留） | 零运维快速上线 | 见下节 |
+
+双通道设计：模型层（`AI_PROVIDER`：maas ↔ deepseek ↔ zai ↔ …）、存储层（`DB_CHANNEL`：huawei ↔ upstash ↔ d1 ↔ github）、发信层，全部**配置切换即生效，无需代码变更**；不配置华为云凭据时自动回退原通道，行为不变。
 
 ### 部署到 Vercel
 
@@ -66,8 +76,9 @@ vercel link && vercel --prod --yes
 
 | 变量 | 作用 |
 |------|------|
-| `AI_PROVIDER` / `DEEPSEEK_API_KEY` 等 | 服务端模型兜底（让访客零配置可用） |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | 存储主通道（推荐，免费档够用）；不配则自动落到 GitHub 后端 |
+| `AI_PROVIDER` / `DEEPSEEK_API_KEY` / `MAAS_API_KEY` 等 | 服务端模型兜底（让访客零配置可用） |
+| `DB_CHANNEL` / `DATABASE_URL` / `REDIS_URL` | 存储通道（缺省 auto 隐式优先 Upstash→D1→GitHub；`huawei` 走 RDS+DCS） |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | 存储通道（免费档够用）；不配则自动落到 GitHub 后端 |
 | `GITHUB_DB_TOKEN` / `GITHUB_DB_REPO` | 存储兜底（私有仓库，需 repo 权限）；`scripts/migrate-to-redis.mjs` 可把存量数据一键搬到 Redis |
 | `AUTH_SECRET` | 会话签名与数据加密密钥 |
 | `ADMIN_PASSWORD` | 作者后台密码 |
@@ -89,7 +100,7 @@ src/
     api/auth  api/sync  # 注册登录（scrypt+HMAC） · 快照同步（AES-256-GCM）
     api/feedback        # 反馈 → GitHub Issues
   lib/ai/prompts.ts     # 全部系统提示词（核心资产）
-  lib/server/           # 加密存储层（Redis 主通道 + GitHub 兜底，上层只见 dbGet/dbPut/dbList/dbDelete）
+  lib/server/           # 加密存储层（双通道：huawei=RDS+DCS / Upstash / D1 / GitHub 兜底，上层只见 dbGet/dbPut/dbList/dbDelete）
   components/brain/     # 图谱 / [[双链]] 渲染器
 ```
 
@@ -105,6 +116,13 @@ src/
 - [ ] 同步升级：快照 last-write-wins → 字段级合并；数据量大后再评估 Postgres
 - [ ] Token 计量与用量面板 / 移动端 PWA + 复习推送
 - [ ] 增长：内容获客 / SEO
+
+## 开发过程（想法到应用）
+
+本项目以华为云 CodeArts 智能体完成本次华为云升级：需求规格 → 实现方案 → 任务规划 → 代码生成 → 问题修复 → 部署上线，全程按环节留痕（git 提交历史与 `docs/evidence/`）。
+
+- **实践文档**：[`docs/CODEARTS-PRACTICE.md`](docs/CODEARTS-PRACTICE.md)（五环节真实故事与证据索引）
+- **演示素材**：OBS 公开桶（视频/截图集，部署后回填链接；桶内无密钥、无真实用户数据）
 
 ## License
 
