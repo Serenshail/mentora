@@ -110,7 +110,8 @@ try {
   if ($subnets -and $subnets.subnets) { $subnet = $subnets.subnets | Where-Object { $_.name -eq $SubnetName } | Select-Object -First 1 }
   if ($subnet) { Step-Done "子网已存在：$($subnet.id)" }
   else {
-    $arg = ConvertTo-HcArg @{ project_id = $projectId; vpc_id = $vpc.id; "subnet.name" = $SubnetName; "subnet.cidr" = $SubnetCidr; "subnet.gateway_ip" = ($SubnetCidr -replace '\.0/24$', '.1') }
+    # KooCLI 规则：POST 体参数用点路径（subnet.vpc_id），平铺 vpc_id 会被拒"不正确的参数"
+    $arg = ConvertTo-HcArg @{ project_id = $projectId; "subnet.vpc_id" = $vpc.id; "subnet.name" = $SubnetName; "subnet.cidr" = $SubnetCidr; "subnet.gateway_ip" = ($SubnetCidr -replace '\.0/24$', '.1') }
     $subnet = Invoke-Hc "VPC CreateSubnet $arg"
     if (-not $subnet -or -not $subnet.subnet) { Step-Fail "创建子网失败" }
     $subnet = $subnet.subnet
@@ -180,7 +181,7 @@ try {
     $eipName = "mentora-rds-eip"
     $arg = ConvertTo-HcArg @{
       project_id = $projectId
-      "publicip.type" = "5_bgp"; "publicip.ip_address" = ""
+      "publicip.type" = "5_bgp"
       "bandwidth.name" = $eipName; "bandwidth.size" = 5; "bandwidth.share_type" = "PER"; "bandwidth.chargemode" = "bandwidth"
     }
     $eip = Invoke-Hc "VPC CreatePublicIp $arg"
