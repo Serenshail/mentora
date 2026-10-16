@@ -58,13 +58,23 @@ function Invoke-Hc {
   if ($ArgLine -notmatch "--cli-region=" -and $ArgLine -notmatch "^configure") { $ArgLine = "$ArgLine --cli-region=$Region" }
   if (-not $Quiet) { Step-Info "hcloud $ArgLine" }
   $out = cmd /c "hcloud $ArgLine 2>&1" | Out-String
-  if ($LASTEXITCODE -ne 0 -or $out -match "\[(USE|CLI|API)_ERROR\]") { Write-Host "    hcloud 失败：$($out.Trim())" -ForegroundColor Yellow; return $null }
+  # 剥 ANSI 转义（ESC[1;93m 这类——里面的 [ 会干扰 JSON 起点判断）
+  $esc = [char]27
+  $clean = ($out -replace ($esc + "\[[0-9;]*[A-Za-z]"), "")
+  # 失败判定：非零退出码 / [USE_ERROR] 类标记 / KooCLI API 错误诊断表格（无标记，只有 +---+ 边框）
+  if ($LASTEXITCODE -ne 0 -or $clean -match "\[(USE|CLI|API)_ERROR\]" -or $clean -match "\+---\+|请求诊断请参考") { Write-Host "    hcloud 失败：$($clean.Trim())" -ForegroundColor Yellow; return $null }
   # hcloud 会在 JSON 前打印版本选择等提示行——从首个 { 或 [ 截起再解析（兼容对象与数组返回）
-  $iB = $out.IndexOf("{"); $iA = $out.IndexOf("[")
+  $iB = $clean.IndexOf("{"); $iA = $clean.IndexOf("[")
   $idx = if ($iB -ge 0 -and ($iA -lt 0 -or $iB -lt $iA)) { $iB } else { $iA }
-  if ($idx -lt 0) { return $out.Trim() }
-  $json = $out.Substring($idx)
-  try { return ($json | ConvertFrom-Json) } catch { return $json.Trim() }
+  if ($idx -lt 0) { return $clean.Trim() }
+  $json = $clean.Substring($idx)
+  try { return ($json | ConvertFrom-Json) } catch {
+    # JSON 后可能跟尾巴（警告等）——尝试截到最后一个 } 或 ] 再解析
+    $lB = $json.LastIndexOf("}"); $lA = $json.LastIndexOf("]")
+    $l = if ($lB -ge 0 -and ($lA -lt 0 -or $lB -gt $lA)) { $lB } else { $lA }
+    if ($l -ge 0) { try { return ($json.Substring(0, $l + 1) | ConvertFrom-Json) } catch { } }
+    return $json.Trim()
+  }
 }
 function ConvertTo-HcArg { param($hashtable) ($hashtable.GetEnumerator() | ForEach-Object { "--$($_.Key)=$($_.Value)" }) -join " " }
 
