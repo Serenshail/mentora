@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server";
-import { PROVIDERS, type AIConfig } from "@/lib/ai/providers";
+import type { AIConfig } from "@/lib/ai/providers";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { verifySession, type SessionUser } from "@/lib/server/auth";
-import { assertSafePublicUrl } from "@/lib/server/url-guard";
 import { checkAndCountServerKey } from "@/lib/server/quota";
+import { resolveByok, serverConfig } from "@/lib/server/ai-config";
 import * as P from "@/lib/ai/prompts";
 import { logEvent } from "@/lib/server/config";
 import {
@@ -74,85 +74,7 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
   }
 }
 
-function envKeys(): Record<string, string> {
-  return {
-    zai: process.env.ZAI_API_KEY || "",
-    deepseek: process.env.DEEPSEEK_API_KEY || "",
-    moonshot: process.env.MOONSHOT_API_KEY || "",
-    openai: process.env.OPENAI_API_KEY || "",
-    maas: process.env.MAAS_API_KEY || "",
-  };
-}
-
-/* ============================================================
- * 模型配置解析（v17 安全重构）
- *
- * 旧版的洞：客户端头可以拼出"服务端 Key + 攻击者 baseUrl"的组合
- * （provider=deepseek 不带 key → env Key 装上车，baseurl 头无白名单 →
- * Bearer <部署者 Key> 直接发给攻击者 URL）——公开提款机。
- *
- * 新版铁律：**Key 与 baseUrl 必须同源**，不存在任何混配路径：
- *  · BYOK：客户端给了自己的 Key。baseUrl 只来自①内置服务商表（服务端常量）
- *    或②custom 端点（必须过 url-guard：公网 https + DNS 解析取证）。
- *    外发的 Authorization 里只有用户自己的 Key，泄的是他自己。
- *  · 服务端模式：客户端没给 Key。provider/baseUrl/model **全部来自 env**，
- *    客户端头一概无视。未配置任何 Key → 演示脚本（不花钱，不登录也能玩）。
- * ============================================================ */
-
-type ErrRes = { error: string; status: number };
-
-function resolveByok(req: NextRequest, userKey: string): Promise<AIConfig | ErrRes> | AIConfig | ErrRes {
-  const header = (n: string) => req.headers.get(n) || "";
-  const provider = header("x-mentora-provider");
-  const model = header("x-mentora-model");
-
-  if (provider === "custom") {
-    // custom 端点唯一允许客户端指定 baseUrl 的地方——必须过出网守卫（禁 https 之外/内网/元数据）
-    const raw = header("x-mentora-baseurl");
-    return (async () => {
-      const guard = await assertSafePublicUrl(raw, { allowHttp: false });
-      if (!guard.ok) return { error: `自定义端点不可用：${guard.reason}（需为公网 HTTPS 地址）`, status: 400 } satisfies ErrRes;
-      if (!model) return { error: "自定义端点请同时填写模型名", status: 400 } satisfies ErrRes;
-      return { provider: "custom", baseUrl: raw, apiKey: userKey, model } satisfies AIConfig;
-    })();
-  }
-
-  if (provider && provider !== "demo" && provider in PROVIDERS) {
-    const info = PROVIDERS[provider as keyof typeof PROVIDERS];
-    return { provider: info.id, baseUrl: info.baseUrl, apiKey: userKey, model: model || info.defaultModel };
-  }
-  return { error: "已提供 API Key，但没有选择对应的服务商", status: 400 };
-}
-
-function serverConfig(): AIConfig {
-  const keys = envKeys();
-  const envProvider = process.env.AI_PROVIDER || "";
-  let provider = "";
-  let apiKey = "";
-  let baseUrl = "";
-  if (envProvider === "custom" && process.env.AI_BASE_URL) {
-    provider = "custom";
-    baseUrl = process.env.AI_BASE_URL;
-    apiKey = process.env.CUSTOM_API_KEY || "";
-  } else if (envProvider === "maas" && process.env.MAAS_BASE_URL) {
-    // MaaS 专属/Region 端点可覆盖；缺省走注册表内置地址
-    provider = "maas";
-    baseUrl = process.env.MAAS_BASE_URL;
-    apiKey = process.env.MAAS_API_KEY || "";
-  } else if (envProvider && keys[envProvider]) {
-    provider = envProvider;
-    apiKey = keys[envProvider];
-  } else {
-    for (const [p, k] of Object.entries(keys)) {
-      if (k) { provider = p; apiKey = k; break; }
-    }
-  }
-  if (!provider || !apiKey) return { provider: "demo", baseUrl: "", apiKey: "", model: "demo" };
-  const info = PROVIDERS[provider as keyof typeof PROVIDERS] ?? PROVIDERS.demo;
-  const model = process.env.AI_MODEL || info.defaultModel;
-  if (!model) return { provider: "demo", baseUrl: "", apiKey: "", model: "demo" };
-  return { provider: info.id, baseUrl: baseUrl || info.baseUrl, apiKey, model };
-}
+/* 模型配置解析（envKeys/resolveByok/serverConfig）已抽至 @/lib/server/ai-config 以便单测 */
 
 function demoTask(
   task: string | undefined,
