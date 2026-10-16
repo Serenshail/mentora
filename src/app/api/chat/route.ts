@@ -355,6 +355,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  /* 任务分级路由：验收/复习/三重验收判分是全产品频次最高的 AI 调用，
+   * 走快模型省成本、降延迟。仅服务端 Key 生效——BYOK 用户自己选的模型不动；
+   * 未配 AI_CHEAP_MODEL 时保持原模型，行为不变。 */
+  const CHEAP_TASKS = new Set(["quiz-grade", "review-grade", "verify-score"]);
+  if (!byok && cfg.provider !== "demo" && body.task && CHEAP_TASKS.has(body.task)) {
+    const cheap = (process.env.AI_CHEAP_MODEL || "").trim();
+    if (cheap) cfg = { ...cfg, model: cheap };
+  }
+
   // 双契约：客户端发 args(新,核心任务)→服务端组装提示词；发 system(旧,council)→沿用。
   const system =
     body.args && Object.keys(body.args).length > 0
@@ -393,6 +402,7 @@ export async function POST(req: NextRequest) {
             route: "chat-usage",
             task: body.task ?? "generic",
             provider: cfg.provider,
+            model: cfg.model,
             account: session?.email ?? clientIp(req),
             byok: byok ? 1 : 0,
             prompt_tokens: stats.promptTokens ?? 0,

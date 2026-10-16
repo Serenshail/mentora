@@ -108,6 +108,21 @@ export async function sendCodeEmail(
     console.log(`[dev-mail] ${subject} → ${email}: ${code}`);
     return { sent: false, devCode: code };
   }
+  await sendEmail(
+    email,
+    subject,
+    `<p>你的验证码：<b style="font-size:20px;letter-spacing:4px">${code}</b>（10 分钟内有效）</p><p>如果不是你本人操作，请忽略本邮件。</p>`
+  );
+  return { sent: true };
+}
+
+/** 通用发信（Resend HTTP API）：验证码/周报共用。
+ *  未配 RESEND_API_KEY → dev 打日志、返回 sent:false；配 Key 后发送失败会抛错（调用方决定是否吞）。 */
+export async function sendEmail(to: string, subject: string, html: string): Promise<{ sent: boolean }> {
+  if (!hasSmtp()) {
+    console.log(`[dev-mail] ${subject} → ${to}`);
+    return { sent: false };
+  }
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -116,14 +131,14 @@ export async function sendCodeEmail(
     },
     body: JSON.stringify({
       from: process.env.MAIL_FROM || "Mentora <onboarding@resend.dev>",
-      to: [email],
+      to: [to],
       subject,
-      html: `<p>你的验证码：<b style="font-size:20px;letter-spacing:4px">${code}</b>（10 分钟内有效）</p><p>如果不是你本人操作，请忽略本邮件。</p>`,
+      html,
     }),
   });
   if (!res.ok) {
     console.error("[mail] send failed", res.status, (await res.text()).slice(0, 200));
-    throw new Error("验证码邮件发送失败，请稍后再试");
+    throw new Error("邮件发送失败，请稍后再试");
   }
   return { sent: true };
 }

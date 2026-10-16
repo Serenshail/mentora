@@ -10,6 +10,12 @@ const OPTIONAL = [
   "GITHUB_DB_TOKEN", "GITHUB_DB_REPO", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_D1_DATABASE_ID", "CLOUDFLARE_D1_API_TOKEN",
   "ADMIN_PASSWORD", "GITHUB_TOKEN",
+  /* 判分分级：quiz-grade/review-grade/verify-score 走此快模型（BYOK 不受影响） */
+  "AI_CHEAP_MODEL",
+  /* 复习召回：Cron 鉴权 + 发信 + 站点链接 */
+  "CRON_SECRET", "RESEND_API_KEY", "MAIL_FROM", "APP_URL",
+  /* 注册邀请码通道 */
+  "INVITE_CODE",
 ];
 
 export function envStatus() {

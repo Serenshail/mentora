@@ -340,4 +340,6 @@ export interface Settings {
   userName: string;
   /** 教练严厉度（Learn Anything 反馈策略）：standard=不放水不吹毛求疵；gentle=先具体肯定再指缺口，判分标准不变 */
   coachTone?: "standard" | "gentle";
+  /** 每周复习召回邮件（opt-in）：周一上午发送到期复习与上周完成情况；随数据快照加密同步 */
+  digestWeekly?: boolean;
 }

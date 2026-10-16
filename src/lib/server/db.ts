@@ -1,4 +1,4 @@
-﻿import "server-only";
+import "server-only";
 import crypto from "node:crypto";
 import zlib from "node:zlib";
 
@@ -434,4 +434,25 @@ export async function dbFeedbackSave(rec: {
       [rec.number, rec.type, rec.content, rec.contact, rec.page]
     );
   } catch { /* 双写失败不影响反馈主流程 */ }
+}
+
+/** 漏斗埋点落档（/api/track 专用）：D1 events 表，best-effort，失败只丢事件不抛错 */
+export async function dbEventSave(rec: {
+  name: string;
+  account: string;
+  path: string;
+  props: string;
+}): Promise<void> {
+  if (!hasD1()) return;
+  try {
+    await d1Init();
+    await d1Raw(
+      "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT DEFAULT (datetime('now')))",
+      []
+    );
+    await d1Raw(
+      "INSERT INTO events (name, account, path, props) VALUES (?, ?, ?, ?)",
+      [rec.name, rec.account, rec.path, rec.props]
+    );
+  } catch { /* 埋点绝不影响主流程 */ }
 }

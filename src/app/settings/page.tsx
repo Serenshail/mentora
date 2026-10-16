@@ -38,6 +38,7 @@ function AccountSection() {
   const setSettings = useAppStore((s) => s.setSettings);
   const coachTone = useAppStore(useShallow((s) => s.settings.coachTone ?? "standard"));
   const setTone = (t: "standard" | "gentle") => setSettings({ coachTone: t });
+  const digestWeekly = useAppStore((s) => s.settings.digestWeekly ?? false);
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
@@ -240,6 +241,39 @@ function AccountSection() {
               {t === "standard" ? "标准 · 直接" : "温和 · 先扬后抑"}
             </button>
           ))}
+        </div>
+      </Card>
+
+      {/* 复习召回：opt-in，随数据快照同步，仅发登录邮箱 */}
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-ink">每周复习邮件</p>
+            <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+              每周一上午一封：到期复习数量 + 上周完成情况。没有到期复习时不打扰。开关随你的加密数据同步，只发到登录邮箱，可在任何时候关闭。
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={digestWeekly}
+            aria-label="每周复习邮件"
+            onClick={() => {
+              setSettings({ digestWeekly: !digestWeekly });
+              toast.success(digestWeekly ? "已关闭每周复习邮件" : "已开启：每周一上午发送");
+            }}
+            className={cn(
+              "relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition",
+              digestWeekly ? "bg-accent" : "bg-black/15"
+            )}
+          >
+            <span
+              className={cn(
+                "absolute top-0.5 size-5 rounded-full bg-white shadow transition-all",
+                digestWeekly ? "left-[22px]" : "left-0.5"
+              )}
+            />
+          </button>
         </div>
       </Card>
 

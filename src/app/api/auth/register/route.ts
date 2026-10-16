@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import crypto from "node:crypto";
-import { dbGet, dbPut, emailHash } from "@/lib/server/db";
+import { dbGet, dbPut, dbEventSave, emailHash } from "@/lib/server/db";
 import { hashPassword, mintSession } from "@/lib/server/auth";
 import { checkEmailDeliverable } from "@/lib/email-check";
 import { verifyCode } from "@/lib/server/mail";
@@ -87,5 +87,6 @@ export async function POST(req: NextRequest) {
 
   const user = { userId: record.userId, email, name, sv: 0 };
   await mintSession(user);
+  await dbEventSave({ name: "signup", account: emailHash(email), path: "/api/auth/register", props: `{"invited":${invited}}` });
   return Response.json({ user: { userId: user.userId, email, name } });
 }

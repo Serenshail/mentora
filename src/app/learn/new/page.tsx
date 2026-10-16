@@ -8,6 +8,7 @@ import { useChat } from "@/lib/use-chat";
 import { extractJson, goalCardSchema, planSchema, type GoalCard } from "@/lib/ai/client";
 import { useAppStore } from "@/lib/store";
 import { masterDraftToPlan } from "@/lib/plan";
+import { track } from "@/lib/track";
 
 function planTitle(topic: string) {
   return `${topic} 学习计划`;
@@ -43,6 +44,7 @@ function IntakeInner() {
       const draft = store.goals.find((g) => g.id === resumeId && g.status === "draft");
       if (draft) {
         setTopic(draft.topic);
+        track("intake_start", { topic: draft.topic, resumed: true });
         setMessages(
           draft.intakeTranscript.map((t) => ({
             id: uid("m"),
@@ -71,6 +73,7 @@ function IntakeInner() {
       quizLog: [],
       intakeTranscript: [],
     });
+    track("intake_start", { topic: t, resumed: false });
     history.replaceState(null, "", `/learn/new?goal=${goalId}`);
     void send({
       args: { topic: t, userName },
@@ -141,6 +144,11 @@ function IntakeInner() {
       successCriteria: finalCard.successCriteria,
       status: "active",
     });
+    track("intake_complete", {
+      domainKind: finalCard.domainKind,
+      weeklyHours: finalCard.weeklyHours,
+      criteria: finalCard.successCriteria.length,
+    });
 
     await send({
       args: { mode: "master", cardJson: JSON.stringify(finalCard, null, 2) },
@@ -153,6 +161,7 @@ function IntakeInner() {
           const draft = masterPlanSchema.parse(extractJson(full));
           const plan = masterDraftToPlan(draft, finalCard);
           useAppStore.getState().setPlan(goalId, plan);
+          track("plan_generated", { phases: plan.phases.length });
           // 总计划入第二大脑关系链
           const store = useAppStore.getState();
           // 链接标题必须与阶段笔记实际标题完全一致(${planTitle} · ${phase.title}),否则点开是空占位

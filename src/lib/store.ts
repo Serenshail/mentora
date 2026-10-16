@@ -23,6 +23,7 @@ import type {
   Settings,
 } from "./types";
 import { todayISO, uid } from "./utils";
+import { track } from "./track";
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: "demo", // "自动"：跟随服务端配置，无配置时回退演示模式
@@ -333,8 +334,20 @@ export const useAppStore = create<AppState>()(
             return { ...g, plan };
           }),
         })),
-      setDayStatus: (goalId, dayId, status, opts) =>
-        set((s) => ({
+      setDayStatus: (goalId, dayId, status, opts) => {
+        if (status === "passed") {
+          /* 漏斗埋点：验收通过（含迁移门挂起）。在 set 外读旧状态，避免 StrictMode 重复发送 */
+          const g0 = get().goals.find((x) => x.id === goalId);
+          const d0 = g0?.plan?.days[dayId];
+          const ph0 = g0?.plan?.phases.find((p) => p.id === d0?.phaseId);
+          if (d0)
+            track("day_pass", {
+              dayNumber: ph0 ? ph0.dayIds.indexOf(dayId) + 1 : 0,
+              attempts: d0.attempts,
+              gated: Boolean(opts?.pendingUnlock),
+            });
+        }
+        return set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
             const plan = structuredClone(g.plan);
@@ -354,7 +367,8 @@ export const useAppStore = create<AppState>()(
               unlockNext({ ...g, plan }, dayId);
             return { ...g, plan };
           }),
-        })),
+        }));
+      },
       completeTransfer: (goalId, dayId, answer) =>
         set((s) => ({
           goals: s.goals.map((g) => {
@@ -671,6 +685,7 @@ export const useAppStore = create<AppState>()(
           due: c.due.toISOString(),
           last: c.last_review ? c.last_review.toISOString() : null,
         };
+        track("review_done", { ok });
         /* FSRS 新卡/重学的当日到期 → 顺延到明天（我们按天复习，不做分钟级） */
         const dueDate = new Date(c.due);
         const tomorrow = new Date(Date.now() + 86400000);

@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "e2e": "vitest run e2e"
+    "e2e": "vitest run e2e",
+    "eval": "node scripts/eval-grade.mjs"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
