@@ -94,35 +94,53 @@ export async function verifyCode(email: string, purpose: CodePurpose, input: str
 }
 
 export function hasSmtp(): boolean {
-  return Boolean(process.env.RESEND_API_KEY);
+  return Boolean(process.env.RESEND_API_KEY) || hasHuaweiMail();
 }
 
-/** 发信：有 RESEND_API_KEY 走 Resend；否则 dev 模式打日志并回 devCode（由路由决定能否外发） */
-export async function sendCodeEmail(
-  email: string,
-  code: string,
-  purpose: CodePurpose
-): Promise<{ sent: boolean; devCode?: string }> {
-  const subject =
-    purpose === "register" ? "Mentora 注册验证码" : "Mentora 重置密码验证码";
-  if (!hasSmtp()) {
-    console.log(`[dev-mail] ${subject} → ${email}: ${code}`);
-    return { sent: false, devCode: code };
+/* ---- 发信双轨（T-069，HW-S-07）：EMAIL_CHANNEL 显式切换，缺省 resend 行为与历史逐字节一致 ----
+ * resend：Resend HTTP API（既有通道）
+ * huawei：华为云侧发信——POST 到 FunctionGraph 发信中继（SMN_ENDPOINT_URL，
+ *   中继函数内经 SMTP/邮件推送落地；SMN 订阅制不适合事务验证码，故走函数中继形态）。
+ * 纪律不变：严格 opt-in / 无事不打扰 / 失败不中断（异常向上抛，由调用方决定吞否）；
+ * 两通道都未配置 → dev 模式打日志不外发（生产由路由 503 挡住）。 */
+
+type MailChannel = "resend" | "huawei";
+
+function hasHuaweiMail(): boolean {
+  return Boolean(process.env.SMN_ENDPOINT_URL);
+}
+
+export function emailChannel(): MailChannel {
+  if ((process.env.EMAIL_CHANNEL || "").trim().toLowerCase() === "huawei") return "huawei";
+  return "resend";
+}
+
+async function sendViaHuawei(to: string, subject: string, html: string): Promise<{ sent: boolean }> {
+  const endpoint = process.env.SMN_ENDPOINT_URL || "";
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.SMN_TOKEN || ""}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ to, subject, html }),
+  });
+  if (!res.ok) {
+    console.error("[mail:huawei] send failed", res.status, (await res.text()).slice(0, 200));
+    throw new Error("邮件发送失败，请稍后再试");
   }
-  await sendEmail(
-    email,
-    subject,
-    `<p>你的验证码：<b style="font-size:20px;letter-spacing:4px">${code}</b>（10 分钟内有效）</p><p>如果不是你本人操作，请忽略本邮件。</p>`
-  );
   return { sent: true };
 }
 
-/** 通用发信（Resend HTTP API）：验证码/周报共用。
- *  未配 RESEND_API_KEY → dev 打日志、返回 sent:false；配 Key 后发送失败会抛错（调用方决定是否吞）。 */
+/** 通用发信：EMAIL_CHANNEL=huawei 且配置中继 → 华为云通道；否则 Resend（配 Key）；
+ *  都未配 → dev 打日志、返回 sent:false。发送失败抛错（调用方决定是否吞）。 */
 export async function sendEmail(to: string, subject: string, html: string): Promise<{ sent: boolean }> {
   if (!hasSmtp()) {
     console.log(`[dev-mail] ${subject} → ${to}`);
     return { sent: false };
+  }
+  if (emailChannel() === "huawei" && hasHuaweiMail()) {
+    return sendViaHuawei(to, subject, html);
   }
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -141,5 +159,24 @@ export async function sendEmail(to: string, subject: string, html: string): Prom
     console.error("[mail] send failed", res.status, (await res.text()).slice(0, 200));
     throw new Error("邮件发送失败，请稍后再试");
   }
+  return { sent: true };
+}
+/** 验证码发信：无任何可用通道 → dev 模式打日志并回 devCode（由路由决定能否外发） */
+export async function sendCodeEmail(
+  email: string,
+  code: string,
+  purpose: CodePurpose
+): Promise<{ sent: boolean; devCode?: string }> {
+  const subject =
+    purpose === "register" ? "Mentora 注册验证码" : "Mentora 重置密码验证码";
+  if (!hasSmtp()) {
+    console.log(`[dev-mail] ${subject} → ${email}: ${code}`);
+    return { sent: false, devCode: code };
+  }
+  await sendEmail(
+    email,
+    subject,
+    `<p>你的验证码：<b style="font-size:20px;letter-spacing:4px">${code}</b>（10 分钟内有效）</p><p>如果不是你本人操作，请忽略本邮件。</p>`
+  );
   return { sent: true };
 }
