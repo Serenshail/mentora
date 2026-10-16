@@ -1,0 +1,326 @@
+﻿# ============================================================
+# Mentora 华为云部署 - Step2 开通云资源（用户本机执行）
+# 作用：AK/SK 配置 hcloud；按序开通 VPC/子网/安全组/RDS/DCS/SWR/CCE
+# 产物：deploy/hw/hw-resources.ps1（仅资源 ID/地址，不含任何密码）
+# 原则：已存在的资源直接复用（幂等）；密码只交互输入绝不写盘
+# ============================================================
+$ErrorActionPreference = "Stop"
+$RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$LogDir = Join-Path $RepoRoot "docs\evidence\logs"
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$LogFile = Join-Path $LogDir ("step2-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
+Start-Transcript -Path $LogFile | Out-Null
+
+# ============ 配置区（按需修改，默认与 docs/DEPLOY-HUAWEICLOUD.md 一致） ============
+$Region      = "cn-east-3"   # 华东-上海一
+$VpcName     = "mentora-vpc"
+$VpcCidr     = "192.168.0.0/16"
+$SubnetName  = "mentora-subnet"
+$SubnetCidr  = "192.168.0.0/24"
+$SgName      = "mentora-sg"
+$Az          = "$($Region)a"
+$RdsName     = "mentora-rds"
+$RdsFlavor   = "rds.pg.n1.large.2"   # 2vCPU/4GB 按需
+$RdsVolume   = 40
+$RdsPort     = 5432
+$RdsDbVer    = "15"
+$DcsName     = "mentora-redis"
+$DcsSpecCode = "redis.single.nc.tiny.h2"  # 1GB 单机按需
+$DcsCapacity = 1
+$DcsEngine   = "redis"
+$DcsVer      = "5.0"
+$CceName     = "mentora-autopilot"
+$SwrOrg      = "mentora"
+# ===================================================================================
+
+function Step-Done { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
+function Step-Fail { param($m) Write-Host "[FAIL] $m" -ForegroundColor Red; Write-Host "     修复后可重跑本脚本（已创建资源会复用）。日志：$LogFile" -ForegroundColor Yellow; Stop-Transcript | Out-Null; exit 1 }
+function Step-Info { param($m) Write-Host "[..] $m" -ForegroundColor Cyan }
+function Read-Secret { param($m) $s = Read-Host $m -AsSecureString; [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)) }
+
+# 执行 hcloud 命令：成功返回解析后的 JSON，失败返回 $null（打印错误）
+function Invoke-Hc {
+  param([string]$ArgLine, [switch]$Quiet)
+  if (-not $Quiet) { Step-Info "hcloud $ArgLine" }
+  $out = cmd /c "hcloud $ArgLine 2>&1" | Out-String
+  if ($LASTEXITCODE -ne 0) { Write-Host "    hcloud 失败：$($out.Trim())" -ForegroundColor Yellow; return $null }
+  try { return ($out | ConvertFrom-Json) } catch { return $out.Trim() }
+}
+function ConvertTo-HcArg { param($hashtable) ($hashtable.GetEnumerator() | ForEach-Object { "--$($_.Key)=$($_.Value)" }) -join " " }
+
+try {
+  Write-Host "=== Mentora Step2: 开通华为云资源（区域 $Region）==="
+
+  # ---- 0. 前置：hcloud 可用 ----
+  $hc = Get-Command hcloud -ErrorAction SilentlyContinue
+  if (-not $hc) { $hcloudExe = Join-Path $env:USERPROFILE "hcloud-cli\hcloud.exe"; if (Test-Path $hcloudExe) { $env:Path += ";$(Split-Path $hcloudExe)" } else { Step-Fail "未检测到 hcloud，请先执行 step1-install-tools.ps1" } }
+
+  # ---- 1. AK/SK 配置（不回显、不写盘；KooCLI 自行加密保存）----
+  Step-Info "配置 AK/SK（获取方式：控制台右上角'我的凭证' → 访问密钥 → 新增）"
+  $ak = Read-Host "  Access Key Id (AK)"
+  $sk = Read-Secret "  Secret Access Key (SK，输入不回显)"
+  if (-not $ak -or -not $sk) { Step-Fail "AK/SK 不能为空" }
+  $r = Invoke-Hc "configure set --ak=$ak --sk=$sk --region=$Region" -Quiet
+  if ($null -eq $r -and $LASTEXITCODE -ne 0) { Step-Fail "hcloud configure set 失败（AK/SK 可能无效）" }
+  $r = Invoke-Hc "configure list" -Quiet
+  Step-Done "AK/SK 已配置（KooCLI 加密保存，不落明文）"
+
+  # ---- 2. project_id ----
+  $projects = Invoke-Hc "IAM KeystoneListProjects" -Quiet
+  $projectId = $null
+  if ($projects -and $projects.projects) {
+    $p = $projects.projects | Where-Object { $_.region -eq $Region } | Select-Object -First 1
+    if ($p) { $projectId = $p.id }
+  }
+  if (-not $projectId) { Step-Fail "无法获取区域 $Region 的 project_id，请把日志贴回给助手排查" }
+  Step-Done "project_id = $projectId"
+
+  # ---- 3. VPC + 子网 ----
+  $vpcs = Invoke-Hc "VPC ListVpcs --limit=200" -Quiet
+  $vpc = $null
+  if ($vpcs -and $vpcs.vpcs) { $vpc = $vpcs.vpcs | Where-Object { $_.name -eq $VpcName } | Select-Object -First 1 }
+  if ($vpc) { Step-Done "VPC 已存在：$($vpc.id)" }
+  else {
+    $arg = ConvertTo-HcArg @{ project_id = $projectId; "vpc.name" = $VpcName; "vpc.cidr" = $VpcCidr }
+    $vpc = Invoke-Hc "VPC CreateVpc $arg"
+    if (-not $vpc -or -not $vpc.vpc) { Step-Fail "创建 VPC 失败（命令已打印，可把日志贴回排查）" }
+    $vpc = $vpc.vpc
+    Step-Done "VPC 已创建：$($vpc.id)"
+  }
+  Start-Sleep -Seconds 5
+  $subnets = Invoke-Hc "VPC ListSubnets --vpc_id=$($vpc.id) --limit=200" -Quiet
+  $subnet = $null
+  if ($subnets -and $subnets.subnets) { $subnet = $subnets.subnets | Where-Object { $_.name -eq $SubnetName } | Select-Object -First 1 }
+  if ($subnet) { Step-Done "子网已存在：$($subnet.id)" }
+  else {
+    $arg = ConvertTo-HcArg @{ project_id = $projectId; vpc_id = $vpc.id; "subnet.name" = $SubnetName; "subnet.cidr" = $SubnetCidr; "subnet.gateway_ip" = ($SubnetCidr -replace '\.0/24$', '.1') }
+    $subnet = Invoke-Hc "VPC CreateSubnet $arg"
+    if (-not $subnet -or -not $subnet.subnet) { Step-Fail "创建子网失败" }
+    $subnet = $subnet.subnet
+    Step-Done "子网已创建：$($subnet.id)"
+  }
+
+  # ---- 4. 安全组 + 入站规则（80/443 对外；其余按需）----
+  $sgs = Invoke-Hc "VPC ListSecurityGroups --limit=200" -Quiet
+  $sg = $null
+  if ($sgs -and $sgs.security_groups) { $sg = $sgs.security_groups | Where-Object { $_.name -eq $SgName } | Select-Object -First 1 }
+  if ($sg) { Step-Done "安全组已存在：$($sg.id)" }
+  else {
+    $arg = ConvertTo-HcArg @{ project_id = $projectId; "security_group.name" = $SgName; "security_group.vpc_id" = $vpc.id }
+    $sg = Invoke-Hc "VPC CreateSecurityGroup $arg"
+    if (-not $sg -or -not $sg.security_group) { Step-Fail "创建安全组失败" }
+    $sg = $sg.security_group
+    Step-Done "安全组已创建：$($sg.id)"
+  }
+  foreach ($port in @(80, 443)) {
+    $arg = ConvertTo-HcArg @{ project_id = $projectId; "security_group_rule.security_group_id" = $sg.id; "security_group_rule.direction" = "ingress"; "security_group_rule.protocol" = "tcp"; "security_group_rule.port_range_min" = $port; "security_group_rule.port_range_max" = $port; "security_group_rule.ethertype" = "IPv4"; "security_group_rule.remote_ip_prefix" = "0.0.0.0/0" }
+    Invoke-Hc "VPC CreateSecurityGroupRule $arg" -Quiet | Out-Null
+    # 409=规则已存在，忽略；其他错误不阻断（ELB 会兜底放行 80）
+  }
+  Step-Done "安全组入站规则已放行 80/443"
+
+  # ---- 5. RDS PostgreSQL（异步创建 + 轮询）----
+  $rdsList = Invoke-Hc "RDS ListInstances --limit=100" -Quiet
+  $rds = $null
+  if ($rdsList -and $rdsList.instances) { $rds = $rdsList.instances | Where-Object { $_.name -eq $RdsName } | Select-Object -First 1 }
+  if ($rds) {
+    Step-Done "RDS 已存在：$($rds.id)（状态 $($rds.status)）"
+  } else {
+    Write-Host "  RDS root 密码规则：8-32 位，至少含大写/小写/数字/特殊字符中三类，如 Mentora@2026"
+    $rdsPwd = Read-Secret "  设置 RDS root 密码（输入不回显）"
+    if ($rdsPwd.Length -lt 8) { Step-Fail "RDS 密码过短" }
+    $arg = ConvertTo-HcArg @{
+      project_id = $projectId; name = $RdsName
+      "datastore.type" = "PostgreSQL"; "datastore.version" = $RdsDbVer
+      mode = "Single"; flavor = $RdsFlavor
+      "volume.type" = "ULTRAHIGH"; "volume.size" = $RdsVolume
+      vpc_id = $vpc.id; subnet_id = $subnet.id; security_group_id = $sg.id
+      password = $rdsPwd; port = $RdsPort; availability_zone = $Az
+    }
+    $rds = Invoke-Hc "RDS CreateInstance $arg"
+    if (-not $rds) { Step-Fail "创建 RDS 失败（命令已打印，可把日志贴回排查）" }
+    $rdsList = Invoke-Hc "RDS ListInstances --limit=100" -Quiet
+    $rds = $rdsList.instances | Where-Object { $_.name -eq $RdsName } | Select-Object -First 1
+    Step-Done "RDS 创建任务已提交：$($rds.id)"
+  }
+  if ($rds.status -ne "ACTIVE") {
+    Step-Info "等待 RDS 就绪（首次创建约 10-20 分钟，期间可挂着干别的）..."
+    for ($i = 1; $i -le 60; $i++) {
+      Start-Sleep -Seconds 30
+      $rdsList = Invoke-Hc "RDS ListInstances --limit=100" -Quiet
+      $rds = $rdsList.instances | Where-Object { $_.id -eq $rds.id } | Select-Object -First 1
+      Write-Host "    RDS 状态：$($rds.status) ($($i*30)s)"
+      if ($rds.status -eq "ACTIVE") { break }
+      if ($rds.status -in @("FAILED","ABNORMAL")) { Step-Fail "RDS 进入异常状态 $($rds.status)" }
+    }
+    if ($rds.status -ne "ACTIVE") { Step-Fail "RDS 30 分钟未就绪，请到控制台查看（RDS → 实例管理）" }
+  }
+  Step-Done "RDS 就绪，内网地址 $($rds.private_ips -join ',')"
+
+  # ---- 6. 为 RDS 绑定公网 IP（迁移/初始化脚本需要从本机访问；迁移完成后可解绑）----
+  if (-not $rds.public_ips -or $rds.public_ips.Count -eq 0) {
+    Step-Info "RDS 尚无公网地址。创建 EIP 并绑定（用于 step4 建表/迁移，完成后可解绑省费）..."
+    $eipName = "mentora-rds-eip"
+    $arg = ConvertTo-HcArg @{
+      project_id = $projectId
+      "publicip.type" = "5_bgp"; "publicip.ip_address" = ""
+      "bandwidth.name" = $eipName; "bandwidth.size" = 5; "bandwidth.share_type" = "PER"; "bandwidth.chargemode" = "bandwidth"
+    }
+    $eip = Invoke-Hc "VPC CreatePublicIp $arg"
+    $eipAddr = $null; $eipId = $null
+    if ($eip -and $eip.publicip) { $eipAddr = $eip.publicip.public_ip_address; $eipId = $eip.publicip.id }
+    elseif ($eip -is [string] -and $eip -match '"public_ip_address":\s*"([^"]+)"') { $eipAddr = $Matches[1] }
+    if (-not $eipAddr) {
+      Write-Host "    EIP 自动创建未成功，请手动：VPC 控制台 → 弹性公网IP → 购买弹性公网IP（按带宽 5Mbit），然后 RDS 控制台 → 实例 → 连接管理 → 绑定公网地址" -ForegroundColor Yellow
+    } else {
+      Step-Info "EIP 已创建：$eipAddr，绑定到 RDS..."
+      $bindArg = ConvertTo-HcArg @{ project_id = $projectId; instance_id = $rds.id; "body.public_ip" = $eipAddr; "body.is_bind" = "true" }
+      Invoke-Hc "RDS SetPublicIp $bindArg" -Quiet | Out-Null
+      Start-Sleep -Seconds 20
+      $rdsList = Invoke-Hc "RDS ListInstances --limit=100" -Quiet
+      $rds = $rdsList.instances | Where-Object { $_.id -eq $rds.id } | Select-Object -First 1
+      Step-Done "RDS 公网地址：$($rds.public_ips -join ',')"
+    }
+  } else {
+    Step-Done "RDS 公网地址：$($rds.public_ips -join ',')"
+  }
+  Step-Info "提醒：RDS 公网访问需在'RDS → 连接管理 → 公网带宽/白名单'放行你本机出口 IP（比赛期间可临时 0.0.0.0/0，结束后收紧）"
+
+  # ---- 7. DCS Redis（异步创建 + 轮询）----
+  $dcsList = Invoke-Hc "DCS ListInstances --limit=100" -Quiet
+  $dcs = $null
+  if ($dcsList -and $dcsList.instances) { $dcs = $dcsList.instances | Where-Object { $_.name -eq $DcsName } | Select-Object -First 1 }
+  if ($dcs) {
+    Step-Done "DCS 已存在：$($dcs.instance_id)（状态 $($dcs.status)）"
+  } else {
+    Write-Host "  DCS 密码规则：8-32 位，含字母与数字，如 Mentora2026"
+    $dcsPwd = Read-Secret "  设置 DCS 访问密码（输入不回显）"
+    $arg = ConvertTo-HcArg @{
+      instance_name = $DcsName; engine = $DcsEngine; engine_version = $DcsVer
+      capacity = $DcsCapacity; spec_code = $DcsSpecCode
+      vpc_id = $vpc.id; subnet_id = $subnet.id; security_group_id = $sg.id
+      password = $dcsPwd; availability_zones = "[$Az]"
+    }
+    $dcs = Invoke-Hc "DCS CreateInstance $arg"
+    if (-not $dcs) { Step-Fail "创建 DCS 失败（命令已打印，可把日志贴回排查；单机规格名可按控制台可选值调整 `$DcsSpecCode）" }
+    $dcsList = Invoke-Hc "DCS ListInstances --limit=100" -Quiet
+    $dcs = $dcsList.instances | Where-Object { $_.name -eq $DcsName } | Select-Object -First 1
+    Step-Done "DCS 创建任务已提交：$($dcs.instance_id)"
+  }
+  if ($dcs.status -ne "RUNNING") {
+    Step-Info "等待 DCS 就绪（约 10-15 分钟）..."
+    for ($i = 1; $i -le 40; $i++) {
+      Start-Sleep -Seconds 30
+      $dcsList = Invoke-Hc "DCS ListInstances --limit=100" -Quiet
+      $dcs = $dcsList.instances | Where-Object { $_.instance_id -eq $dcs.instance_id } | Select-Object -First 1
+      Write-Host "    DCS 状态：$($dcs.status) ($($i*30)s)"
+      if ($dcs.status -eq "RUNNING") { break }
+      if ($dcs.status -in @("CREATEFAILED","ERROR")) { Step-Fail "DCS 进入异常状态 $($dcs.status)" }
+    }
+    if ($dcs.status -ne "RUNNING") { Step-Fail "DCS 20 分钟未就绪，请到控制台查看（DCS → 缓存实例）" }
+  }
+  $dcsHost = $dcs.ip; $dcsPort = 6379
+  Step-Done "DCS 就绪：${dcsHost}:${dcsPort}（REDIS_URL 用 redis://:<密码>@${dcsHost}:${dcsPort}/0，仅 VPC 内可连）"
+
+  # ---- 8. SWR 组织（CLI 优先，失败给控制台指引）----
+  $orgs = Invoke-Hc "SWR ListOrganizations" -Quiet
+  $orgExists = $false
+  if ($orgs) { $orgExists = ($orgs | Out-String) -match $SwrOrg }
+  if ($orgExists) { Step-Done "SWR 组织已存在：$SwrOrg" }
+  else {
+    $arg = ConvertTo-HcArg @{ namespace = $SwrOrg }
+    $r = Invoke-Hc "SWR CreateOrganization $arg" -Quiet
+    if ($r -or $LASTEXITCODE -eq 0) { Step-Done "SWR 组织已创建：$SwrOrg" }
+    else { Write-Host "    CLI 创建未成功，请手动：SWR 控制台 → 组织管理 → 新建组织，名称 $SwrOrg（然后重跑本脚本会识别为已存在）" -ForegroundColor Yellow }
+  }
+
+  # ---- 9. CCE Autopilot 集群（CLI 优先，失败给控制台指引）----
+  $clusters = Invoke-Hc "CCE ListAutopilotClusters" -Quiet
+  $cce = $null
+  if ($clusters -and $clusters.items) {
+    $cce = $clusters.items | Where-Object { $_.metadata.name -eq $CceName } | Select-Object -First 1
+    if (-not $cce) { $cce = $clusters.items | Where-Object { $_.metadata.name -eq $CceName } | Select-Object -First 1 }
+  }
+  if ($cce) { Step-Done "CCE Autopilot 集群已存在：$($cce.metadata.id)" }
+  else {
+    Step-Info "尝试 CLI 创建 Autopilot 集群 $CceName ..."
+    $arg = ConvertTo-HcArg @{
+      kind = "Cluster"; apiVersion = "v3"
+      "metadata.name" = $CceName
+      "spec.type" = "virtualmachine"; "spec.flavor" = "autopilot"; "spec.version" = "v1.28"
+      "spec.hostNetwork.vpc" = $vpc.id; "spec.hostNetwork.subnet" = $subnet.id
+      "spec.containerNetwork.cidr" = "172.16.0.0/20"
+    }
+    $r = Invoke-Hc "CCE CreateAutopilotCluster $arg" -Quiet
+    if ($r -or $LASTEXITCODE -eq 0) { Step-Done "CCE 创建任务已提交（Autopilot 约 10 分钟）" }
+    else {
+      Write-Host "    CLI 创建未成功（参数或版本差异）。请手动开通：" -ForegroundColor Yellow
+      Write-Host "      CCE 控制台 → 购买集群 → 标准 Autopilot 集群 → 区域 $Region / VPC $VpcName / 子网 $SubnetName → 其余默认购买"
+      Write-Host "      完成后重跑本脚本将自动识别并继续。"
+    }
+  }
+  $clusters = Invoke-Hc "CCE ListAutopilotClusters" -Quiet
+  $cceId = $null
+  if ($clusters -and $clusters.items) { $c0 = $clusters.items | Where-Object { $_.metadata.name -eq $CceName } | Select-Object -First 1; if ($c0) { $cceId = $c0.metadata.id } }
+
+  # ---- 10. 下载 kubeconfig（集群就绪后）----
+  $kubeConfig = Join-Path $env:USERPROFILE ".kube\config"
+  if ($cceId) {
+    Step-Info "尝试获取集群 kubeconfig..."
+    $r = Invoke-Hc "CCE CreateKubernetesClusterCert --cluster_id=$cceId --duration=365" -Quiet
+    $kcOk = $false
+    if ($r -is [string] -and $r -match "apiVersion:") {
+      New-Item -ItemType Directory -Force -Path (Split-Path $kubeConfig) | Out-Null
+      if (Test-Path $kubeConfig) { Copy-Item $kubeConfig "$kubeConfig.bak-$(Get-Date -Format yyyyMMddHHmmss)" }
+      [IO.File]::WriteAllText($kubeConfig, $r, (New-Object Text.UTF8Encoding $false))
+      $kcOk = $true
+    }
+    if ($kcOk) { Step-Done "kubeconfig 已写入 $kubeConfig" }
+    else { Write-Host "    自动获取未成功。请手动：CCE 控制台 → 集群 → 概览 → 'kubectl'按钮 → 下载 kubeconfig 覆盖 $kubeConfig（或者粘贴到该路径）" -ForegroundColor Yellow }
+  }
+
+  # ---- 11. MaaS 订阅（纯控制台项）+ FunctionGraph 提示 ----
+  Write-Host ""
+  Write-Host "—— 以下两项需控制台人工操作（CLI 不开放），完成后按回车继续 ——" -ForegroundColor Magenta
+  Read-Host "  [1] ModelArts 控制台 → ModelArts Studio(MaaS) → 订阅模型（如 DeepSeek-V3）→ 创建 API Key（记下来，step5 用）→ 完成后回车"
+  Read-Host "  [2] FunctionGraph + SMN 发信中继可暂缓（EMAIL_CHANNEL=resend 时不需要；要做华为发信时再看 deploy/functiongraph-cron.md）→ 回车继续"
+
+  # ---- 12. 生成资源清单文件（不含任何密码/密钥）----
+  $resPath = Join-Path $PSScriptRoot "hw-resources.ps1"
+  $rdsHostPub = if ($rds.public_ips -and $rds.public_ips.Count -gt 0) { $rds.public_ips[0] } else { "" }
+  $rdsHostPri = if ($rds.private_ips -and $rds.private_ips.Count -gt 0) { $rds.private_ips[0] } else { "" }
+  $content = @"
+# hw-resources.ps1 - Step2 生成的资源清单（仅 ID/地址，无凭据）
+# 由 step2-open-cloud.ps1 自动生成；已加入 .gitignore，请勿提交
+`$Region = "$Region"
+`$ProjectId = "$projectId"
+`$VpcId = "$($vpc.id)"
+`$SubnetId = "$($subnet.id)"
+`$SecurityGroupId = "$($sg.id)"
+`$RdsInstanceId = "$($rds.id)"
+`$RdsHostPublic = "$rdsHostPub"
+`$RdsHostPrivate = "$rdsHostPri"
+`$RdsPort = $RdsPort
+`$DcsInstanceId = "$($dcs.instance_id)"
+`$DcsHost = "$dcsHost"
+`$DcsPort = $dcsPort
+`$SwrOrg = "$SwrOrg"
+`$CceClusterId = "$cceId"
+`$CceClusterName = "$CceName"
+"@
+  [IO.File]::WriteAllText($resPath, $content, (New-Object Text.UTF8Encoding $true))
+  Step-Done "资源清单已生成：$resPath（已 gitignore）"
+
+  # ---- 13. 更新仓库 .gitignore ----
+  $gitignore = Join-Path $RepoRoot ".gitignore"
+  if ((Test-Path $gitignore) -and -not ((Get-Content $gitignore -Raw) -match "hw-resources\.ps1")) {
+    Add-Content $gitignore "`ndeploy/hw/hw-resources.ps1"
+    Step-Done "已将 hw-resources.ps1 加入 .gitignore"
+  }
+
+  Write-Host ""
+  Write-Host "=== Step2 完成。下一步：step3-build-push.ps1（构建镜像并推送 SWR）===" -ForegroundColor Cyan
+  Write-Host "日志已存：$LogFile"
+} finally {
+  Stop-Transcript | Out-Null
+}
