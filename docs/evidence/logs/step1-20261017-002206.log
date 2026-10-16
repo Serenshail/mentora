@@ -1,0 +1,34 @@
+﻿**********************
+Windows PowerShell 脚本开始
+开始时间: 20261017002206
+用户名: LAPTOP-F23GVVB6\haozhe
+RunAs 用户: LAPTOP-F23GVVB6\haozhe
+配置名称: 
+计算机: LAPTOP-F23GVVB6 (Microsoft Windows NT 10.0.26200.0)
+主机应用程序: C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -File deploy/hw/step1-install-tools.ps1
+进程 ID: 49544
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Mentora Step1: 工具检查（仓库根：D:\zcode\agent\mentora）===
+[OK] Node v24.14.1
+[OK] git version 2.53.0.windows.2
+[OK] Docker daemon 29.6.2
+[OK] kubectl v1.36.1
+[..] 未检测到 hcloud，开始安装到 C:\Users\haozhe\hcloud-cli ...
+[..] 尝试下载 https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/huaweicloud-cli-windows-amd64.zip
+[OK] hcloud 安装完成：C:\Users\haozhe\hcloud-cli\hcloud.exe
+[OK] 已将 C:\Users\haozhe\hcloud-cli 加入用户 PATH（新开终端生效；当前会话临时生效）
+
+=== Step1 全部通过。下一步：step2-open-cloud.ps1（开通云资源）===
+日志已存：D:\zcode\agent\mentora\docs\evidence\logs\step1-20261017-002206.log
+**********************
+Windows PowerShell 脚本结束
+结束时间: 20261017002228
+**********************
