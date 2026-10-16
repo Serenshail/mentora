@@ -2,6 +2,7 @@
 
 > 每条均已在本地构建（`npm run build` 通过）+ 生产服务器 + 浏览器实测通过。
 > 实测环境：Demo 模式（无 API Key）；接入真实模型后同一流程由 LLM 驱动。
+> 口径说明（华为云升级起）：「自动化」= CI 门禁/单测/vitest 回归锁；「人工实测」= 浏览器/真实环境操作。两类分开标注，不混填（HW-P-03/C-03）。
 
 ## A. 学习教练（来自原项目方法论）
 
@@ -68,6 +69,22 @@
 | F7 | 关系图谱：力导向布局、拖拽、点击开笔记、领域着色 | ✅ 组件实现 |
 | F8 | AI 建联：整库中找有思想联系的笔记并说明理由，采纳后建立双链 | ✅ 提示词+交互（宁缺毋滥，0-3 条） |
 | F9 | 旧数据自动迁移（v1 text → v2 title/body/links） | ✅ persist migrate |
+
+## G. 华为云升级（2026-10，AI 创新赛赛题 1）
+
+既有 A-F 共 38 条全部保留且不受改造影响（HW-P-03 红线）：双通道改造对上层 API/页面零签名变更，单测 81 passed 全绿。
+
+| # | 验收标准 | 口径 | 实测结果 |
+|---|----------|------|----------|
+| G1 | DB_CHANNEL 五通道路由正确（auto/huawei/upstash/d1/github，huawei 凭据缺失 fail-fast） | 自动化 | ✅ db-channel.test.ts 18 条回归锁 |
+| G2 | 模型层 maas 通道注册与配置解析（MAAS_BASE_URL 可覆盖、usage 白名单） | 自动化 | ✅ ai-config.test.ts 13 条 |
+| G3 | 发信双轨 EMAIL_CHANNEL（缺省 resend 行为不变；huawei 中继；失败纪律一致） | 自动化 | ✅ mail-channel.test.ts 8 条 |
+| G4 | RAG 向量混排：未配置/故障回退纯 BM25 与现状一致 | 自动化 | ✅ rag-hybrid.test.ts 8 条 |
+| G5 | /api/admin/stats 漏斗聚合（双通道读、无 PII、503 如实报） | 自动化 | ✅ chat-usage-aggregate.test.ts 4 条 |
+| G6 | 镜像 tag=git 短 sha 可追溯；CCE/ECS 清单语法有效 | 自动化 | ✅ 脚本校验+YAML 解析；实际部署 ⏳ |
+| G7 | /api/health 返回 channel.db/ai 与 build=git 短 sha | 自动化 | ✅ 类型与代码审查；部署后展示 ⏳ |
+| G8 | CI 五道门禁全绿（npm ci + tsc + lint + test + build） | 自动化 | ✅ tsc 0 错 / lint 0 错 / test 81 passed / build compiled（--webpack 本机记录） |
+| G9 | 华为云部署/迁移/回滚/定时/可观测实操（T-031/035/036/041/044/045/052/053/065/067/068） | 人工实测 | ⏳ 待真实云环境执行（编排与 SOP 已就绪，证据索引见 docs/evidence/INDEX.md） |
 
 ## 已知边界（v3 路线）
 
