@@ -5,6 +5,8 @@
 # 原则：已存在的资源直接复用（幂等）；密码只交互输入绝不写盘
 # ============================================================
 $ErrorActionPreference = "Stop"
+# hcloud 输出为 UTF-8，中文 Windows 控制台默认按 GBK 解码会乱码——本进程强制 UTF-8
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 $RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $LogDir = Join-Path $RepoRoot "docs\evidence\logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -53,7 +55,7 @@ function Read-Host {
 function Invoke-Hc {
   param([string]$ArgLine, [switch]$Quiet)
   # KooCLI 7.x：每条命令显式带 --cli-region 兜底；且 USE_ERROR/CLI_ERROR 退出码为 0，须按输出判失败
-  if ($ArgLine -notmatch "--cli-region=") { $ArgLine = "$ArgLine --cli-region=$Region" }
+  if ($ArgLine -notmatch "--cli-region=" -and $ArgLine -notmatch "^configure") { $ArgLine = "$ArgLine --cli-region=$Region" }
   if (-not $Quiet) { Step-Info "hcloud $ArgLine" }
   $out = cmd /c "hcloud $ArgLine 2>&1" | Out-String
   if ($LASTEXITCODE -ne 0 -or $out -match "\[(USE|CLI|API)_ERROR\]") { Write-Host "    hcloud 失败：$($out.Trim())" -ForegroundColor Yellow; return $null }
@@ -83,7 +85,8 @@ try {
   $projects = Invoke-Hc "IAM KeystoneListProjects" -Quiet
   $projectId = $null
   if ($projects -and $projects.projects) {
-    $p = $projects.projects | Where-Object { $_.region -eq $Region } | Select-Object -First 1
+    # KeystoneListProjects 返回的项目无 region 字段，标准区域项目名=区域名（如 cn-east-3），按 name 匹配
+    $p = $projects.projects | Where-Object { $_.name -eq $Region } | Select-Object -First 1
     if ($p) { $projectId = $p.id }
   }
   if (-not $projectId) { Step-Fail "无法获取区域 $Region 的 project_id，请把日志贴回给助手排查" }
