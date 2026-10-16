@@ -266,6 +266,76 @@ async function d1Delete(path: string): Promise<void> {
   await d1Raw(PREFIX_DELETE, [path, len, pre]);
 }
 
+/* ---------------- 通道 3：华为云 RDS PostgreSQL（huawei 主数据真源，HW-T-01/02） ----------------
+ * 免分块：PG TEXT 无 1MB 限制，大库单行直存；加密语义与 D1/Upstash 完全一致（密文透传）。
+ * 懒加载：未配置 DATABASE_URL 时不加载 pg 驱动，旧通道零感知。 */
+
+const DATABASE_URL = process.env.DATABASE_URL || "";
+const hasRds = () => Boolean(DATABASE_URL);
+
+type PgPool = { query: (sql: string, params?: (string | number | null)[]) => Promise<{ rows: Record<string, unknown>[] }> };
+let rdsPoolInst: PgPool | null = null;
+async function rdsPool(): Promise<PgPool> {
+  if (!rdsPoolInst) {
+    const { Pool } = await import("pg");
+    rdsPoolInst = new Pool({ connectionString: DATABASE_URL, max: 5 }) as unknown as PgPool;
+  }
+  return rdsPoolInst;
+}
+
+/** 冷启动懒建表：每个进程只跑一次 */
+let rdsReady: Promise<void> | null = null;
+function rdsInit(): Promise<void> {
+  rdsReady ??= (async () => {
+    const pool = await rdsPool();
+    await pool.query("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+  })();
+  return rdsReady;
+}
+
+async function rdsQuery<T = { k?: string; v?: string }>(sql: string, params: (string | number | null)[] = []): Promise<T[]> {
+  try {
+    const pool = await rdsPool();
+    const res = await pool.query(sql, params);
+    recordNetResult(true);
+    return res.rows as T[];
+  } catch (e) {
+    recordNetResult(false); // 连接/凭据/语句错误与 D1 同纪律：计入熔断
+    // 带语句头部（我们自己的固定 SQL 文本）；绝不带参数——参数含邮箱等键路径，不该进日志
+    throw new Error(`RDS 请求失败：${(e instanceof Error ? e.message : String(e)).slice(0, 180)} [${sql.slice(0, 70)}]`);
+  }
+}
+
+async function rdsGet(path: string): Promise<string | null> {
+  await rdsInit();
+  const rows = await rdsQuery<{ v?: string }>("SELECT v FROM kv WHERE k = $1", [path]);
+  const v = rows[0]?.v;
+  return v == null ? null : v;
+}
+
+async function rdsPut(path: string, content: string): Promise<void> {
+  await rdsInit();
+  // RDS 无 1MB 语句限制（PG TEXT 上限 1GB），单行直存；若从 D1 迁入的块行遗留，写入主行后清理
+  await rdsQuery("DELETE FROM kv WHERE substr(k, 1, $1) = $2", [`${path}#p`.length, `${path}#p`]);
+  await rdsQuery(
+    "INSERT INTO kv (k, v) VALUES ($1, $2) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+    [path, content]
+  );
+}
+
+async function rdsList(dir: string): Promise<string[]> {
+  await rdsInit();
+  const rows = await rdsQuery<{ k?: string }>("SELECT k FROM kv WHERE substr(k, 1, $1) = $2 ORDER BY k", [dir.length + 1, `${dir}/`]);
+  return (rows.map((r) => r.k ?? "").filter(Boolean) as string[])
+    .filter((k) => !k.includes("#")) // 迁移期防御：分块行不属于任何文件名
+    .map((k) => k.slice(dir.length + 1));
+}
+
+async function rdsDelete(path: string): Promise<void> {
+  await rdsInit();
+  await rdsQuery("DELETE FROM kv WHERE k = $1 OR substr(k, 1, $2) = $3", [path, `${path}#p`.length, `${path}#p`]);
+}
+
 /* ---------------- 回退通道：GitHub Contents API ---------------- */
 
 const REPO = process.env.GITHUB_DB_REPO || "";
