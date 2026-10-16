@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { dbGet, emailHash } from "./db";
+import { isProdDeploy } from "./deploy-env";
 
 const COOKIE = "mentora_session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 天
@@ -73,7 +74,7 @@ export async function setSessionCookie(user: SessionUser) {
   jar.set(COOKIE, createSessionToken(user), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.VERCEL_ENV === "production", // 本地 next start 走 http，避免 cookie 无法回传
+    secure: isProdDeploy(), // 本地 next start 走 http，避免 cookie 无法回传
     path: "/",
     maxAge: MAX_AGE,
   });

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { dbGet, dbPut, dbDelete, emailHash } from "@/lib/server/db";
 import { verifyPassword, mintSession } from "@/lib/server/auth";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
+import { deployEnv } from "@/lib/server/deploy-env";
 
 export const runtime = "nodejs";
 
@@ -23,7 +24,7 @@ const FAIL_MAX = 8;
 const LOCK_MS = 15 * 60_000;
 
 const failPath = (email: string) =>
-  `loginfail/${process.env.VERCEL_ENV || "dev"}/${emailHash(email)}.json`;
+  `loginfail/${deployEnv()}/${emailHash(email)}.json`;
 
 interface FailState {
   n: number;

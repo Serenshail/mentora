@@ -1,6 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { dbGet, dbPut, dbDelete, emailHash, hasHealthyRemoteDb } from "./db";
+import { deployEnv } from "./deploy-env";
 
 /* ============================================================
  * 邮箱验证码：生成/校验。
@@ -25,7 +26,7 @@ const TTL_MS = 10 * 60_000; // 10 分钟
 const MAX_ATTEMPTS = 5;
 
 const codePath = (purpose: CodePurpose, email: string): string =>
-  `code/${process.env.VERCEL_ENV || "dev"}/${purpose}/${emailHash(email.trim().toLowerCase())}.json`;
+  `code/${deployEnv()}/${purpose}/${emailHash(email.trim().toLowerCase())}.json`;
 
 /* 本地回退（仅无远端 KV 时启用） */
 const MEM = new Map<string, CodeEntry>();

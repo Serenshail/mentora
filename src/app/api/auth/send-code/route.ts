@@ -3,6 +3,7 @@ import { checkEmailDeliverable } from "@/lib/email-check";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { issueCode, sendCodeEmail, hasSmtp, type CodePurpose } from "@/lib/server/mail";
 import { dbGet, emailHash } from "@/lib/server/db";
+import { isProdDeploy } from "@/lib/server/deploy-env";
 
 export const runtime = "nodejs";
 
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
   const code = await issueCode(email, purpose);
   try {
     const { sent, devCode } = await sendCodeEmail(email, code, purpose);
-    if (!sent && process.env.VERCEL_ENV === "production" && !hasSmtp()) {
+    if (!sent && isProdDeploy() && !hasSmtp()) {
       // 生产没配发信服务：注册/找回都该明确失败，而不是静默给出验证码
       return Response.json({ error: "发信服务未配置，暂时无法发送验证码，请稍后再试" }, { status: 503 });
     }

@@ -1,6 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { dbGet, dbPut, hasHealthyRemoteDb } from "./db";
+import { deployEnv } from "./deploy-env";
 
 /* ============================================================
  * 令牌桶限流（防暴力破解 / 滥用 / 简单 DoS）
@@ -49,7 +50,7 @@ export function rateLimit(key: string, opts: RateLimitOpts): boolean {
 }
 
 const rlPath = (key: string): string =>
-  `rl/${process.env.VERCEL_ENV || "dev"}/${crypto
+  `rl/${deployEnv()}/${crypto
     .createHash("sha256")
     .update(key)
     .digest("hex")

@@ -18,6 +18,8 @@ const OPTIONAL = [
   "CRON_SECRET", "RESEND_API_KEY", "MAIL_FROM", "APP_URL",
   /* 注册邀请码通道 */
   "INVITE_CODE",
+  /* 部署环境标识与构建版本（容器/华为云注入；Vercel 平台自动注入同义变量） */
+  "DEPLOY_ENV", "APP_BUILD_SHA",
 ];
 
 export function envStatus() {

@@ -1,4 +1,5 @@
 import { envStatus } from "@/lib/server/config";
+import { buildSha } from "@/lib/server/deploy-env";
 
 export const runtime = "nodejs";
 
@@ -10,7 +11,7 @@ export async function GET() {
       ok: s.ok,
       missing: s.missing,
       optionalConfigured: s.presentCount,
-      build: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local",
+      build: buildSha(),
     },
     { headers: { "Cache-Control": "no-store" } }
   );

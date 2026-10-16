@@ -4,6 +4,7 @@ import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { verifySession, type SessionUser } from "@/lib/server/auth";
 import { checkAndCountServerKey } from "@/lib/server/quota";
 import { resolveByok, serverConfig } from "@/lib/server/ai-config";
+import { isDeployed } from "@/lib/server/deploy-env";
 import * as P from "@/lib/ai/prompts";
 import { logEvent } from "@/lib/server/config";
 import {
@@ -245,8 +246,8 @@ export async function POST(req: NextRequest) {
   }
 
   const byok = (req.headers.get("x-mentora-key") ?? "").trim();
-  // 仅 Vercel 部署（production/preview）强制登录；本地开发（VERCEL_ENV 未设）放行，保 e2e 冒烟链路
-  const enforceLogin = Boolean(process.env.VERCEL_ENV);
+  // 仅部署环境（production/preview）强制登录；本地开发（DEPLOY_ENV/VERCEL_ENV 未设）放行，保 e2e 冒烟链路
+  const enforceLogin = isDeployed();
   // 没带 cookie 就不必查库吊销版本（省一次读）
   let session: SessionUser | null = null;
   if (req.headers.get("cookie")?.includes("mentora_session")) session = await verifySession();

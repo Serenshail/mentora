@@ -3,6 +3,7 @@ import { dbGet, dbPut, dbDelete, emailHash } from "@/lib/server/db";
 import { verifyPassword, hashPassword } from "@/lib/server/auth";
 import { verifyCode } from "@/lib/server/mail";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
+import { deployEnv } from "@/lib/server/deploy-env";
 
 export const runtime = "nodejs";
 
@@ -71,7 +72,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 清掉防爆破锁定：用户已通过邮箱验证码证明所有权
-  const failPath = `loginfail/${process.env.VERCEL_ENV || "dev"}/${emailHash(email)}.json`;
+  const failPath = `loginfail/${deployEnv()}/${emailHash(email)}.json`;
   await dbDelete(failPath, null).catch(() => {});
 
   return Response.json({ ok: true, revokedOtherDevices: true });
