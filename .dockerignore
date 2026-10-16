@@ -1,0 +1,35 @@
+# 依赖与构建产物（镜像内重装/重建）
+node_modules
+.next
+out
+build
+
+# 凭据与本地环境（绝不入镜像）
+.env*
+!.env.example
+
+# 版本控制与工具产物
+.git
+.github
+.codeartsdoer
+.vercel
+.vscode
+.idea
+
+# 本地临时与日志
+*.log
+.tmp-*
+smoke.txt
+lt.txt
+lt-inject.json
+tsconfig.tsbuildinfo
+
+# 文档与测试（不影响运行时）
+docs
+ACCEPTANCE.md
+CHANGELOG.md
+COMMERCIAL.md
+ENGINEERING.md
+playwright-report
+test-results
+coverage
