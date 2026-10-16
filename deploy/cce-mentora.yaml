@@ -1,0 +1,125 @@
+# ============================================================
+# Mentora CCE Autopilot 编排清单（主方案）
+# - Deployment：SWR 镜像（tag=git 短 sha，见 scripts/deploy-hw-build.mjs）
+#   env 凭据仅经 Secret 注入，本清单不含任何明文凭据（可安全入仓）
+# - Service：ELB 公网暴露（autocreate 独享型）
+# - HPA：最小 1 实例（比赛 demo 流量下避免多实例成本）
+# 部署前一次性创建 Secret（值全部为占位，按实际填写，勿提交真实值）：
+#   kubectl create secret generic mentora-secrets \
+#     --from-literal=AUTH_SECRET=<32bytes-random> \
+#     --from-literal=DATABASE_URL=<rds-postgresql-url> \
+#     --from-literal=REDIS_URL=<dcs-redis-url> \
+#     --from-literal=MAAS_API_KEY=<maas-key> \
+#     --from-literal=CRON_SECRET=<cron-secret> \
+#     --from-literal=APP_URL=<https://your-demo-url> \
+#     --from-literal=ADMIN_PASSWORD=<admin-password> \
+#     --from-literal=RESEND_API_KEY=<resend-key> \
+#     --from-literal=MAIL_FROM=<noreply@your-domain>
+# 可选旧通道兜底按需追加：UPSTASH_REDIS_REST_URL/TOKEN、CLOUDFLARE_*、
+#   GITHUB_DB_TOKEN/REPO、GITHUB_TOKEN、DEEPSEEK_API_KEY 等（见 .env.example）
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mentora
+  labels:
+    app: mentora
+spec:
+  replicas: 1
+  # 滚动升级：先起新实例再停旧实例，demo 不中断（回滚 = kubectl rollout undo）
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: mentora
+  template:
+    metadata:
+      labels:
+        app: mentora
+    spec:
+      containers:
+        - name: mentora
+          # <IMAGE> 由 scripts/deploy-hw-build.mjs 以 SWR 地址:git短sha 替换
+          image: swr.cn-east-3.myhuaweicloud.com/mentora/mentora:PLACEHOLDER
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: mentora-secrets
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: DEPLOY_ENV
+              value: production
+            - name: TZ
+              value: Asia/Shanghai
+            - name: DB_CHANNEL
+              value: huawei
+            - name: AI_PROVIDER
+              value: maas
+            # 每次部署由脚本替换为 git 短 sha（与镜像 tag 一致），/api/health 展示
+            - name: APP_BUILD_SHA
+              value: PLACEHOLDER
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mentora
+  labels:
+    app: mentora
+  annotations:
+    # 自动创建公网 ELB（独享型，按带宽计费 5Mbit）；已有 ELB 时改用
+    # kubernetes.io/elb.id: <existing-elb-id> 并删除 autocreate
+    kubernetes.io/elb.class: performance
+    kubernetes.io/elb.autocreate: >-
+      {"type":"public","bandwidth_name":"mentora-bandwidth","bandwidth_chargemode":"bandwidth","bandwidth_size":5,"bandwidth_sharetype":"PER","eip_type":"5_bgp"}
+    kubernetes.io/elb.port: "80"
+spec:
+  type: LoadBalancer
+  selector:
+    app: mentora
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mentora
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mentora
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

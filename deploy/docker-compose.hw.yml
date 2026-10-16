@@ -1,0 +1,36 @@
+# ============================================================
+# Mentora ECS 备选编排（同一 Dockerfile，应用侧与 CCE 零差异）
+# 用法（ECS 上）：
+#   docker login swr.cn-east-3.myhuaweicloud.com   # SWR 登录指令见控制台
+#   IMAGE=<swr镜像地址:git短sha> docker compose -f deploy/docker-compose.hw.yml up -d
+# 凭据经 .env.hw 注入（该文件放 ECS 本机，绝不入仓/入镜像），样例键见 .env.example
+# 日志：stdout json-file 限转，由 ICAgent/UniAgent 采集上报 LTS
+# ============================================================
+services:
+  mentora:
+    image: ${IMAGE:-swr.cn-east-3.myhuaweicloud.com/mentora/mentora:latest}
+    container_name: mentora
+    restart: unless-stopped
+    ports:
+      - "80:3000"
+    env_file:
+      - .env.hw
+    environment:
+      NODE_ENV: production
+      DEPLOY_ENV: production
+      TZ: Asia/Shanghai
+      DB_CHANNEL: huawei
+      AI_PROVIDER: maas
+      # 部署时以 git 短 sha 覆盖：APP_BUILD_SHA=<short-sha>
+      APP_BUILD_SHA: ${APP_BUILD_SHA:-local}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
