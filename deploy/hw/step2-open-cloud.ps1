@@ -53,16 +53,24 @@ function Read-Host {
 
 # 执行 hcloud 命令：成功返回解析后的 JSON，失败返回 $null（打印错误）
 function Invoke-Hc {
-  param([string]$ArgLine, [switch]$Quiet)
+  param([string]$ArgLine, [switch]$Quiet, [string]$BodyJson = "")
   # KooCLI 7.x：每条命令显式带 --cli-region 兜底；且 USE_ERROR/CLI_ERROR 退出码为 0，须按输出判失败
   if ($ArgLine -notmatch "--cli-region=" -and $ArgLine -notmatch "^configure") { $ArgLine = "$ArgLine --cli-region=$Region" }
+  $jPath = $null
+  if ($BodyJson) {
+    # 与 KooCLI 系统参数同名的 API 参数（RDS/DCS 的 password、RDS 的 mode）命令行传不进去（非交互管道下交互确认被拒）——
+    # 官方出路是 --cli-jsonInput（hcli_05_12）：全部 API 参数写临时 JSON 文件，用完即删
+    $jPath = Join-Path $env:TEMP ("hc-body-" + [Guid]::NewGuid().ToString("N") + ".json")
+    [IO.File]::WriteAllText($jPath, $BodyJson, (New-Object Text.UTF8Encoding $false))
+    $ArgLine = "$ArgLine --cli-jsonInput=$jPath"
+  }
   if (-not $Quiet) {
-    # 回显脱敏：密码/密钥类参数只打掩码，绝不进日志
-    $safe = $ArgLine -replace "(--(password|cli-secret-key|cli-access-key|sk)=)[^\s]+", '$1***'
+    # 回显脱敏：密码/密钥类参数只打掩码，临时 JSON 路径也不外显，绝不进日志
+    $safe = ($ArgLine -replace "--cli-jsonInput=\S+", "--cli-jsonInput=<temp>") -replace "(--(password|cli-secret-key|cli-access-key|sk)=)[^\s]+", '$1***'
     Step-Info "hcloud $safe"
   }
-  # 预喂 3 个"b"（目标API参数）：KooCLI 对与系统参数同名的 API 参数（如 RDS 的 --password）会交互确认 a/b/c，非交互管道下 EOF 会炸
-  $out = cmd /c "(echo b & echo b & echo b) | hcloud $ArgLine 2>&1" | Out-String
+  $out = cmd /c "hcloud $ArgLine 2>&1" | Out-String
+  if ($jPath) { Remove-Item -Force $jPath -ErrorAction SilentlyContinue }
   # 剥 ANSI 转义（ESC[1;93m 这类——里面的 [ 会干扰 JSON 起点判断）
   $esc = [char]27
   $clean = ($out -replace ($esc + "\[[0-9;]*[A-Za-z]"), "")
@@ -169,15 +177,16 @@ try {
     Write-Host "  RDS root 密码规则：8-32 位，至少含大写/小写/数字/特殊字符中三类，如 Mentora@2026"
     $rdsPwd = Read-Secret "  设置 RDS root 密码（输入不回显）"
     if ($rdsPwd.Length -lt 8) { Step-Fail "RDS 密码过短" }
-    $arg = ConvertTo-HcArg @{
-      project_id = $projectId; name = $RdsName; region = $Region
-      "datastore.type" = "PostgreSQL"; "datastore.version" = $RdsDbVer
+    # password/mode 与 KooCLI 系统参数同名——走 --cli-jsonInput（临时 JSON，用后即删）
+    $rdsBody = @{
+      name = $RdsName; region = $Region
+      datastore = @{ type = "PostgreSQL"; version = $RdsDbVer }
       mode = "Single"; flavor_ref = $RdsFlavor
-      "volume.type" = "ULTRAHIGH"; "volume.size" = $RdsVolume
+      volume = @{ type = "ULTRAHIGH"; size = [int]$RdsVolume }
       vpc_id = $vpc.id; subnet_id = $subnet.id; security_group_id = $sg.id
-      password = $rdsPwd; port = $RdsPort; availability_zone = $Az
-    }
-    $rds = Invoke-Hc "RDS CreateInstance $arg"
+      password = $rdsPwd; port = [int]$RdsPort; availability_zone = $Az
+    } | ConvertTo-Json -Depth 4
+    $rds = Invoke-Hc "RDS CreateInstance" -BodyJson $rdsBody
     if (-not $rds) { Step-Fail "创建 RDS 失败（命令已打印，可把日志贴回排查）" }
     $rdsList = Invoke-Hc "RDS ListInstances --limit=100" -Quiet
     $rds = $rdsList.instances | Where-Object { $_.name -eq $RdsName } | Select-Object -First 1
@@ -235,14 +244,14 @@ try {
   } else {
     Write-Host "  DCS 密码规则：8-32 位，含字母与数字，如 Mentora2026"
     $dcsPwd = Read-Secret "  设置 DCS 访问密码（输入不回显）"
-    # DCS：参数名 name（非 instance_name）、az_codes.[0]（非 availability_zones）、无 security_group_id
-    $arg = ConvertTo-HcArg @{
+    # DCS 的 password 同样与系统参数同名——走 --cli-jsonInput
+    $dcsBody = @{
       name = $DcsName; engine = $DcsEngine; engine_version = $DcsVer
-      capacity = $DcsCapacity; spec_code = $DcsSpecCode
+      capacity = [int]$DcsCapacity; spec_code = $DcsSpecCode
       vpc_id = $vpc.id; subnet_id = $subnet.id
-      password = $dcsPwd; "az_codes.[0]" = $Az
-    }
-    $dcs = Invoke-Hc "DCS CreateInstance $arg"
+      password = $dcsPwd; az_codes = @($Az)
+    } | ConvertTo-Json -Depth 4
+    $dcs = Invoke-Hc "DCS CreateInstance" -BodyJson $dcsBody
     if (-not $dcs) { Step-Fail "创建 DCS 失败（命令已打印，可把日志贴回排查；单机规格名可按控制台可选值调整 `$DcsSpecCode）" }
     $dcsList = Invoke-Hc "DCS ListInstances --limit=100" -Quiet
     $dcs = $dcsList.instances | Where-Object { $_.name -eq $DcsName } | Select-Object -First 1
