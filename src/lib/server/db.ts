@@ -1,6 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import zlib from "node:zlib";
+import type Redis from "ioredis";
 
 /* ============================================================
  * 存储层（已收口：上层只见 dbGet/dbPut/dbList/dbDelete）
@@ -334,6 +335,81 @@ async function rdsList(dir: string): Promise<string[]> {
 async function rdsDelete(path: string): Promise<void> {
   await rdsInit();
   await rdsQuery("DELETE FROM kv WHERE k = $1 OR substr(k, 1, $2) = $3", [path, `${path}#p`.length, `${path}#p`]);
+}
+
+/* ---------------- 通道 4：华为云 DCS Redis（huawei 跨进程状态，HW-T-05/S-02） ----------------
+ * 协议与 Upstash 通道语义一致（GET/SET/SCAN/DEL + AES-256-GCM 加密值）。
+ * 键原生 TTL 仅为存储清理（code 11min / quota 36h / rl 1h / loginfail 30min）；
+ * 行为权威判断仍是值内 expiresAt/窗口字段（应用层双保险保持不变）。 */
+
+const REDIS_URL = process.env.REDIS_URL || "";
+const hasDcs = () => Boolean(REDIS_URL);
+
+let dcsInst: Redis | null = null;
+async function dcs(): Promise<Redis> {
+  if (!dcsInst) {
+    const { default: RedisCtor } = await import("ioredis");
+    dcsInst = new RedisCtor(REDIS_URL, {
+      maxRetriesPerRequest: 2,
+      connectTimeout: 5_000,
+      retryStrategy: (times: number) => Math.min(times * 200, 2_000),
+    });
+    // ioredis error 事件必须监听，否则连接抖动会以 unhandled 'error' 事件击穿进程
+    dcsInst.on("error", () => { /* 网络层错误由 dcsCmd 统一计熔断 */ });
+  }
+  return dcsInst;
+}
+
+async function dcsCmd<T>(fn: (r: Redis) => Promise<T>, what: string): Promise<T> {
+  try {
+    const r = await dcs();
+    const out = await fn(r);
+    recordNetResult(true);
+    return out;
+  } catch (e) {
+    recordNetResult(false); // 连接/超时/凭据错误与 Upstash 同纪律：累计 2 次开熔断
+    throw new Error(`DCS ${what}失败：${(e instanceof Error ? e.message : String(e)).slice(0, 180)}`);
+  }
+}
+
+const DCS_TTL_SECONDS: [string, number][] = [
+  ["code/", 660], // 验证码 11min
+  ["quota/", 36 * 3600], // 服务端 Key 配额 36h
+  ["rl/", 3600], // 限流桶 1h
+  ["loginfail/", 1800], // 登录失败锁定 30min（> 15min 锁定窗口）
+];
+function dcsTtl(path: string): number | null {
+  for (const [pre, sec] of DCS_TTL_SECONDS) {
+    if (path.startsWith(pre)) return sec;
+  }
+  return null;
+}
+
+async function dcsGet(path: string): Promise<string | null> {
+  return dcsCmd((r) => r.get(path), "读取");
+}
+
+async function dcsPut(path: string, content: string): Promise<void> {
+  const ttl = dcsTtl(path);
+  await dcsCmd((r) => (ttl ? r.set(path, content, "EX", ttl) : r.set(path, content)), "写入");
+}
+
+async function dcsList(dir: string): Promise<string[]> {
+  // SCAN 迭代（不用 KEYS：DCS 生产实例禁用/高成本）；语义对齐 Upstash 通道的 dir/*.json
+  return dcsCmd(async (r) => {
+    let out: string[] = [];
+    let cursor = "0";
+    do {
+      const [c, keys] = await r.scan(cursor, "MATCH", `${dir}/*.json`, "COUNT", 200);
+      cursor = c;
+      out = out.concat(keys);
+    } while (cursor !== "0");
+    return out.map((k) => k.slice(dir.length + 1));
+  }, "列目录");
+}
+
+async function dcsDelete(path: string): Promise<void> {
+  await dcsCmd((r) => r.del(path), "删除");
 }
 
 /* ---------------- 回退通道：GitHub Contents API ---------------- */
