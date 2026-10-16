@@ -56,8 +56,13 @@ function Invoke-Hc {
   param([string]$ArgLine, [switch]$Quiet)
   # KooCLI 7.x：每条命令显式带 --cli-region 兜底；且 USE_ERROR/CLI_ERROR 退出码为 0，须按输出判失败
   if ($ArgLine -notmatch "--cli-region=" -and $ArgLine -notmatch "^configure") { $ArgLine = "$ArgLine --cli-region=$Region" }
-  if (-not $Quiet) { Step-Info "hcloud $ArgLine" }
-  $out = cmd /c "hcloud $ArgLine 2>&1" | Out-String
+  if (-not $Quiet) {
+    # 回显脱敏：密码/密钥类参数只打掩码，绝不进日志
+    $safe = $ArgLine -replace "(--(password|cli-secret-key|cli-access-key|sk)=)[^\s]+", '$1***'
+    Step-Info "hcloud $safe"
+  }
+  # 预喂 3 个"b"（目标API参数）：KooCLI 对与系统参数同名的 API 参数（如 RDS 的 --password）会交互确认 a/b/c，非交互管道下 EOF 会炸
+  $out = cmd /c "(echo b & echo b & echo b) | hcloud $ArgLine 2>&1" | Out-String
   # 剥 ANSI 转义（ESC[1;93m 这类——里面的 [ 会干扰 JSON 起点判断）
   $esc = [char]27
   $clean = ($out -replace ($esc + "\[[0-9;]*[A-Za-z]"), "")
