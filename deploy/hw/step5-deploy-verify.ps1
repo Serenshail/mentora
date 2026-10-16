@@ -48,8 +48,11 @@ try {
   $secretArgs += "--from-literal=DATABASE_URL=postgresql://root:${pwdEsc}@${RdsHostPrivate}:${RdsPort}/postgres?sslmode=disable"
   $dcsPwd = Read-Secret "  DCS 密码（step2 设置，输入不回显）"
   $secretArgs += "--from-literal=REDIS_URL=redis://:${dcsPwd}@${DcsHost}:${DcsPort}/0"
-  $maasKey = Read-Secret "  MaaS API Key（MaaS 控制台创建，输入不回显）"
-  if ($maasKey) { $secretArgs += "--from-literal=MAAS_API_KEY=$maasKey" }
+  $aiKey = Read-Secret "  CUSTOM_API_KEY 模型 Key（输入不回显；回车跳过=AI 回落演示模式）"
+  if ($aiKey) { $secretArgs += "--from-literal=CUSTOM_API_KEY=$aiKey" }
+  # AI_PROVIDER=custom 的端点与模型名（非凭据；换模型通道时同步改这两行与 CCE 清单 AI_PROVIDER）
+  $secretArgs += "--from-literal=AI_BASE_URL=https://tokenrhythm.studio/v1"
+  $secretArgs += "--from-literal=AI_MODEL=qwen3.8-flash"
   $cronSecret = New-RandomHex 16
   $secretArgs += "--from-literal=CRON_SECRET=$cronSecret"
   Write-Host "  CRON_SECRET（周报触发 Bearer，已自动生成，请自行保存）：$cronSecret" -ForegroundColor Yellow

@@ -11,7 +11,7 @@ $LogFile = Join-Path $LogDir ("step1-" + (Get-Date -Format "yyyyMMdd-HHmmss") + 
 Start-Transcript -Path $LogFile | Out-Null
 
 function Step-Done { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
-function Step-Fail { param($m) Write-Host "[FAIL] $m" -ForegroundColor Red; Stop-Transcript | Out-Null; exit 1 }
+function Step-Fail { param($m) Write-Host "[FAIL] $m" -ForegroundColor Red; exit 1 }
 function Step-Info { param($m) Write-Host "[..] $m" -ForegroundColor Cyan }
 
 try {
@@ -38,10 +38,9 @@ try {
   if (-not $dockerOk) {
     Step-Info "Docker daemon 未运行。尝试启动 Docker Desktop（首次启动约 1-2 分钟）..."
     $dd = Join-Path $env:LOCALAPPDATA "Docker\Docker Desktop.exe"
-    if (-not (Test-Path $dd)) {
-      $ddAlt = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-      if (Test-Path $ddAlt) { $dd = $ddAlt } else { Step-Fail "未找到 Docker Desktop，请安装：https://www.docker.com/products/docker-desktop/" }
-    }
+    if (-not (Test-Path $dd)) { $dd = Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\Docker Desktop.exe" }
+    if (-not (Test-Path $dd)) { $dd = "C:\Program Files\Docker\Docker\Docker Desktop.exe" }
+    if (-not (Test-Path $dd)) { Step-Fail "未找到 Docker Desktop，请安装：https://www.docker.com/products/docker-desktop/" }
     Start-Process -FilePath $dd
     $ready = $false
     for ($i = 1; $i -le 24; $i++) {
@@ -74,8 +73,9 @@ try {
     $zipPath = Join-Path $env:TEMP "hcloud_windows_64.zip"
     # KooCLI 官方下载（Windows 64 位）；候选地址逐个尝试，全部失败则给出手动指引
     $urls = @(
-      "https://obs.cn-north-4.myhuaweicloud.com/hwcloudcli/hcloud_windows_64.zip",
-      "https://obs.cn-north-4.myhuaweicloud.com/hwcloudcli/hcloud.exe"
+      # 2026-10 官方新地址（旧 hwcloudcli/hcloud_windows_64.zip 已 404）
+      "https://cn-north-4-hdn-koocli.obs.cn-north-4.myhuaweicloud.com/cli/latest/huaweicloud-cli-windows-amd64.zip",
+      "https://obs.cn-north-4.myhuaweicloud.com/hwcloudcli/hcloud_windows_64.zip"
     )
     $downloaded = $false
     foreach ($u in $urls) {

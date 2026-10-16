@@ -282,7 +282,7 @@ try {
   # ---- 11. MaaS 订阅（纯控制台项）+ FunctionGraph 提示 ----
   Write-Host ""
   Write-Host "—— 以下两项需控制台人工操作（CLI 不开放），完成后按回车继续 ——" -ForegroundColor Magenta
-  Read-Host "  [1] ModelArts 控制台 → ModelArts Studio(MaaS) → 订阅模型（如 DeepSeek-V3）→ 创建 API Key（记下来，step5 用）→ 完成后回车"
+  Read-Host "  [1]（可跳过）MaaS 订阅+API Key：当前 AI_PROVIDER=custom 走自备模型端点，不需要；仅当切回 maas 通道才做 → 回车继续"
   Read-Host "  [2] FunctionGraph + SMN 发信中继可暂缓（EMAIL_CHANNEL=resend 时不需要；要做华为发信时再看 deploy/functiongraph-cron.md）→ 回车继续"
 
   # ---- 12. 生成资源清单文件（不含任何密码/密钥）----

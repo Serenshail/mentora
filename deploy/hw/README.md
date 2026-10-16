@@ -10,7 +10,7 @@
 # Step1 工具检查与安装（node/git/docker/kubectl/hcloud，缺啥装啥）
 powershell -ExecutionPolicy Bypass -File deploy\hw\step1-install-tools.ps1
 
-# Step2 开通云资源（AK/SK → VPC/安全组/RDS/DCS/SWR/CCE Autopilot + MaaS 控制台项）
+# Step2 开通云资源（AK/SK → VPC/安全组/RDS/DCS/SWR/CCE Autopilot；MaaS 项已可跳过）
 #   耗时最长（RDS+DCS 异步创建约 15-30 分钟，可挂着干别的）
 powershell -ExecutionPolicy Bypass -File deploy\hw\step2-open-cloud.ps1
 
@@ -37,7 +37,7 @@ powershell -ExecutionPolicy Bypass -File deploy\hw\step5-deploy-verify.ps1
 | 项 | 位置 | 产出 |
 | --- | --- | --- |
 | AK/SK | 控制台右上角"我的凭证"→ 访问密钥 | step2 输入 |
-| MaaS 模型订阅 + API Key | ModelArts 控制台 → ModelArts Studio(MaaS) | step5 输入 MAAS_API_KEY |
+| 模型 API Key（自备 OpenAI 兼容端点；当前通道=custom，见 .env.example） | 你自己的模型服务商控制台 | step5 输入 CUSTOM_API_KEY |
 | RDS 公网白名单 | RDS → 连接管理（step2 有提醒） | 放行本机出口 IP |
 | （可选）FunctionGraph 发信中继 | 见 `deploy/functiongraph-cron.md` | 暂缓不影响主链路 |
 

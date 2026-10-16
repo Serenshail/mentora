@@ -9,7 +9,9 @@
 #     --from-literal=AUTH_SECRET=<32bytes-random> \
 #     --from-literal=DATABASE_URL=<rds-postgresql-url> \
 #     --from-literal=REDIS_URL=<dcs-redis-url> \
-#     --from-literal=MAAS_API_KEY=<maas-key> \
+#     --from-literal=CUSTOM_API_KEY=<model-key> \
+#     --from-literal=AI_BASE_URL=<openai-compatible-endpoint> \
+#     --from-literal=AI_MODEL=<model-name> \
 #     --from-literal=CRON_SECRET=<cron-secret> \
 #     --from-literal=APP_URL=<https://your-demo-url> \
 #     --from-literal=ADMIN_PASSWORD=<admin-password> \
@@ -59,7 +61,7 @@ spec:
             - name: DB_CHANNEL
               value: huawei
             - name: AI_PROVIDER
-              value: maas
+              value: custom
             # 每次部署由脚本替换为 git 短 sha（与镜像 tag 一致），/api/health 展示
             - name: APP_BUILD_SHA
               value: PLACEHOLDER
