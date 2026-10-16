@@ -330,6 +330,7 @@ export type ProviderId =
   | "deepseek"
   | "moonshot"
   | "openai"
+  | "maas"
   | "custom";
 
 export interface Settings {

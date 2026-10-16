@@ -51,6 +51,15 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
     modelHints: ["gpt-5-mini", "gpt-5", "gpt-4.1", "gpt-4o-mini"],
     keyUrl: "https://platform.openai.com/api-keys",
   },
+  maas: {
+    id: "maas",
+    name: "华为云 MaaS (ModelArts Studio)",
+    baseUrl: "https://api.modelarts-maas.com/v1",
+    defaultModel: "DeepSeek-V3.1",
+    modelHints: ["DeepSeek-V3.1", "DeepSeek-V3", "DeepSeek-R1", "Qwen3-235B-A22B"],
+    keyUrl: "https://console.huaweicloud.com/modelarts/#/maas/home",
+    note: "华为云 MaaS OpenAI 兼容端点；API Key 在 ModelArts Studio 控制台「鉴权管理」创建",
+  },
   custom: {
     id: "custom",
     name: "自定义 OpenAI 兼容端点",
