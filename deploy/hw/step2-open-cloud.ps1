@@ -59,7 +59,12 @@ function Invoke-Hc {
   if (-not $Quiet) { Step-Info "hcloud $ArgLine" }
   $out = cmd /c "hcloud $ArgLine 2>&1" | Out-String
   if ($LASTEXITCODE -ne 0 -or $out -match "\[(USE|CLI|API)_ERROR\]") { Write-Host "    hcloud 失败：$($out.Trim())" -ForegroundColor Yellow; return $null }
-  try { return ($out | ConvertFrom-Json) } catch { return $out.Trim() }
+  # hcloud 会在 JSON 前打印版本选择等提示行——从首个 { 或 [ 截起再解析（兼容对象与数组返回）
+  $iB = $out.IndexOf("{"); $iA = $out.IndexOf("[")
+  $idx = if ($iB -ge 0 -and ($iA -lt 0 -or $iB -lt $iA)) { $iB } else { $iA }
+  if ($idx -lt 0) { return $out.Trim() }
+  $json = $out.Substring($idx)
+  try { return ($json | ConvertFrom-Json) } catch { return $json.Trim() }
 }
 function ConvertTo-HcArg { param($hashtable) ($hashtable.GetEnumerator() | ForEach-Object { "--$($_.Key)=$($_.Value)" }) -join " " }
 
