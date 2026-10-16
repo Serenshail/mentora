@@ -440,19 +440,87 @@ async function ghApi(path: string, method: string, body?: unknown): Promise<{ st
   return { status: res.status, json };
 }
 
+/* ---------------- 分发层：DB_CHANNEL 显式路由（HW-T-01/05 双通道） ----------------
+ * auto（缺省）：隐式优先级 Upstash → D1 → GitHub（历史行为，本地开发零破坏）
+ * huawei：按键前缀分流——跨进程状态（rl/ code/ quota/ loginfail/）→ DCS；
+ *         数据真源（users/ data/ versions/ 及其余）→ RDS
+ * upstash / d1 / github：显式锁定旧通道（凭据缺失即 fail-fast，绝不静默换道）
+ * 切换 env 即切通道，无需代码变更；旧通道不被移除或劣化。 */
+
+type DbChannelMode = "auto" | "huawei" | "upstash" | "d1" | "github";
+type RoutedChannel = "upstash" | "d1" | "github" | "rds" | "dcs";
+
+const DCS_PREFIXES = ["rl/", "code/", "quota/", "loginfail/"];
+function isDcsPath(path: string): boolean {
+  return DCS_PREFIXES.some((p) => path.startsWith(p));
+}
+
+function dbChannelEnv(): DbChannelMode {
+  const v = (process.env.DB_CHANNEL || "auto").trim().toLowerCase();
+  return (["auto", "huawei", "upstash", "d1", "github"] as const).includes(v as DbChannelMode)
+    ? (v as DbChannelMode)
+    : "auto";
+}
+
+function routeOf(path: string): RoutedChannel {
+  const mode = dbChannelEnv();
+  if (mode === "huawei") return isDcsPath(path) ? "dcs" : "rds";
+  if (mode === "upstash") {
+    if (!hasUpstash()) throw new Error("DB_CHANNEL=upstash 但 UPSTASH_REDIS_REST_* 未配置");
+    return "upstash";
+  }
+  if (mode === "d1") {
+    if (!hasD1()) throw new Error("DB_CHANNEL=d1 但 CLOUDFLARE_D1_* 未配置");
+    return "d1";
+  }
+  if (mode === "github") {
+    if (!REPO || !TOKEN) throw new Error("DB_CHANNEL=github 但 GITHUB_DB_* 未配置");
+    return "github";
+  }
+  if (hasUpstash()) return "upstash";
+  if (hasD1()) return "d1";
+  return "github";
+}
+
+/** 当前生效通道（health 展示用；仅枚举名，无敏感值） */
+export function dbChannel(): string {
+  const mode = dbChannelEnv();
+  if (mode === "huawei") return "huawei";
+  if (mode !== "auto") return mode;
+  if (hasUpstash()) return "upstash";
+  if (hasD1()) return "d1";
+  return "github";
+}
+
 /* ---------------- 统一接口（上层只用这四个） ---------------- */
 
 /** 读（404/null 返回 null）；加密内容自动解密 */
 export async function dbGet<T>(path: string, opts: { encrypted?: boolean } = {}): Promise<(T & { _sha?: string }) | null> {
-  if (hasUpstash()) {
+  const ch = routeOf(path);
+
+  if (ch === "upstash") {
     const raw = await upstashGet(path);
     if (raw == null) return null;
     const value = opts.encrypted ? decrypt<T>(raw) : (JSON.parse(raw) as T);
     return value as T & { _sha?: string };
   }
 
-  if (hasD1()) {
+  if (ch === "d1") {
     const raw = await d1Get(path);
+    if (raw == null) return null;
+    const value = opts.encrypted ? decrypt<T>(raw) : (JSON.parse(raw) as T);
+    return value as T & { _sha?: string };
+  }
+
+  if (ch === "rds") {
+    const raw = await rdsGet(path);
+    if (raw == null) return null;
+    const value = opts.encrypted ? decrypt<T>(raw) : (JSON.parse(raw) as T);
+    return value as T & { _sha?: string };
+  }
+
+  if (ch === "dcs") {
+    const raw = await dcsGet(path);
     if (raw == null) return null;
     const value = opts.encrypted ? decrypt<T>(raw) : (JSON.parse(raw) as T);
     return value as T & { _sha?: string };
@@ -467,22 +535,33 @@ export async function dbGet<T>(path: string, opts: { encrypted?: boolean } = {})
   return { ...(value as object), _sha: j.sha } as T & { _sha?: string };
 }
 
-/** 写（Upstash 天然原子；GitHub 通道带 sha 乐观并发，冲突 last-write-wins） */
+/** 写（Upstash/DCS 天然原子；GitHub 通道带 sha 乐观并发，冲突 last-write-wins） */
 export async function dbPut<T>(
   path: string,
   value: T,
   opts: { encrypted?: boolean; sha?: string | null; overwriteOnConflict?: boolean } = {}
 ): Promise<{ sha: string }> {
   const content = opts.encrypted ? encrypt(value) : JSON.stringify(value, null, 1);
+  const ch = routeOf(path);
 
-  if (hasUpstash()) {
+  if (ch === "upstash") {
     await upstashSet(path, content);
     return { sha: "upstash" };
   }
 
-  if (hasD1()) {
+  if (ch === "d1") {
     await d1Put(path, content);
     return { sha: "d1" };
+  }
+
+  if (ch === "rds") {
+    await rdsPut(path, content);
+    return { sha: "rds" };
+  }
+
+  if (ch === "dcs") {
+    await dcsPut(path, content);
+    return { sha: "dcs" };
   }
 
   let res = await ghApi(path, "PUT", {
@@ -503,18 +582,32 @@ export async function dbPut<T>(
   return { sha: (res.json as { content?: { sha?: string } })?.content?.sha ?? "" };
 }
 
-/** 列目录，返回 [{name, sha}]（sha 在 Upstash 通道为占位） */
+/** 列目录，返回 [{name, sha}]（sha 在 KV 类通道为占位） */
 export async function dbList(dir: string): Promise<{ name: string; sha: string }[]> {
-  if (hasUpstash()) {
+  const ch = routeOf(`${dir}/_`);
+
+  if (ch === "upstash") {
     const names = await upstashList(dir);
     return names.map((name) => ({ name, sha: "upstash" }));
   }
 
-  if (hasD1()) {
+  if (ch === "d1") {
     const names = await d1List(dir);
     return names
       .filter((n) => n.endsWith(".json"))
       .map((name) => ({ name, sha: "d1" }));
+  }
+
+  if (ch === "rds") {
+    const names = await rdsList(dir);
+    return names
+      .filter((n) => n.endsWith(".json"))
+      .map((name) => ({ name, sha: "rds" }));
+  }
+
+  if (ch === "dcs") {
+    const names = await dcsList(dir);
+    return names.map((name) => ({ name, sha: "dcs" }));
   }
 
   const { status, json } = await ghApi(dir, "GET");
@@ -527,13 +620,25 @@ export async function dbList(dir: string): Promise<{ name: string; sha: string }
 
 /** 删（404/不存在视为成功） */
 export async function dbDelete(path: string, sha: string | null): Promise<void> {
-  if (hasUpstash()) {
+  const ch = routeOf(path);
+
+  if (ch === "upstash") {
     await upstashDelete(path);
     return;
   }
 
-  if (hasD1()) {
+  if (ch === "d1") {
     await d1Delete(path);
+    return;
+  }
+
+  if (ch === "rds") {
+    await rdsDelete(path);
+    return;
+  }
+
+  if (ch === "dcs") {
+    await dcsDelete(path);
     return;
   }
 
@@ -555,8 +660,9 @@ export function emailHash(email: string): string {
   return crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 24);
 }
 
-/** 是否存在跨进程可用的远端 KV（D1/Upstash 任一）；纯 GitHub 兜底时返回 false（写放大不值当） */
+/** 是否存在跨进程可用的远端 KV（huawei 模式看 DCS；其余模式 D1/Upstash 任一）；纯 GitHub 兜底时返回 false（写放大不值当） */
 export function hasRemoteDb(): boolean {
+  if (dbChannelEnv() === "huawei") return hasDcs();
   return hasUpstash() || hasD1();
 }
 
