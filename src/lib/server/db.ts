@@ -464,7 +464,14 @@ function dbChannelEnv(): DbChannelMode {
 
 function routeOf(path: string): RoutedChannel {
   const mode = dbChannelEnv();
-  if (mode === "huawei") return isDcsPath(path) ? "dcs" : "rds";
+  if (mode === "huawei") {
+    if (isDcsPath(path)) {
+      if (!hasDcs()) throw new Error("DB_CHANNEL=huawei 但 REDIS_URL 未配置（跨进程状态通道）");
+      return "dcs";
+    }
+    if (!hasRds()) throw new Error("DB_CHANNEL=huawei 但 DATABASE_URL 未配置（数据真源通道）");
+    return "rds";
+  }
   if (mode === "upstash") {
     if (!hasUpstash()) throw new Error("DB_CHANNEL=upstash 但 UPSTASH_REDIS_REST_* 未配置");
     return "upstash";
