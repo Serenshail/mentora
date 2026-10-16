@@ -105,6 +105,65 @@ export function retrieve(query: string, docs: RagDoc[], k = 3): RagHit[] {
   return reranked.sort((a, b) => b.score - a.score).slice(0, k);
 }
 
+/* ========= 向量混排（T-070，HW-M-09）=========
+ * BM25 + 向量的 RRF（Reciprocal Rank Fusion）合并。rag.ts 保持客户端可引：
+ * 不 import server-only 模块，嵌入函数由服务端调用方注入（见 lib/ai/embedding.ts）。
+ * 未注入 / 嵌入失败 → 与现状完全一致的纯 BM25 结果（上层无感回退）。 */
+
+/** RRF 混排纯函数：k=60 为论文标准常数；同 id 跨列表贡献累加 */
+export function rrfMerge(bm25Hits: RagHit[], vectorOrder: string[], k = 3, rrfK = 60): RagHit[] {
+  const byId = new Map<string, RagHit>();
+  const add = (id: string, rank: number) => {
+    const hit = bm25Hits.find((h) => h.doc.id === id) ?? byId.get(id);
+    if (!hit) return;
+    byId.set(id, { ...hit, score: (byId.get(id)?.score ?? 0) + 1 / (rrfK + rank) });
+  };
+  bm25Hits.forEach((h, i) => add(h.doc.id, i + 1));
+  vectorOrder.forEach((id, i) => add(id, i + 1));
+  const merged = [...byId.values()];
+  /* 打分窗口截断到两个列表并集后统一重排，取前 k */
+  return merged.sort((a, b) => b.score - a.score).slice(0, k);
+}
+
+/* 余弦相似度（内联：rag.ts 客户端可引，不得 import server-only 模块） */
+function cosine(a: number[], b: number[]): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
+}
+
+/** 异步混排入口（服务端检索用）：embed 注入；返回 null / 抛错 → 纯 BM25（行为与 retrieve 一致） */
+export async function retrieveAsync(
+  query: string,
+  docs: RagDoc[],
+  k: number,
+  embed: (texts: string[]) => Promise<number[][] | null>
+): Promise<RagHit[]> {
+  const clean = dedupeConflicts(docs);
+  const bm25Hits = bm25Search(query, clean, k * 2);
+  try {
+    const qv = await embed([query]);
+    if (qv && qv[0]) {
+      const docTexts = bm25Hits.map((h) => `${h.doc.title}\n${h.doc.body.slice(0, 2000)}`);
+      const dv = await embed(docTexts);
+      if (dv) {
+        const vectorOrder = bm25Hits
+          .map((h, i) => ({ id: h.doc.id, sim: cosine(qv[0], dv[i]) }))
+          .sort((a, b) => b.sim - a.sim)
+          .map((x) => x.id);
+        return rrfMerge(bm25Hits, vectorOrder, k);
+      }
+    }
+  } catch { /* 嵌入链路任何故障 → 回退 BM25 */ }
+  return bm25Hits.sort((a, b) => b.score - a.score).slice(0, k);
+}
+
 /* ========= LLMWiki 导航式检索 =========
  * 知识库被视为一张"编译型 wiki"而非散文档堆：检索不是纯相似性匹配,
  * 而是 BM25 种子 → 沿 [[wikilink]] 一出/一进扩展(图导航) → hub/MOC 与标签加权。
