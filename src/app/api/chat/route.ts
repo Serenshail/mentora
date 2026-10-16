@@ -80,6 +80,7 @@ function envKeys(): Record<string, string> {
     deepseek: process.env.DEEPSEEK_API_KEY || "",
     moonshot: process.env.MOONSHOT_API_KEY || "",
     openai: process.env.OPENAI_API_KEY || "",
+    maas: process.env.MAAS_API_KEY || "",
   };
 }
 
@@ -133,6 +134,11 @@ function serverConfig(): AIConfig {
     provider = "custom";
     baseUrl = process.env.AI_BASE_URL;
     apiKey = process.env.CUSTOM_API_KEY || "";
+  } else if (envProvider === "maas" && process.env.MAAS_BASE_URL) {
+    // MaaS 专属/Region 端点可覆盖；缺省走注册表内置地址
+    provider = "maas";
+    baseUrl = process.env.MAAS_BASE_URL;
+    apiKey = process.env.MAAS_API_KEY || "";
   } else if (envProvider && keys[envProvider]) {
     provider = envProvider;
     apiKey = keys[envProvider];
@@ -208,8 +214,8 @@ async function fetchUpstream(
   parentSignal?: AbortSignal
 ): Promise<Response> {
   const url = `${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`;
-  // OpenAI 官方与 DeepSeek 支持流式回带 usage；其余 provider 保守不发这个字段（防 400）
-  const wantsUsage = cfg.provider === "deepseek" || cfg.provider === "openai";
+  // OpenAI 官方、DeepSeek、华为云 MaaS（OpenAI 兼容）支持流式回带 usage；其余 provider 保守不发（防 400）
+  const wantsUsage = cfg.provider === "deepseek" || cfg.provider === "openai" || cfg.provider === "maas";
   let lastErr = "";
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const ctrl = new AbortController();
