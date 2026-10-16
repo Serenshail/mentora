@@ -76,7 +76,7 @@ function Invoke-Hc {
     return $json.Trim()
   }
 }
-function ConvertTo-HcArg { param($hashtable) ($hashtable.GetEnumerator() | ForEach-Object { "--$($_.Key)=$($_.Value)" }) -join " " }
+function ConvertTo-HcArg { param($hashtable) ($hashtable.GetEnumerator() | Where-Object { $null -ne $_.Value -and "$($_.Value)" -ne "" } | ForEach-Object { "--$($_.Key)=$($_.Value)" }) -join " " }
 
 try {
   Write-Host "=== Mentora Step2: 开通华为云资源（区域 $Region）==="
@@ -139,14 +139,16 @@ try {
   if ($sgs -and $sgs.security_groups) { $sg = $sgs.security_groups | Where-Object { $_.name -eq $SgName } | Select-Object -First 1 }
   if ($sg) { Step-Done "安全组已存在：$($sg.id)" }
   else {
-    $arg = ConvertTo-HcArg @{ project_id = $projectId; "security_group.name" = $SgName; "security_group.vpc_id" = $vpc.id }
+    # v3 API 安全组不绑 VPC（无 security_group.vpc_id 参数，传了被拒"不正确的参数"）
+    $arg = ConvertTo-HcArg @{ project_id = $projectId; "security_group.name" = $SgName }
     $sg = Invoke-Hc "VPC CreateSecurityGroup $arg"
     if (-not $sg -or -not $sg.security_group) { Step-Fail "创建安全组失败" }
     $sg = $sg.security_group
     Step-Done "安全组已创建：$($sg.id)"
   }
   foreach ($port in @(80, 443)) {
-    $arg = ConvertTo-HcArg @{ project_id = $projectId; "security_group_rule.security_group_id" = $sg.id; "security_group_rule.direction" = "ingress"; "security_group_rule.protocol" = "tcp"; "security_group_rule.port_range_min" = $port; "security_group_rule.port_range_max" = $port; "security_group_rule.ethertype" = "IPv4"; "security_group_rule.remote_ip_prefix" = "0.0.0.0/0" }
+    # v3 规则参数：multiport（非 port_range_min/max）+ action/priority
+    $arg = ConvertTo-HcArg @{ project_id = $projectId; "security_group_rule.security_group_id" = $sg.id; "security_group_rule.direction" = "ingress"; "security_group_rule.protocol" = "tcp"; "security_group_rule.multiport" = "$port"; "security_group_rule.action" = "allow"; "security_group_rule.priority" = "1"; "security_group_rule.ethertype" = "IPv4"; "security_group_rule.remote_ip_prefix" = "0.0.0.0/0" }
     Invoke-Hc "VPC CreateSecurityGroupRule $arg" -Quiet | Out-Null
     # 409=规则已存在，忽略；其他错误不阻断（ELB 会兜底放行 80）
   }
@@ -163,9 +165,9 @@ try {
     $rdsPwd = Read-Secret "  设置 RDS root 密码（输入不回显）"
     if ($rdsPwd.Length -lt 8) { Step-Fail "RDS 密码过短" }
     $arg = ConvertTo-HcArg @{
-      project_id = $projectId; name = $RdsName
+      project_id = $projectId; name = $RdsName; region = $Region
       "datastore.type" = "PostgreSQL"; "datastore.version" = $RdsDbVer
-      mode = "Single"; flavor = $RdsFlavor
+      mode = "Single"; flavor_ref = $RdsFlavor
       "volume.type" = "ULTRAHIGH"; "volume.size" = $RdsVolume
       vpc_id = $vpc.id; subnet_id = $subnet.id; security_group_id = $sg.id
       password = $rdsPwd; port = $RdsPort; availability_zone = $Az
@@ -197,9 +199,9 @@ try {
     $arg = ConvertTo-HcArg @{
       project_id = $projectId
       "publicip.type" = "5_bgp"
-      "bandwidth.name" = $eipName; "bandwidth.size" = 5; "bandwidth.share_type" = "PER"; "bandwidth.chargemode" = "bandwidth"
+      "bandwidth.name" = $eipName; "bandwidth.size" = 5; "bandwidth.share_type" = "PER"; "bandwidth.charge_mode" = "bandwidth"
     }
-    $eip = Invoke-Hc "VPC CreatePublicIp $arg"
+    $eip = Invoke-Hc "EIP CreatePublicIp $arg"
     $eipAddr = $null; $eipId = $null
     if ($eip -and $eip.publicip) { $eipAddr = $eip.publicip.public_ip_address; $eipId = $eip.publicip.id }
     elseif ($eip -is [string] -and $eip -match '"public_ip_address":\s*"([^"]+)"') { $eipAddr = $Matches[1] }
@@ -207,8 +209,8 @@ try {
       Write-Host "    EIP 自动创建未成功，请手动：VPC 控制台 → 弹性公网IP → 购买弹性公网IP（按带宽 5Mbit），然后 RDS 控制台 → 实例 → 连接管理 → 绑定公网地址" -ForegroundColor Yellow
     } else {
       Step-Info "EIP 已创建：$eipAddr，绑定到 RDS..."
-      $bindArg = ConvertTo-HcArg @{ project_id = $projectId; instance_id = $rds.id; "body.public_ip" = $eipAddr; "body.is_bind" = "true" }
-      Invoke-Hc "RDS SetPublicIp $bindArg" -Quiet | Out-Null
+      $bindArg = ConvertTo-HcArg @{ project_id = $projectId; instance_id = $rds.id; public_ip = $eipAddr; public_ip_id = $eipId; is_bind = "true" }
+      Invoke-Hc "RDS AttachEip $bindArg" -Quiet | Out-Null
       Start-Sleep -Seconds 20
       $rdsList = Invoke-Hc "RDS ListInstances --limit=100" -Quiet
       $rds = $rdsList.instances | Where-Object { $_.id -eq $rds.id } | Select-Object -First 1
@@ -228,11 +230,12 @@ try {
   } else {
     Write-Host "  DCS 密码规则：8-32 位，含字母与数字，如 Mentora2026"
     $dcsPwd = Read-Secret "  设置 DCS 访问密码（输入不回显）"
+    # DCS：参数名 name（非 instance_name）、az_codes.[0]（非 availability_zones）、无 security_group_id
     $arg = ConvertTo-HcArg @{
-      instance_name = $DcsName; engine = $DcsEngine; engine_version = $DcsVer
+      name = $DcsName; engine = $DcsEngine; engine_version = $DcsVer
       capacity = $DcsCapacity; spec_code = $DcsSpecCode
-      vpc_id = $vpc.id; subnet_id = $subnet.id; security_group_id = $sg.id
-      password = $dcsPwd; availability_zones = "[$Az]"
+      vpc_id = $vpc.id; subnet_id = $subnet.id
+      password = $dcsPwd; "az_codes.[0]" = $Az
     }
     $dcs = Invoke-Hc "DCS CreateInstance $arg"
     if (-not $dcs) { Step-Fail "创建 DCS 失败（命令已打印，可把日志贴回排查；单机规格名可按控制台可选值调整 `$DcsSpecCode）" }
