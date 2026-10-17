@@ -174,6 +174,23 @@ try {
   if ($rds) {
     Step-Done "RDS 已存在：$($rds.id)（状态 $($rds.status)）"
   } else {
+    Step-Info "查询 RDS PostgreSQL $RdsDbVer 在 $Region 的可用存储类型与规格..."
+    $sto = Invoke-Hc "RDS ListStorageTypes --database_name=PostgreSQL --version=$RdsDbVer" -Quiet
+    $storageType = $null
+    if ($sto -and $sto.storage_types) { $storageType = ($sto.storage_types | Select-Object -First 1).name }
+    if (-not $storageType) {
+      Step-Fail "无法查询 RDS 存储类型（ListStorageTypes 失败）。兜底：RDS 控制台 → 购买数据库实例（PostgreSQL $RdsDbVer，2C4G，按需付费，VPC 选 $VpcName）→ 建好重跑本脚本（幂等复用）"
+    }
+    Write-Host "    可用存储类型：$storageType"
+    $fls = Invoke-Hc "RDS ListFlavors --database_name=PostgreSQL --version_name=$RdsDbVer" -Quiet
+    if ($fls -and $fls.flavors) {
+      $match = $fls.flavors | Where-Object { $_.spec_code -eq $RdsFlavor } | Select-Object -First 1
+      if (-not $match) {
+        $cand = $fls.flavors | Where-Object { $_.spec_code -like "*large.2*" } | Select-Object -First 1
+        if (-not $cand) { $cand = $fls.flavors | Select-Object -First 1 }
+        if ($cand) { Write-Host "    规格 $RdsFlavor 该区域不可用，改用 $($cand.spec_code)" -ForegroundColor Yellow; $RdsFlavor = $cand.spec_code }
+      }
+    } else { Write-Host "    规格查询未成功，沿用 $RdsFlavor（创建失败则按报错调整）" -ForegroundColor Yellow }
     Write-Host "  RDS root 密码规则：8-32 位，至少含大写/小写/数字/特殊字符中三类，如 Mentora@2026"
     $rdsPwd = Read-Secret "  设置 RDS root 密码（输入不回显）"
     if ($rdsPwd.Length -lt 8) { Step-Fail "RDS 密码过短" }
@@ -184,7 +201,7 @@ try {
         name = $RdsName; region = $Region
         datastore = @{ type = "PostgreSQL"; version = $RdsDbVer }
         mode = "Single"; flavor_ref = $RdsFlavor
-        volume = @{ type = "ULTRAHIGH"; size = [int]$RdsVolume }
+        volume = @{ type = $storageType; size = [int]$RdsVolume }
         vpc_id = $vpc.id; subnet_id = $subnet.id; security_group_id = $sg.id
         password = $rdsPwd; port = [int]$RdsPort; availability_zone = $Az
       }
@@ -245,6 +262,16 @@ try {
   if ($dcs) {
     Step-Done "DCS 已存在：$($dcs.instance_id)（状态 $($dcs.status)）"
   } else {
+    Step-Info "查询 DCS 在 $Region 的可用规格..."
+    $dcFls = Invoke-Hc "DCS ListFlavors" -Quiet
+    if ($dcFls -and $dcFls.flavors) {
+      $dcMatch = $dcFls.flavors | Where-Object { $_.spec_code -eq $DcsSpecCode } | Select-Object -First 1
+      if (-not $dcMatch) {
+        $dcCand = $dcFls.flavors | Where-Object { $_.spec_code -like "redis.single*" } | Select-Object -First 1
+        if (-not $dcCand) { $dcCand = $dcFls.flavors | Select-Object -First 1 }
+        if ($dcCand) { Write-Host "    DCS 规格 $DcsSpecCode 不可用，改用 $($dcCand.spec_code)" -ForegroundColor Yellow; $DcsSpecCode = $dcCand.spec_code }
+      }
+    } else { Write-Host "    DCS 规格查询未成功，沿用 $DcsSpecCode" -ForegroundColor Yellow }
     Write-Host "  DCS 密码规则：8-32 位，含字母与数字，如 Mentora2026"
     $dcsPwd = Read-Secret "  设置 DCS 访问密码（输入不回显）"
     # DCS 的 password 同样与系统参数同名——走 --cli-jsonInput（path/body 分层）
