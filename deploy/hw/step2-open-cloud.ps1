@@ -306,14 +306,13 @@ try {
   Step-Done "DCS 就绪：${dcsHost}:${dcsPort}（REDIS_URL 用 redis://:<密码>@${dcsHost}:${dcsPort}/0，仅 VPC 内可连）"
 
   # ---- 8. SWR 组织（CLI 优先，失败给控制台指引）----
-  $orgs = Invoke-Hc "SWR ListOrganizations" -Quiet
+  $orgs = Invoke-Hc "SWR ListNamespaces" -Quiet
   $orgExists = $false
-  if ($orgs) { $orgExists = ($orgs | Out-String) -match $SwrOrg }
+  if ($orgs -and $orgs.namespaces) { $orgExists = ($orgs.namespaces | Where-Object { $_.name -eq $SwrOrg }) -ne $null }
   if ($orgExists) { Step-Done "SWR 组织已存在：$SwrOrg" }
   else {
-    $arg = ConvertTo-HcArg @{ namespace = $SwrOrg }
-    $r = Invoke-Hc "SWR CreateOrganization $arg" -Quiet
-    if ($r -or $LASTEXITCODE -eq 0) { Step-Done "SWR 组织已创建：$SwrOrg" }
+    $r = Invoke-Hc "SWR CreateNamespace --namespace=$SwrOrg" -Quiet
+    if ($r) { Step-Done "SWR 组织已创建：$SwrOrg" }
     else { Write-Host "    CLI 创建未成功，请手动：SWR 控制台 → 组织管理 → 新建组织，名称 $SwrOrg（然后重跑本脚本会识别为已存在）" -ForegroundColor Yellow }
   }
 
@@ -327,19 +326,26 @@ try {
   if ($cce) { Step-Done "CCE Autopilot 集群已存在：$($cce.metadata.id)" }
   else {
     Step-Info "尝试 CLI 创建 Autopilot 集群 $CceName ..."
-    $arg = ConvertTo-HcArg @{
-      kind = "Cluster"; apiVersion = "v3"
-      "metadata.name" = $CceName
-      "spec.type" = "virtualmachine"; "spec.flavor" = "autopilot"; "spec.version" = "v1.28"
-      "spec.hostNetwork.vpc" = $vpc.id; "spec.hostNetwork.subnet" = $subnet.id
-      "spec.containerNetwork.cidr" = "172.16.0.0/20"
-    }
-    $r = Invoke-Hc "CCE CreateAutopilotCluster $arg" -Quiet
-    if ($r -or $LASTEXITCODE -eq 0) { Step-Done "CCE 创建任务已提交（Autopilot 约 10 分钟）" }
+    # Autopilot：无 containerNetwork.cidr；须 containerNetwork.mode=enil + eniNetwork.subnets（实测缺一必拒）；走 jsonInput（数组参数命令行传不进）
+    $cceBody = @{
+      path = @{ project_id = $projectId }
+      body = @{
+        kind = "Cluster"; apiVersion = "v3"
+        metadata = @{ name = $CceName }
+        spec = @{
+          type = "VirtualMachine"; flavor = "autopilot"
+          hostNetwork = @{ vpc = $vpc.id; subnet = $subnet.id }
+          containerNetwork = @{ mode = "enil" }
+          eniNetwork = @{ subnets = @(@{ subnetID = $subnet.id }) }
+          billingMode = 0
+        }
+      }
+    } | ConvertTo-Json -Depth 6
+    $r = Invoke-Hc "CCE CreateAutopilotCluster" -BodyJson $cceBody -Quiet
+    if ($r) { Step-Done "CCE 创建任务已提交（Autopilot 约 10 分钟）" }
     else {
-      Write-Host "    CLI 创建未成功（参数或版本差异）。请手动开通：" -ForegroundColor Yellow
-      Write-Host "      CCE 控制台 → 购买集群 → 标准 Autopilot 集群 → 区域 $Region / VPC $VpcName / 子网 $SubnetName → 其余默认购买"
-      Write-Host "      完成后重跑本脚本将自动识别并继续。"
+      Write-Host "    CLI 创建未成功（常见原因：Autopilot 服务未授权——CCE 控制台有'确认授权'弹窗需人工点一次；确认后重跑即可）。" -ForegroundColor Yellow
+      Write-Host "      或手动：CCE 控制台 → 购买集群 → 标准 Autopilot 集群 → 区域 $Region / VPC $VpcName / 子网 $SubnetName → 其余默认购买"
     }
   }
   $clusters = Invoke-Hc "CCE ListAutopilotClusters" -Quiet
