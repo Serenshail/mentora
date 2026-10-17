@@ -4,12 +4,15 @@
 # 镜像 tag 规范 = git 短 sha（回滚锚点，见 scripts/deploy-hw-build.mjs）
 # ============================================================
 
+# ---- 基础镜像（默认官方源；被墙环境构建时传 --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-alpine）----
+ARG NODE_IMAGE=node:20-alpine
+
 # ---- 构建阶段 ----
-FROM node:20-alpine AS builder
+FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
 ENV TZ=Asia/Shanghai NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci --no-audit --no-fund --legacy-peer-deps
 COPY . .
 # AUTH_SECRET 仅满足构建期 env 校验占位；运行期凭据经编排注入，绝不入镜像
 ENV AUTH_SECRET=build-placeholder-not-a-secret
@@ -18,7 +21,7 @@ ENV CONTAINER_BUILD=1
 RUN npm run build
 
 # ---- 运行阶段 ----
-FROM node:20-alpine
+FROM ${NODE_IMAGE}
 WORKDIR /app
 ENV NODE_ENV=production TZ=Asia/Shanghai NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 HOSTNAME=0.0.0.0
