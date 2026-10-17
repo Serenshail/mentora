@@ -51,3 +51,6 @@ lt-inject.json
 %SystemDrive%/
 
 lt-lint.txt
+
+deploy/hw/hw-resources.ps1
+hw-secrets.txt
