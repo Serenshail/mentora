@@ -1,0 +1,74 @@
+﻿**********************
+Windows PowerShell 脚本开始
+开始时间: 20261017012924
+用户名: LAPTOP-F23GVVB6\haozhe
+RunAs 用户: LAPTOP-F23GVVB6\haozhe
+配置名称: 
+计算机: LAPTOP-F23GVVB6 (Microsoft Windows NT 10.0.26200.0)
+主机应用程序: C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/hw/step2-open-cloud.ps1
+进程 ID: 13844
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Mentora Step2: 开通华为云资源（区域 cn-east-3）===
+[..] 配置 AK/SK（获取方式：控制台右上角'我的凭证' → 访问密钥 → 新增）
+[OK] AK/SK 已配置（KooCLI 加密保存，不落明文）
+[OK] project_id = 01a12f4c51fa7e048bbdb3886d9e64c4
+[OK] VPC 已存在：e0ad6330-a638-4ca1-a843-886bc92eb405
+[OK] 子网已存在：2c3b5620-6520-4e1c-b19a-6ec9e5f3d256
+[OK] 安全组已存在：18c30403-38f8-486c-87a4-e024f088ff66
+    hcloud 失败：CreateSecurityGroupRule有多个版本,默认使用该API版本v3.若需指定其他版本,请将API名修改为"CreateSecurityGroupRule/版本号"
+{
+  "request_id": "aa32cc729a8d271f4282888214a076ec",
+  "error_msg": "Security group rule already exists. Rule id is 869cb606-fa6a-4381-984e-21fefba50861.",
+  "error_code": "VPC.9902"
+}
+获取终端宽度失败,将使用默认宽度.若打印信息出现错乱,请调整终端宽度
+请求诊断请参考以下内容:
++---+--------+--------+-----------------------------+------------------------------+------------------------------+
+|No.|产品名称| 错误码 |          错误信息           |             描述             |           处理措施           |
++---+--------+--------+-----------------------------+------------------------------+------------------------------+
+| 1 |  VPC   |VPC.9902|Security Group xxx is in use.|   要删除的安全组被端口绑定   |请先更新端口解绑安全组，再执行|
+|   |        |        |                             |                              |           删除操作           |
++---+--------+--------+-----------------------------+------------------------------+------------------------------+
+    hcloud 失败：CreateSecurityGroupRule有多个版本,默认使用该API版本v3.若需指定其他版本,请将API名修改为"CreateSecurityGroupRule/版本号"
+{
+  "request_id": "9c87d2eb85e19b473de57756db76769f",
+  "error_msg": "Security group rule already exists. Rule id is a006913c-bc3a-4a39-a589-0710b281dd06.",
+  "error_code": "VPC.9902"
+}
+获取终端宽度失败,将使用默认宽度.若打印信息出现错乱,请调整终端宽度
+请求诊断请参考以下内容:
++---+--------+--------+-----------------------------+------------------------------+------------------------------+
+|No.|产品名称| 错误码 |          错误信息           |             描述             |           处理措施           |
++---+--------+--------+-----------------------------+------------------------------+------------------------------+
+| 1 |  VPC   |VPC.9902|Security Group xxx is in use.|   要删除的安全组被端口绑定   |请先更新端口解绑安全组，再执行|
+|   |        |        |                             |                              |           删除操作           |
++---+--------+--------+-----------------------------+------------------------------+------------------------------+
+[OK] 安全组入站规则已放行 80/443
+  RDS root 密码规则：8-32 位，至少含大写/小写/数字/特殊字符中三类，如 Mentora@2026
+[..] hcloud RDS CreateInstance --cli-region=cn-east-3 --cli-jsonInput=<temp>
+    hcloud 失败：cli-jsonInput中各位置(如path、query、body、formData、header、cookie)传入的API参数优先于命令传入
+{
+  "error_msg": "Invalid storage type.",
+  "error_code": "DBS.280241"
+}
+获取终端宽度失败,将使用默认宽度.若打印信息出现错乱,请调整终端宽度
+请求诊断请参考以下内容:
++---+--------+----------+---------------------+------------------+--------+
+|No.|产品名称|  错误码  |      错误信息       |       描述       |处理措施|
++---+--------+----------+---------------------+------------------+--------+
+| 1 |  RDS   |DBS.280241|Invalid storage type.|   卷类型非法。   |        |
++---+--------+----------+---------------------+------------------+--------+
+[FAIL] 创建 RDS 失败（命令已打印，可把日志贴回排查）
+     修复后可重跑本脚本（已创建资源会复用）。日志：D:\zcode\agent\mentora\docs\evidence\logs\step2-20261017-012924.log
+**********************
+Windows PowerShell 脚本结束
+结束时间: 20261017012935
+**********************

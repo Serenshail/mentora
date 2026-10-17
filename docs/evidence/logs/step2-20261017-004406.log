@@ -1,0 +1,29 @@
+﻿**********************
+Windows PowerShell 脚本开始
+开始时间: 20261017004406
+用户名: LAPTOP-F23GVVB6\haozhe
+RunAs 用户: LAPTOP-F23GVVB6\haozhe
+配置名称: 
+计算机: LAPTOP-F23GVVB6 (Microsoft Windows NT 10.0.26200.0)
+主机应用程序: C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/hw/step2-open-cloud.ps1
+进程 ID: 39100
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Mentora Step2: 开通华为云资源（区域 cn-east-3）===
+[..] 配置 AK/SK（获取方式：控制台右上角'我的凭证' → 访问密钥 → 新增）
+PS>TerminatingError(ConvertFrom-Json):“无效的 JSON 基元: 。”
+[OK] AK/SK 已配置（KooCLI 加密保存，不落明文）
+PS>TerminatingError(ConvertFrom-Json):“无效的 JSON 基元: 。”
+[FAIL] 无法获取区域 cn-east-3 的 project_id，请把日志贴回给助手排查
+     修复后可重跑本脚本（已创建资源会复用）。日志：D:\zcode\agent\mentora\docs\evidence\logs\step2-20261017-004406.log
+**********************
+Windows PowerShell 脚本结束
+结束时间: 20261017004408
+**********************

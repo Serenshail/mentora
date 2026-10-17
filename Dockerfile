@@ -13,6 +13,8 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 # AUTH_SECRET 仅满足构建期 env 校验占位；运行期凭据经编排注入，绝不入镜像
 ENV AUTH_SECRET=build-placeholder-not-a-secret
+# CONTAINER_BUILD=1 → next.config.ts 产出 standalone（Vercel/本地 dev 不设此开关，走默认输出）
+ENV CONTAINER_BUILD=1
 RUN npm run build
 
 # ---- 运行阶段 ----

@@ -1,0 +1,40 @@
+﻿**********************
+Windows PowerShell 脚本开始
+开始时间: 20261017005545
+用户名: LAPTOP-F23GVVB6\haozhe
+RunAs 用户: LAPTOP-F23GVVB6\haozhe
+配置名称: 
+计算机: LAPTOP-F23GVVB6 (Microsoft Windows NT 10.0.26200.0)
+主机应用程序: C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/hw/step2-open-cloud.ps1
+进程 ID: 25580
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Mentora Step2: 开通华为云资源（区域 cn-east-3）===
+[..] 配置 AK/SK（获取方式：控制台右上角'我的凭证' → 访问密钥 → 新增）
+PS>TerminatingError(ConvertFrom-Json):“无效的 JSON 基元: 。”
+[OK] AK/SK 已配置（KooCLI 加密保存，不落明文）
+[OK] project_id = 01a12f4c51fa7e048bbdb3886d9e64c4
+PS>TerminatingError(ConvertFrom-Json):“无效的 JSON 基元: 。”
+[..] hcloud VPC CreateVpc --vpc.cidr=192.168.0.0/16 --vpc.name=mentora-vpc --project_id=01a12f4c51fa7e048bbdb3886d9e64c4 --cli-region=cn-east-3
+PS>TerminatingError(ConvertFrom-Json):“无效的 JSON 基元: [1;93m获取终端宽度失败,将使用默认宽度.若打印信息出现错乱,请调整终端宽度[0m
+[1;93m请求诊断请参考以下内容:[0m
+[1;93m+---+--------+--------+--------------------------+---------------+------------------+
+|No.|产品名称| 错误码 |         错误信息         |     描述      |     处理措施     |
++---+--------+--------+--------------------------+---------------+------------------+
+| 1 |  VPC   |VPC.0115|The router name has exist.|  VPC名称重复  |  请更换VPC名称   |
++---+--------+--------+--------------------------+---------------+------------------+
+[0m
+。”
+[FAIL] 创建 VPC 失败（命令已打印，可把日志贴回排查）
+     修复后可重跑本脚本（已创建资源会复用）。日志：D:\zcode\agent\mentora\docs\evidence\logs\step2-20261017-005545.log
+**********************
+Windows PowerShell 脚本结束
+结束时间: 20261017005548
+**********************

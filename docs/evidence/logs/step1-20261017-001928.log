@@ -1,0 +1,44 @@
+﻿**********************
+Windows PowerShell 脚本开始
+开始时间: 20261017001928
+用户名: LAPTOP-F23GVVB6\haozhe
+RunAs 用户: LAPTOP-F23GVVB6\haozhe
+配置名称: 
+计算机: LAPTOP-F23GVVB6 (Microsoft Windows NT 10.0.26200.0)
+主机应用程序: C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -File deploy/hw/step1-install-tools.ps1
+进程 ID: 7232
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Mentora Step1: 工具检查（仓库根：D:\zcode\agent\mentora）===
+[OK] Node v24.14.1
+[OK] git version 2.53.0.windows.2
+PS>TerminatingError(docker.exe):“已停止该运行的命令，因为首选项变量“ErrorActionPreference”或通用参数设置为 Stop: failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.”
+[..] Docker daemon 未运行。尝试启动 Docker Desktop（首次启动约 1-2 分钟）...
+PS>TerminatingError(docker.exe):“已停止该运行的命令，因为首选项变量“ErrorActionPreference”或通用参数设置为 Stop: failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.”
+    等待 Docker daemon 就绪... (5s)
+PS>TerminatingError(docker.exe):“已停止该运行的命令，因为首选项变量“ErrorActionPreference”或通用参数设置为 Stop: failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.”
+    等待 Docker daemon 就绪... (10s)
+[OK] Docker daemon 已就绪
+[OK] kubectl v1.36.1
+[..] 未检测到 hcloud，开始安装到 C:\Users\haozhe\hcloud-cli ...
+[..] 尝试下载 https://obs.cn-north-4.myhuaweicloud.com/hwcloudcli/hcloud_windows_64.zip
+PS>TerminatingError(Invoke-WebRequest):“NoSuchBucketThe specified bucket does not exist000001A145834E8547CC22C516FB36F3CQFaxGcM3fui9lIMwrh/aMKRMVjO6CZzdZWziLU0RijtKvHwvaIVv752t0cID4CThwcloudcli”
+    下载失败：远程服务器返回错误: (404) 未找到。
+[..] 尝试下载 https://obs.cn-north-4.myhuaweicloud.com/hwcloudcli/hcloud.exe
+PS>TerminatingError(Invoke-WebRequest):“NoSuchBucketThe specified bucket does not exist000001A145834F1C47CC25A21811F87BCQFaxGcM3fui9lIMwrh/aMKRMVjO6CZzdZWziLU0RijtKvHwvaIVv752t0cID4CThwcloudcli”
+    下载失败：远程服务器返回错误: (404) 未找到。
+[FAIL] 自动下载失败。请手动安装 KooCLI：
+  1) 打开 https://www.huaweicloud.com/koocli-tools/ 下载 Windows 64 位版
+  2) 解压 hcloud.exe 到 C:\Users\haozhe\hcloud-cli
+  3) 重跑本脚本
+**********************
+Windows PowerShell 脚本结束
+结束时间: 20261017001955
+**********************

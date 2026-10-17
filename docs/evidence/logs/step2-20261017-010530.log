@@ -1,0 +1,36 @@
+﻿**********************
+Windows PowerShell 脚本开始
+开始时间: 20261017010531
+用户名: LAPTOP-F23GVVB6\haozhe
+RunAs 用户: LAPTOP-F23GVVB6\haozhe
+配置名称: 
+计算机: LAPTOP-F23GVVB6 (Microsoft Windows NT 10.0.26200.0)
+主机应用程序: C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/hw/step2-open-cloud.ps1
+进程 ID: 20344
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Mentora Step2: 开通华为云资源（区域 cn-east-3）===
+[..] 配置 AK/SK（获取方式：控制台右上角'我的凭证' → 访问密钥 → 新增）
+[OK] AK/SK 已配置（KooCLI 加密保存，不落明文）
+[OK] project_id = 01a12f4c51fa7e048bbdb3886d9e64c4
+[OK] VPC 已存在：e0ad6330-a638-4ca1-a843-886bc92eb405
+[..] hcloud VPC CreateSubnet --subnet.vpc_id=e0ad6330-a638-4ca1-a843-886bc92eb405 --subnet.name=mentora-subnet --subnet.cidr=192.168.0.0/24 --subnet.gateway_ip=192.168.0.1 --project_id=01a12f4c51fa7e048bbdb3886d9e64c4 --cli-region=cn-east-3
+[OK] 子网已创建：2c3b5620-6520-4e1c-b19a-6ec9e5f3d256
+[..] hcloud VPC CreateSecurityGroup --security_group.vpc_id=e0ad6330-a638-4ca1-a843-886bc92eb405 --security_group.name=mentora-sg --project_id=01a12f4c51fa7e048bbdb3886d9e64c4 --cli-region=cn-east-3
+    hcloud 失败：CreateSecurityGroup有多个版本,默认使用该API版本v3.若需指定其他版本,请将API名修改为"CreateSecurityGroup/版本号"
+[USE_ERROR]不正确的参数:security_group.vpc_id
+
+运行`hcloud VPC CreateSecurityGroup --help`获取有关此API的详细信息
+[FAIL] 创建安全组失败
+     修复后可重跑本脚本（已创建资源会复用）。日志：D:\zcode\agent\mentora\docs\evidence\logs\step2-20261017-010530.log
+**********************
+Windows PowerShell 脚本结束
+结束时间: 20261017010542
+**********************

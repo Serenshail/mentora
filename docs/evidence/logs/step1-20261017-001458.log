@@ -1,0 +1,28 @@
+﻿**********************
+Windows PowerShell 脚本开始
+开始时间: 20261017001458
+用户名: LAPTOP-F23GVVB6\haozhe
+RunAs 用户: LAPTOP-F23GVVB6\haozhe
+配置名称: 
+计算机: LAPTOP-F23GVVB6 (Microsoft Windows NT 10.0.26200.0)
+主机应用程序: C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -File deploy/hw/step1-install-tools.ps1
+进程 ID: 35996
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Mentora Step1: 工具检查（仓库根：D:\zcode\agent\mentora）===
+[OK] Node v24.14.1
+[OK] git version 2.53.0.windows.2
+PS>TerminatingError(docker.exe):“已停止该运行的命令，因为首选项变量“ErrorActionPreference”或通用参数设置为 Stop: failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.”
+[..] Docker daemon 未运行。尝试启动 Docker Desktop（首次启动约 1-2 分钟）...
+[FAIL] 未找到 Docker Desktop，请安装：https://www.docker.com/products/docker-desktop/
+**********************
+Windows PowerShell 脚本结束
+结束时间: 20261017001459
+**********************
