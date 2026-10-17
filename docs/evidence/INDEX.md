@@ -26,28 +26,35 @@
 
 | 状态 | 证据 | git 锚点 |
 | --- | --- | --- |
-| ✅ | standalone Dockerfile + .dockerignore | `9b334b2` |
+| ✅ | standalone Dockerfile + .dockerignore（基础镜像 ARG 化支持加速源） | `9b334b2` `7e6c175` |
 | ✅ | SWR 推送脚本（tag=git 短 sha） | `afc34bd` |
 | ✅ | CCE/ECS 编排清单 | `ab5cb38` |
+| ✅ | **镜像推送 SWR 实测成功**（81f9e91/latest 双 tag，67.8MB，OCI manifest 验证） | `783c079` |
+| ✅ | **本地容器冒烟 T-031**（/api/health 200，通道自检正确） | `783c079` |
+| ✅ | **模型通道切换实证**（custom/tokenrhythm 调用 200/1.5s） | `verify-model.mjs` |
 
 ## 问题修复环节
 
 | 状态 | 证据 | 锚点 |
 | --- | --- | --- |
-| ✅ | 6 个真实问题与修复实录 | `docs/CODEARTS-PRACTICE.md` 第四节 |
+| ✅ | 13 个真实问题与修复实录（代码期 6 + 实操期 7） | `docs/CODEARTS-PRACTICE.md` 第四节 |
 
-## 部署上线环节
+## 部署上线环节（实操期：开通→验证→删除全链路已演练）
 
 | 状态 | 证据 | 说明 |
 | --- | --- | --- |
-| ⏳ | HW-D-02 首次部署耗时记录 | 执行 T-035 后归档 `first-deploy.md` |
-| ⏳ | HW-D-05 大陆直连验证 | 执行 T-035 后归档 `mainland-access.md` |
-| ⏳ | HW-D-04 回滚演练 ≤10min | 执行 T-036 后归档 `rollback.md` |
-| ⏳ | HW-T-04 迁移校验报告 | 执行 T-052 后归档 `migration-report.md` |
-| ⏳ | HW-D-07 周报触发三场景 | 执行 T-041 后归档 `cron-trigger.md` |
-| ⏳ | HW-V-01 LTS 检索验证 | 执行 T-044 后归档 `lts-search.md` |
-| ⏳ | HW-V-03 Cloud Eye 告警可达 | 执行 T-045 后归档 `cloudeye-alert.md` |
-| ⏳ | HW-O-01 Gitee 镜像 + secret 扫描 | 执行 T-065 后归档 `opensource-check.md` |
-| ⏳ | HW-O-04 演示素材 OBS 链接 | 执行 T-068 后回填 README |
-| ⏳ | HW-C-02 eval 质量对比（MaaS vs 旧服务商） | 执行 T-080 后归档 `eval-compare.md` |
-| ⏳ | HW-P-04 CodeArts 流水线/扫描留档 | 执行 T-067 后归档 `codearts-pipeline.md` |
+| ✅ | RDS/DCS 创建→就绪→删除全链路实测（规格预查询/幂等重跑） | `docs/evidence/logs/step2-*.log` 15 份（脱敏） |
+| ✅ | VPC/SWR 组织/凭证链打通 | 同上 |
+| ✅ | 沙箱↔华为云 API 直连可行性论证（服务域名白名单内，9 种端点实测） | 会话记录+日志 |
+| ⏳ | HW-D-02 首次部署耗时记录 | 按 PRD 方案 A 演示窗口执行后归档 `first-deploy.md` |
+| ⏳ | HW-D-05 大陆直连验证 | 同上归档 `mainland-access.md` |
+| ⏳ | HW-D-04 回滚演练 ≤10min | 归档 `rollback.md` |
+| ⏳ | HW-T-04 迁移校验报告 | 归档 `migration-report.md` |
+| ⏳ | HW-D-07 周报触发三场景 | 归档 `cron-trigger.md` |
+| ⏳ | HW-V-01 LTS 检索验证 | 归档 `lts-search.md` |
+| ⏳ | HW-V-03 Cloud Eye 告警可达 | 归档 `cloudeye-alert.md` |
+| ⏳ | HW-O-01 Gitee 镜像 + secret 扫描 | 归档 `opensource-check.md`（待用户提供 Gitee 仓库） |
+| ⏳ | HW-O-04 演示素材 OBS 链接 | 回填 README |
+| ⏳ | HW-C-02 eval 质量对比（MaaS vs 旧服务商） | 归档 `eval-compare.md` |
+| ⏳ | HW-P-04 CodeArts 流水线/扫描留档 | 归档 `codearts-pipeline.md` |
+| ⏳ | CCE 服务授权 | 控制台单击确认（已核查无 CLI/API 通道，PRD §8） |
