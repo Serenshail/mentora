@@ -265,6 +265,13 @@ function ModalDialog({
     const raf = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(raf);
   }, []);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+  /* 焦点陷阱只挂载/卸载各一次（依赖 []）。此前依赖 onClose——调用方都传内联箭头，
+   * 父组件每渲染一次（弹窗里打一个字）effect 就重跑：cleanup 把焦点还给旧元素、
+   * setTimeout(0) 又抢到右上角关闭按钮 → 输入框打一个字就丢焦点（2026-10-24 修复） */
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     const focusables = () =>
@@ -275,7 +282,7 @@ function ModalDialog({
     }, 0);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -303,7 +310,7 @@ function ModalDialog({
       document.body.style.overflow = prevOverflow;
       prev?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div

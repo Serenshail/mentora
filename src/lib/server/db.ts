@@ -240,16 +240,24 @@ async function d1Put(path: string, content: string): Promise<void> {
   for (let i = 0; i < content.length; i += D1_CHUNK_SIZE) {
     parts.push(content.slice(i, i + D1_CHUNK_SIZE));
   }
-  // 主行写块数；再逐块 upsert（每条 SQL 均低于 1MB 限制）
-  await d1Raw(
-    "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
-    [path, `{"__chunks__":${parts.length}}`]
-  );
+  // 先写块行、再写主行（读者以主行的 __chunks__ 数为准，主行最后落=读到旧值完整密文而非缺块密文）；
+  // 收尾清掉内容变短后多余的旧块行，防止永久泄漏
   for (let i = 0; i < parts.length; i++) {
     await d1Raw(
       "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
       [`${path}#p${i}`, parts[i]]
     );
+  }
+  await d1Raw(
+    "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+    [path, `{"__chunks__":${parts.length}}`]
+  );
+  const stale = await d1Raw<{ k?: string }>(PREFIX_LIKE, prefixOf(`${path}#p`));
+  for (const row of stale) {
+    const idx = Number((row.k ?? "").split("#p")[1]);
+    if (row.k && !Number.isNaN(idx) && idx >= parts.length) {
+      await d1Raw("DELETE FROM kv WHERE k = ?", [row.k]);
+    }
   }
 }
 
@@ -788,7 +796,7 @@ export async function dbEventStats(): Promise<{
         []
       );
       funnelRows = await rdsQuery<{ name: string; n: number }>(
-        "SELECT name, COUNT(*)::int AS n FROM events WHERE name IN ($1, $2, $3, $4, $5)",
+        "SELECT name, COUNT(*)::int AS n FROM events WHERE name IN ($1, $2, $3, $4, $5) GROUP BY name",
         FUNNEL
       );
       propsList = (

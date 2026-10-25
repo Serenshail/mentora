@@ -161,8 +161,11 @@ export async function pullCloud(): Promise<{ data: Record<string, unknown>; upda
 /** 推送本地数据到云端。带重试+退避；keepalive 用于关页/刷新前的兜底 flush（数据丢失根治的一环）。 */
 export async function pushCloud(opts: { keepalive?: boolean; retries?: number } = {}): Promise<boolean> {
   const { keepalive = false, retries = keepalive ? 0 : 2 } = opts;
-  setSyncStatus("saving");
   const text = JSON.stringify({ data: localData() });
+  // 浏览器对 keepalive 请求体硬限 64KiB：真实体量的库关页 flush 必然被浏览器拒发，
+  // 白发一次还把同步态打成 error——直接跳过，交给常规 2.5s 防抖推送兜底
+  if (keepalive && text.length > 60_000) return false;
+  setSyncStatus("saving");
   const doFetch = (): Promise<Response> => {
     if (text.length > GZIP_THRESHOLD) {
       // keepalive 与 gzip 异步压缩不兼容：flush 场景若超大则降级为不压缩直传（仍可能超 4.5MB,失败则报错提示导出）

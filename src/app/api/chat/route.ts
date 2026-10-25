@@ -11,6 +11,7 @@ import { logEvent } from "@/lib/server/config";
 import {
   demoCouncil, demoIntake, demoLesson, demoPlan, demoQuizGrade,
   demoReadingChat, demoReadingPlan, demoReview, demoReviewGrade,
+  demoRoundtableHost, demoRoundtableTake,
 } from "@/lib/ai/demo";
 
 export const runtime = "nodejs";
@@ -82,7 +83,8 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
 function demoTask(
   task: string | undefined,
   system: string,
-  messages: Body["messages"]
+  messages: Body["messages"],
+  args: Record<string, unknown> = {}
 ): AsyncGenerator<string> {
   const s = system || "";
   switch (task) {
@@ -104,6 +106,20 @@ function demoTask(
       })();
     case "coach-qa":
       return demoCouncil(messages);
+    case "council": {
+      /* 圆桌 Demo 与真实模型同语义（R1）：take 按席位差异化发言、host 真综合，
+       * 不再静默落进 demoCouncil 的单人回答 */
+      const mode = String(args.mode ?? "");
+      if (mode === "take")
+        return demoRoundtableTake(String(args.name ?? "与会者"), messages, String(args.personaId ?? ""));
+      if (mode === "host")
+        return demoRoundtableHost(
+          String(args.names ?? ""),
+          String(args.takes ?? ""),
+          String(args.question ?? "")
+        );
+      return demoCouncil(messages);
+    }
     case "app-assistant":
       return (async function* () {
         yield* (await import("@/lib/ai/demo")).chunked(
@@ -310,7 +326,7 @@ export async function POST(req: NextRequest) {
       const push = (obj: object) => ndjson(controller, JSON.stringify(obj));
       try {
         if (cfg.provider === "demo") {
-          for await (const piece of demoTask(body.task, body.system || "", body.messages)) {
+          for await (const piece of demoTask(body.task, body.system || "", body.messages, body.args ?? {})) {
             push({ t: "d", v: piece });
           }
         } else if (!cfg.apiKey || !cfg.model) {

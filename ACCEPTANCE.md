@@ -3,11 +3,11 @@
 > 本文是**当前功能基线**，不是下一版主智能体的发布证明。
 > 每条结果必须区分：`自动化`（tsc/lint/vitest/build/脚本）与 `人工实测`（浏览器/真实环境）。
 > 只有明确写了人工实测的条目，才代表真实环境已走通；标记 `⏳` 的条目仍未完成。
-> Founder-First 主智能体另见 [`docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md`](docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md)，当前状态是 Planned/Pending。
+> 下一阶段圆桌 MVP 的独立发布门禁另见 [`docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md`](docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md)，当前状态是 Planned/Pending。
 >
-> **下一版主智能体的独立发布门禁**：[`Founder-First 对抗式验收标准`](docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md)。它仍是 Planned/Pending，不计入下方 A-H 当前功能基线；当前所有未实现项必须标记为 Planned/Pending，不能把文档目标当成已通过。
+> **圆桌 MVP 的独立发布门禁**：[`圆桌 MVP 对抗式验收标准`](docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md)。它不计入下方 A-H 当前功能基线；当前所有未实现项必须标记为 Planned/Pending，不能把文档目标当成已通过。
 >
-> **2026-10-24 代码修复状态**：证据强制判分（quiz/review）、结业笔记回路、插件 store 坏文件保护、原生学习台八层门禁已实现并通过自动化；Founder-First Gate 0 的真实 7 天使用证据仍未完成，不能宣布产品/主智能体通过。
+> **当前验证方式**：不要求产品每天打开；圆桌价值改用 5 个真实决策/困惑对比验证，至少 3/5 次产生新增价值后，才考虑下一阶段。
 
 ## A. 学习教练（来自原项目方法论）
 
@@ -138,9 +138,10 @@
 
 ### H5 下一阶段入口（规划中，不计入当前通过数）
 
-- 产品 PRD：[`Founder-First PRD`](docs/PRD-2026-10-24.md)
-- 主智能体对抗式发布门禁：[`Founder-First Acceptance`](docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md)
-- 通过条件：必须完成真实创始人 7 天使用证据 + Gate 0-7；当前版本不宣称通过。
+- 产品 PRD：[`Sidebar-First / Roundtable-First PRD`](docs/PRD-2026-10-24.md)
+- 圆桌 MVP 对抗式发布门禁：[`Roundtable Acceptance`](docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md)
+- 真实验证记录：[`圆桌真实问题记录表`](docs/DOGFOODING-7D.md)
+- 通过条件：完成 5 个真实问题对比，至少 3/5 次产生新增价值；当前版本不宣称通过。
 
 ## 已知边界（v3 路线）
 

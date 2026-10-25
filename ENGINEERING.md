@@ -78,3 +78,18 @@
 - **Logs as event streams**：`logEvent()` 结构化 JSON 写 stdout（Vercel 捕获）；/api/chat 记录上游状态/重试/失败与任务级错误。
 - **Dependencies 显式声明**：补齐曾漏提交的依赖（qrcode.react/ts-fsrs/vitest/vite）。
 - 圆桌纪要升级为详细七节结构化输出（问题重构/逐人立场/共识/分歧矩阵/遗漏视角/条件化决策/改判信号），1200-2000 字——"总结不到位"的工程化回应。
+
+---
+
+## 9. 部署与回退 SOP（2026-10-21 起，防 bug 硬要求）
+
+**原则：每次生产部署必须有一个可一键回退的点，没有回退点不允许推送。**
+
+1. **部署前**：四道门禁全绿（`tsc --noEmit` / `eslint src` 0 error / `vitest run` 全绿 / `npm run build`）；AI 链路有改动时另跑 `E2E=1 npx vitest run e2e`（dev server 起着）。
+2. **打回退点**：`git add -A && git commit` 后 `git tag vX.Y.0`（每次部署一个新 tag，如 v21.0）。
+3. **部署**：`git push origin master --tags`（Vercel 自动构建；代理不通时 `git -c http.proxy=http://127.0.0.1:7892 push ...`，或 `npx vercel --prod --yes` 直连并记下 deployment URL）。
+4. **线上冒烟**：`/api/health` 200 + 本次改动的主路径各点一遍（圆桌=新建 3 席桌提一个问题到纪要完整）。
+5. **回退（发现 bug 时，任选其一）**：
+   - 代码回退：`git revert <tag 指向的 commit> && git push origin master`（生成反向提交，历史可追溯，首选）；
+   - 平台回退：Vercel Dashboard → Deployments → 上一个绿色 Deployment → Promote to Production（秒级，用于代码回退还在跑时的止血）。
+6. **记录**：CHANGELOG 记部署 tag 与 sha；出事故时补"回退原因+修复验证"一条。

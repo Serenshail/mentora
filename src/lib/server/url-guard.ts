@@ -30,14 +30,58 @@ function isPrivateV4(ip: string): boolean {
   return false;
 }
 
+/** 把任意合法 IPv6 写法（含 :: 缩写、IPv4 尾段）展开成 8 组 4 位十六进制；解析失败返回 null */
+function expandV6(ip: string): string[] | null {
+  let s = ip.toLowerCase();
+  const v4tail = s.match(/^(.*):(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4tail) {
+    const o = v4tail[2].split(".").map(Number);
+    if (o.length !== 4 || o.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null;
+    s = `${v4tail[1]}:${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":").filter(Boolean) : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":").filter(Boolean) : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2 && missing < 1) return null;
+  if (halves.length === 1 && head.length !== 8) return null;
+  const groups = [...head, ...Array(halves.length === 2 ? missing : 0).fill("0"), ...tail];
+  if (groups.length !== 8) return null;
+  const out: string[] = [];
+  for (const g of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+    out.push(g.padStart(4, "0"));
+  }
+  return out;
+}
+
 function isPrivateV6(ip: string): boolean {
   const s = ip.toLowerCase();
   const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return isPrivateV4(mapped[1]); // IPv4-mapped：按 v4 规则裁决
-  if (s === "::1" || s === "::") return true;
-  if (s.startsWith("fe80") || s.startsWith("fc") || s.startsWith("fd")) return true; // link-local/ULA
-  if (s.startsWith("ff")) return true; // 组播
-  if (s.startsWith("2001:db8")) return true; // 文档段
+  /* 字符串相等判不了展开写法（"0:0:0:0:0:0:0:1" != "::1"，net.isIP 却都认）——
+   * 一律展开成 8 组再按位裁决，堵住回环/ULA/链路本地/组播的变体写法旁路 */
+  const groups = expandV6(s);
+  if (!groups) return true; // 解析不了按不安全处理
+  if (groups.slice(0, 6).every((g) => g === "0000")) {
+    // ::（未指定）/ ::1（回环）/ ::x.y（已废弃的 IPv4-compatible）
+    if (groups[6] === "0000" && groups[7] === "0000") return true;
+    if (groups[6] === "0000" && groups[7] === "0001") return true;
+    const a = parseInt(groups[6], 16);
+    const b = parseInt(groups[7], 16);
+    return isPrivateV4(`${(a >> 8) & 255}.${a & 255}.${(b >> 8) & 255}.${b & 255}`);
+  }
+  if (groups.slice(0, 5).every((g) => g === "0000") && groups[5] === "ffff") {
+    const a = parseInt(groups[6], 16);
+    const b = parseInt(groups[7], 16);
+    return isPrivateV4(`${(a >> 8) & 255}.${a & 255}.${(b >> 8) & 255}.${b & 255}`);
+  }
+  const g0 = parseInt(groups[0], 16);
+  if (g0 >= 0xfc00 && g0 <= 0xfdff) return true; // ULA fc00::/7
+  if (g0 >= 0xfe80 && g0 <= 0xfebf) return true; // link-local fe80::/10
+  if ((g0 & 0xff00) === 0xff00) return true; // 组播 ff00::/8
+  if (g0 === 0x2001 && groups[1] === "0db8") return true; // 文档段 2001:db8::/32
   return false;
 }
 
@@ -46,6 +90,12 @@ function isPrivateAddress(ip: string): boolean {
   if (v === 4) return isPrivateV4(ip);
   if (v === 6) return isPrivateV6(ip);
   return true; // 解析结果不是合法 IP（异常），按不安全处理
+}
+
+/* WHATWG URL 的 hostname 对 IPv6 带方括号返回（"[::1]"），net.isIP 认不出——
+ * 剥掉括号再做字面量判定，否则形态层私网检查对全部 IPv6 写法失效 */
+function urlHost(u: URL): string {
+  return u.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
 }
 
 /** 形态检查；返回解析后的 URL 或 null。allowHttp=false 时仅放行 https（服务端出网端点用） */
@@ -59,7 +109,7 @@ export function checkUrlShape(raw: string, opts: { allowHttp: boolean }): URL | 
   if (u.protocol !== "https:" && !(opts.allowHttp && u.protocol === "http:")) return null;
   if (u.username || u.password) return null;
   if (u.port && u.port !== "80" && u.port !== "443") return null;
-  const host = u.hostname.toLowerCase();
+  const host = urlHost(u);
   if (!host || host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return null;
   // 字面 IPv4/IPv6：形态层直接按私网规则否决（十进制/十六进制 inet_aton 写法交给解析层）
   if (net.isIP(host) && isPrivateAddress(host)) return null;
@@ -73,7 +123,7 @@ export async function assertSafePublicUrl(
 ): Promise<{ ok: boolean; reason?: string }> {
   const u = checkUrlShape(raw, opts);
   if (!u) return { ok: false, reason: "地址格式不受支持" };
-  const host = u.hostname;
+  const host = urlHost(u);
   if (net.isIP(host)) {
     return isPrivateAddress(host)
       ? { ok: false, reason: "目标地址不可达" }

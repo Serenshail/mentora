@@ -325,6 +325,16 @@ export function NoteWorkspace({
       const title = docTitleFromFilename(file.name);
       const store = useAppStore.getState();
       const subj = (store.knowledge.find((k) => k.id === openId)?.domain?.split("/")[0] || "笔记");
+      const dup = store.knowledge.find((k) => k.title === title);
+      if (dup) {
+        // 同名文档 = 更新：addKnowledge 按标题去重会把新内容静默丢弃，还提示"已导入"
+        store.updateKnowledge(dup.id, { body, domain: `${subj}/笔记` });
+        onOpenNote(dup.id);
+        onModeChange("preview");
+        setMobilePane("editor");
+        toast.success(`已更新《${title}》`);
+        return;
+      }
       store.addKnowledge([{ title, body, domain: `${subj}/笔记` }], "manual", "上传文档");
       // 导入后直接打开这篇,用户立刻看到转换结果(而不是"传了但没反应")
       const created = useAppStore.getState().knowledge.find((k) => k.title === title);

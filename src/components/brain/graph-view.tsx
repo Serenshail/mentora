@@ -62,7 +62,7 @@ export function GraphView({
     [notes]
   );
 
-  const visibleNotes = useMemo(() => {
+  const baseNotes = useMemo(() => {
     const q = gQuery.trim().toLowerCase();
     return notes.filter((n) => {
       if (gDomain !== "all" && n.domain.split("/")[0] !== gDomain) return false;
@@ -70,6 +70,18 @@ export function GraphView({
       return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
     });
   }, [notes, gQuery, gDomain]);
+
+  const orphanIds = useMemo(() => {
+    const linked = new Set<string>();
+    for (const n of baseNotes) for (const l of n.links) linked.add(l);
+    return new Set(baseNotes.filter((n) => n.links.length === 0 && !linked.has(n.id)).map((n) => n.id));
+  }, [baseNotes]);
+
+  /* 孤立节点开关真正过滤画布（此前只改了计数文字，勾掉后节点一个不少） */
+  const visibleNotes = useMemo(
+    () => (showOrphans ? baseNotes : baseNotes.filter((n) => !orphanIds.has(n.id))),
+    [baseNotes, orphanIds, showOrphans]
+  );
 
   const edgeList = useMemo(() => {
     const idSet = new Set(visibleNotes.map((n) => n.id));
@@ -85,12 +97,6 @@ export function GraphView({
       }
     }
     return out;
-  }, [visibleNotes]);
-
-  const orphanIds = useMemo(() => {
-    const linked = new Set<string>();
-    for (const n of visibleNotes) for (const l of n.links) linked.add(l);
-    return new Set(visibleNotes.filter((n) => n.links.length === 0 && !linked.has(n.id)).map((n) => n.id));
   }, [visibleNotes]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);

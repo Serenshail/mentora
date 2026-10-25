@@ -89,16 +89,25 @@ export function useChat(initial: ChatMsg[] = []) {
 export function useHydrated() {
   const [h, setH] = useState(false);
   useEffect(() => {
-    // useAuth 的 checking 存在 useAuthStore;checking=false 即切仓已完成
+    // useAuth 的 checking 存在 useAuthStore;checking=false 即切仓已完成。
+    // cleanup 不能写进 .then() 的返回值（React 看不见）——用 disposed 旗标在外层收口
+    let disposed = false;
+    let un1: (() => void) | undefined;
+    let t: ReturnType<typeof setTimeout> | undefined;
     import("@/lib/auth-client").then(({ useAuthStore }) => {
-      const un1 = useAuthStore.subscribe((s) => {
+      if (disposed) return;
+      un1 = useAuthStore.subscribe((s) => {
         if (!s.checking) setH(true);
       });
       if (!useAuthStore.getState().checking) setH(true);
       // 兜底:匿名模式 800ms 后放行(极端时序下不阻塞 UI)
-      const t = setTimeout(() => setH(true), 800);
-      return () => { un1(); clearTimeout(t); };
+      t = setTimeout(() => setH(true), 800);
     });
+    return () => {
+      disposed = true;
+      un1?.();
+      if (t) clearTimeout(t);
+    };
   }, []);
   return h;
 }

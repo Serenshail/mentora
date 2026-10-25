@@ -43,8 +43,22 @@ interface OpenTask {
   url: string;
 }
 
-const ymd = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/** 日界：按用户时区取「今天」，默认 Asia/Shanghai。
+ *  UTC 日界在东八区 00:00–08:00 会算成前一天，深夜学习（产品文案鼓励的场景）
+ *  的「今日任务 / 到期复习」会整体错一天。插件端用同一时区口径（MT_NOW）。 */
+const OPEN_TZ = process.env.MENTORA_OPEN_TZ || "Asia/Shanghai";
+
+function ymd(d: Date, tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(d);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value || "";
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  } catch {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+}
 
 export async function GET(req: NextRequest) {
   if (!(await rateLimitPersistent(`open:${clientIp(req)}`, { capacity: 30, refillPerSec: 30 / 60 }))) {
@@ -58,24 +72,36 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "令牌不对" }, { status: 401 });
   }
 
-  /* ---- 绑定用户 ---- */
+  /* ---- 绑定用户 ----
+   * MENTORA_OPEN_USER_ID 语义 = users/ 目录的文件名（邮箱哈希）；
+   * 也兼容直接填用户 UUID（data/ 键）——先按 users/<id>.json 找档案，找不到再按邮箱扫索引。
+   * 此前键空间错位（users/<uuid> 无 .json）导致绑定档案永远查不到（2026-10-24 修复） */
   let userId = process.env.MENTORA_OPEN_USER_ID || "";
   let email = process.env.MENTORA_OPEN_EMAIL || DEFAULT_EMAIL;
   let name = "";
+  const scanByEmail = async (): Promise<boolean> => {
+    const files = await dbList("users");
+    for (const f of files) {
+      const rec = await dbGet<{ userId: string; email: string; name?: string }>(`users/${f.name}`, { encrypted: true });
+      if (rec && String(rec.email || "").toLowerCase() === email.toLowerCase()) {
+        userId = rec.userId;
+        name = rec.name || "";
+        return true;
+      }
+    }
+    return false;
+  };
   try {
     if (userId) {
-      const rec = await dbGet<{ userId: string; email: string; name?: string }>(`users/${userId}`, { encrypted: true });
-      if (rec) { email = rec.email || email; name = rec.name || ""; }
-    } else {
-      const files = await dbList("users");
-      for (const f of files) {
-        const rec = await dbGet<{ userId: string; email: string; name?: string }>(`users/${f.name}`, { encrypted: true });
-        if (rec && String(rec.email || "").toLowerCase() === email.toLowerCase()) {
-          userId = rec.userId;
-          name = rec.name || "";
-          break;
-        }
+      const rec = await dbGet<{ userId: string; email: string; name?: string }>(`users/${userId}.json`, { encrypted: true });
+      if (rec) {
+        email = rec.email || email;
+        name = rec.name || "";
+      } else {
+        await scanByEmail(); // env 填的是 UUID 或失效键 → 回落邮箱扫描
       }
+    } else {
+      await scanByEmail();
     }
   } catch { /* 用户索引读失败 → 下方 404 兜底 */ }
   if (!userId) return Response.json({ error: "找不到绑定的用户（检查 MENTORA_OPEN_USER_ID / EMAIL）" }, { status: 404 });
@@ -94,7 +120,7 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "云端数据读取失败" }, { status: 503 });
   }
 
-  const today = ymd(new Date());
+  const today = ymd(new Date(), OPEN_TZ);
   const tasks: OpenTask[] = [];
 
   /* ---- 任务 ①：每个进行中目标的「当前该做的那天」（含迁移门） ---- */

@@ -117,7 +117,13 @@ export async function POST(req: NextRequest) {
       if (buf.length > MAX_BODY_BYTES) {
         return Response.json({ error: "同步包过大，请清理第二大脑后重试" }, { status: 413 });
       }
-      const plain = zlib.gunzipSync(buf);
+      // maxOutputLength 让 gunzip 在内存里撑爆之前就失败（解压炸弹在此闸死，而不是解完 4GB 才被拒）
+      let plain: Buffer;
+      try {
+        plain = zlib.gunzipSync(buf, { maxOutputLength: MAX_DECOMPRESSED });
+      } catch {
+        return Response.json({ error: "解压后数据过大，已拒绝" }, { status: 413 });
+      }
       if (plain.length > MAX_DECOMPRESSED) {
         return Response.json({ error: "解压后数据过大，已拒绝" }, { status: 413 });
       }

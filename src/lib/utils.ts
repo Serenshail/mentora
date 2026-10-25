@@ -49,15 +49,19 @@ export function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/* 纯 UTC 日历运算：学习日期（todayISO/masteredAt/quizLog.date）全部是 UTC 日，
+ * 这里也必须按 UTC 日加减——此前本地时区解析 + UTC 输出，东八区一次 addDays(-1)
+ * 会跳过两天，首页连续天数被砍半（2026-10-24 修复） */
 export function addDays(days: number, from?: string): string {
-  const d = from ? new Date(from + "T00:00:00") : new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  const base = from ? Date.parse(`${from}T00:00:00Z`) : Date.now();
+  if (Number.isNaN(base)) return todayISO();
+  return new Date(base + days * 86400000).toISOString().slice(0, 10);
 }
 
 export function daysBetween(a: string, b: string): number {
-  const da = new Date(a + "T00:00:00").getTime();
-  const db = new Date(b + "T00:00:00").getTime();
+  const da = Date.parse(`${a}T00:00:00Z`);
+  const db = Date.parse(`${b}T00:00:00Z`);
+  if (Number.isNaN(da) || Number.isNaN(db)) return 0;
   return Math.round((db - da) / 86400000);
 }
 
