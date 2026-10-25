@@ -365,6 +365,11 @@ export const useAppStore = create<AppState>()(
             }
             if ((status === "passed" && !gate) || status === "skipped")
               unlockNext({ ...g, plan }, dayId);
+            /* 结业标记两条路径都要覆盖：正常过门（completeTransfer）与强制跳过（这里）。
+             * 判定依据是 unlockNext 之后 goal.status 是否变成 done。 */
+            if (g.status === "done" && !g.graduatedAt && !g.needsGraduation) {
+              return { ...g, plan, needsGraduation: true };
+            }
             return { ...g, plan };
           }),
         }));
@@ -379,6 +384,12 @@ export const useAppStore = create<AppState>()(
             day.pendingUnlock = false;
             day.transferAnswer = answer;
             unlockNext({ ...g, plan }, dayId);
+            /* 结业回路（v21）：最后一个阶段过门后 goal.status 变 done。
+             * 在这里标记 needsGraduation，由 UI 一次性生成结业笔记+下一步建议——
+             * 不在 store 里同步调模型（store 必须保持纯状态）。 */
+            if (g.status === "done" && !g.graduatedAt) {
+              return { ...g, plan, needsGraduation: true };
+            }
             return { ...g, plan };
           }),
         })),
@@ -401,7 +412,11 @@ export const useAppStore = create<AppState>()(
 
       addFolder: (name) =>
         set((s) => (s.folders.includes(name) ? s : { folders: [...s.folders, name] })),
-      removeFolder: (name) => set((s) => ({ folders: s.folders.filter((f) => f !== name) })),
+      // 连带删掉 name/ 前缀的子文件夹，否则删除父夹后 "A/B" 残留、树重建时复活出空夹
+      removeFolder: (name) =>
+        set((s) => ({
+          folders: s.folders.filter((f) => f !== name && !f.startsWith(`${name}/`)),
+        })),
 
       addKnowledge: (items, source, sourceTitle) => {
         const existing = new Set(get().knowledge.map((k) => k.title));
@@ -462,16 +477,22 @@ export const useAppStore = create<AppState>()(
 
       importKnowledge: (items) => {
         const norm = (t: string) => t.trim().toLowerCase();
-        const existing = new Set(get().knowledge.map((k) => norm(k.title)));
+        /* 标题 -> 已有笔记。注意：unresolved 占位**不算重复**——占位必须给后来导入的
+         * 真笔记让位（原位升级），否则占位永远灰着、正文永远进不来（v18.1 修复的死代码根因） */
+        const existing = new Map<string, KnowledgeItem>();
+        for (const k of get().knowledge) existing.set(norm(k.title), k);
         const fresh: KnowledgeItem[] = [];
         const freshLinks: string[][] = [];
         const seen = new Set<string>();
         for (const i of items) {
           const t = norm(i.title);
-          if (!i.title || !t || existing.has(t) || seen.has(t)) continue;
+          const dup = existing.get(t);
+          if (!i.title || !t || seen.has(t)) continue;
+          if (dup && !dup.unresolved) continue;
           seen.add(t);
           fresh.push({
-            id: uid("k"),
+            /* 收养同标题未解析占位的 id：后续双链解析与入链全部指向这个 id，原位升级不悬空 */
+            id: dup && dup.unresolved ? dup.id : uid("k"),
             title: i.title,
             body: i.body,
             domain: i.domain,
@@ -494,6 +515,9 @@ export const useAppStore = create<AppState>()(
         const byTitle = new Map<string, string>();
         for (const k of get().knowledge) byTitle.set(norm(k.title), k.id);
         for (const k of fresh) byTitle.set(norm(k.title), k.id);
+        /* 历史遗留占位（此前导入建的）：真笔记来了要原位升级它们 */
+        const existingPlaceholders = new Map<string, string>();
+        for (const k of get().knowledge) if (k.unresolved) existingPlaceholders.set(norm(k.title), k.id);
         const resolveOrPlaceholder = (lt: string): string | null => {
           const t = norm(lt);
           if (!t) return null;
@@ -528,28 +552,33 @@ export const useAppStore = create<AppState>()(
           }
           f.links = [...ids];
         });
-        /* 真笔记升级占位：同标题 unresolved 占位 → 原位替换（保留 id 与入链），不占去重名额 */
-        let knowledge = get().knowledge;
-        if (placeholders.length > 0) {
-          const upgraded = new Set<string>(); // 占位 id -> 已被真笔记替换
+        /* 真笔记升级占位：同标题 unresolved 占位（本批新建或历史遗留）→ 原位替换
+         * （保留占位 id 与入链，指向它的链接天然有效）；被升级的真笔记/占位不再重复入列 */
+        if (placeholders.length > 0 || existingPlaceholders.size > 0) {
+          let knowledge = get().knowledge;
+          const upgradedPh = new Set<string>(); // 占位 id -> 已被真笔记替换
+          const upgradedFresh = new Set<string>(); // 真笔记 id -> 已占用占位名额
           for (const f of fresh) {
-            const pid = placeholderIds.get(norm(f.title));
+            const t = norm(f.title);
+            const pid = placeholderIds.get(t) ?? existingPlaceholders.get(t);
             if (!pid) continue;
             const ph = knowledge.find((k) => k.id === pid);
             if (!ph?.unresolved) continue;
-            upgraded.add(pid);
+            upgradedPh.add(pid);
+            upgradedFresh.add(f.id);
             knowledge = knowledge.map((k) =>
               k.id === pid
                 ? { ...f, id: k.id, links: [...new Set([...f.links, ...k.links])] }
                 : k
             );
           }
-          if (upgraded.size > 0) {
-            /* 占位 id 原位保留 → 所有指向它的链接天然有效，无需清理 */
-            const keptFresh = fresh.filter((f) => !upgraded.has(f.id));
-            const newPlaceholders = placeholders.filter((p) => !upgraded.has(p.id));
-            set((s) => ({ knowledge: [...newPlaceholders, ...keptFresh, ...s.knowledge] }));
-            const added = keptFresh.length + upgraded.size;
+          if (upgradedPh.size > 0) {
+            /* 占位 id 原位保留 → 所有指向它的链接天然有效，无需清理；
+             * 以升级后的整库数组为基底（占位已被原位替换），再接上剩余新占位/新笔记 */
+            const keptFresh = fresh.filter((f) => !upgradedFresh.has(f.id));
+            const newPlaceholders = placeholders.filter((p) => !upgradedPh.has(p.id));
+            set((s) => ({ knowledge: [...newPlaceholders, ...keptFresh, ...knowledge] }));
+            const added = keptFresh.length + upgradedPh.size;
             return { added, skipped: items.length - added };
           }
         }
@@ -967,18 +996,19 @@ export function setStoreUser(userId: string | null) {
       const parsed = JSON.parse(raw) as { state?: Record<string, unknown>; version?: number };
       const st = (parsed?.state ?? {}) as Partial<AppState> & { knowledge?: unknown[] };
       const ver = parsed?.version ?? 2;
-      // 与 persist.migrate 同一套迁移:同步加载路径也要跑(v3 双链解析/v4 Day 前缀清洗)
+      // 与 persist.migrate 完全同一套迁移:同步加载路径也要跑(v2 双链解析/v3 双链解析/v4 Day 前缀清洗)。
+      // 此前 v<2 分支只跑 migrateKnowledge 漏了 linkifyBodies——老用户图谱/反链为空。
       let knowledge = st.knowledge ?? [];
-      if (ver < 2) knowledge = migrateKnowledge(knowledge);
-      else if (ver < 4) knowledge = linkifyBodies(
-        ver < 4
-          ? ((knowledge as KnowledgeItem[]).map((k) =>
-              k.body && /Day\s*\d+[：:]\s*Day\s*\d+[：:]/.test(k.body)
-                ? { ...k, body: k.body.replace(/(Day\s*\d+[：:])\s*Day\s*\d+[：:]\s*/g, "$1 ") }
-                : k
-            ))
-          : (knowledge as KnowledgeItem[])
-      );
+      if (ver < 2) knowledge = linkifyBodies(migrateKnowledge(knowledge));
+      else if (ver < 3) knowledge = linkifyBodies(knowledge as KnowledgeItem[]);
+      else if (ver < 4)
+        knowledge = linkifyBodies(
+          (knowledge as KnowledgeItem[]).map((k) =>
+            k.body && /Day\s*\d+[：:]\s*Day\s*\d+[：:]/.test(k.body)
+              ? { ...k, body: k.body.replace(/(Day\s*\d+[：:])\s*Day\s*\d+[：:]\s*/g, "$1 ") }
+              : k
+          )
+        );
       loaded = { ...st, knowledge };
     }
   } catch {

@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { createHash } from "node:crypto";
 import type { AIConfig } from "@/lib/ai/providers";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { verifySession, type SessionUser } from "@/lib/server/auth";
@@ -52,6 +53,7 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "resource-fix": return P.RESOURCE_FIX(s("bad"), s("ctx"));
     case "direction-guide": return P.DIRECTION_GUIDE(s("ctx"));
     case "life-post": return P.LIFE_POST(s("events"), Number(args.streak ?? 0));
+    case "graduation": return P.GRADUATION(s("ctx"));
     case "app-assistant": return P.APP_ASSISTANT(s("ctx"));
     case "persona-distill": return P.PERSONA_DISTILL(s("name"), s("hint"));
     case "council": {
@@ -332,7 +334,10 @@ export async function POST(req: NextRequest) {
             task: body.task ?? "generic",
             provider: cfg.provider,
             model: cfg.model,
-            account: session?.email ?? clientIp(req),
+            // 日志脱敏：邮箱不进日志，只留可聚合的前 8 位哈希指纹（account 字段无按账号消费方）
+            account: session
+              ? createHash("sha256").update(session.email).digest("hex").slice(0, 8)
+              : clientIp(req),
             byok: byok ? 1 : 0,
             prompt_tokens: stats.promptTokens ?? 0,
             completion_tokens: stats.completionTokens ?? 0,

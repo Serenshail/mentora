@@ -393,12 +393,13 @@ ${ctx}
 3. hintLevel 记录：如果模型在题目或讲解中已提供了关键提示（L0 自检/L1 位置/L2 原则/L3 结构/L4 示范关键步/L5 完整示范），请在 hintLevel 中记录最大提示等级（0-5）。未提供提示则不填。
 4. fail 时 feedback 必须给出：卡在哪 + 下一步只修哪一点（不超过一句）。
 5. 不放水，不吹毛求疵。overall：全部 correct 或 partially_correct 算 pass，有 incorrect 算 fail。
-6. 反馈语气 = ${tone === "gentle" ? "温和档：先引用用户回答里做对的具体部分（一到两句，落到实处）,再把缺口说成「还差一步」,最后只给一个下一步;不空泛夸奖,不改变判分标准" : "标准档：直接指出缺口与下一步,不铺垫"}。
+6. **evidence 必填（correct / partially_correct 强制）**：必须摘引当天讲义（lesson）或知识点清单里的一句原文，说明"用户这句话对应教材的哪一处"。没有可引用依据的题一律判 ungradable——不要用你自己的背景知识替教材背书。incorrect / ungradable 可留空。
+7. 反馈语气 = ${tone === "gentle" ? "温和档：先引用用户回答里做对的具体部分（一到两句，落到实处）,再把缺口说成「还差一步」,最后只给一个下一步;不空泛夸奖,不改变判分标准" : "标准档：直接指出缺口与下一步,不铺垫"}。
 
 只输出一个 json 代码块：
 \`\`\`json
 {
-  "items": [{"itemId": "...", "verdict": "correct|partially_correct|incorrect|ungradable", "feedback": "...", "hintLevel": 0}],
+  "items": [{"itemId": "...", "verdict": "correct|partially_correct|incorrect|ungradable", "evidence": "讲义原文摘句（correct/partially 必填，其余可空）", "feedback": "...", "hintLevel": 0}],
   "overall": "pass|fail",
   "summary": "一句话总评",
   "reviewAdvice": "若 fail：接下来该补什么；若 pass：进入下阶段的提醒",
@@ -423,9 +424,11 @@ ${ctx}
 
 对照 question 与 excerpt，判断用户是否真正回忆起了该笔记的核心内容（允许不完整，核心机制说对即可；遗忘关键点则 fail）。以 question 为准——用户答的就是这道题，不要拿别的问题去评。
 
+判 pass 时必须给出 evidence：摘引 excerpt（笔记原文）里支撑该判定的那一句。**摘不出原文依据就不能判 pass，改判 fail 并在 feedback 说明"需要回到笔记原文确认"**。不要用你自己的背景知识替代笔记原文。
+
 只输出一个 json 代码块：
 \`\`\`json
-{"verdict": "pass|fail", "feedback": "一句话反馈（fail 时提醒核心记忆点）"}
+{"verdict": "pass|fail", "evidence": "笔记原文摘句（pass 必填）", "feedback": "一句话反馈（fail 时提醒核心记忆点）"}
 \`\`\``;
 
 /* ---------------- 6. 读书伙伴（深度解剖 v3） ---------------- */
@@ -1116,6 +1119,36 @@ export const RESOURCE_FIX = (bad: string, ctx: string) => `你是 Mentora 的资
 待替换资源(JSON,含失效原因):
 ${bad}
 只输出 JSON 数组本身(以 [ 开头、] 结尾),禁止包成对象、禁止任何解释文字。每项 {"title","url","why","kind","year"},数量与输入一致、按顺序对应。URL 必须是你确信存在的官方/权威地址;禁止广告页、课程销售页、购物清单。若确实找不到可靠替代,该项 url 填 null。`;
+
+export const GRADUATION = (ctx: string) => `你是 Mentora 的学习教练。用户刚走完一个完整学习目标（所有阶段的验收门与迁移题都过了）。现在做一次结业总结，并给下一步建议。
+
+## 材料（JSON）
+${ctx}
+
+## 你要输出的东西
+
+1. **结业笔记正文（noteMarkdown）**：一份能留在第二大脑里、几个月后回看仍有用的结业笔记。
+   - 开头一句话：这个目标最终学会了什么（用能力描述，不是课程目录）。
+   - 「关键能力」：列出通过验收的知识点，按掌握状态分组（能独立完成 / 能迁移应用 / 长期保持）；只列材料里真实存在的，不编造。
+   - 「走过的坑」：从 quizLog 里挑出真实出现过的失败/强制跳过，写一句"当时卡在哪、后来怎么过的"。没有就跳过这一节。
+   - 「仍然薄弱的」：掌握状态仍是 exposed/guided 的知识点，如实列出——不要假装全懂了。
+   - 结尾给一句可执行的提醒（复习节奏或下一步该做什么）。
+   - 用 Markdown，不要编造任何材料里没有的事实。
+
+2. **下一步建议（nextSteps）**：最多 3 条，每条一句话，必须从"已掌握知识点"往外推：
+   - 可以是进阶主题（在已会的基础上加深）；
+   - 可以是应用项目（把已会的东西用起来）；
+   - 可以是相关书籍/资料方向。
+   - 每条都要说清"为什么是现在、对你这个目标来说"。不许凭空编造具体书名/链接。
+   - 只是建议，不要替用户创建目标。
+
+只输出一个 json 代码块：
+\`\`\`json
+{
+  "noteMarkdown": "结业笔记全文",
+  "nextSteps": ["建议一", "建议二", "建议三"]
+}
+\`\`\``;
 
 export const APP_ASSISTANT = (ctx: string) => `你是 Mentora 的使用助手，住在应用左下角。用户任何关于这个产品的问题——功能在哪、怎么用、某条数据去哪了、某个按钮什么意思——都用**简短、直接、可执行**的方式回答。像同事，不像客服：不客套、不排比、三句内说完就说完。
 

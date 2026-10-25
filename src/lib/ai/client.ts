@@ -12,7 +12,7 @@ export type ChatTask =
   | "review-ask" | "review-grade"
   | "reading-plan" | "reading-chat" | "council"
   | "autolink" | "persona-distill" | "coach-qa"
-  | "verify-score" | "app-assistant" | "insight" | "note-assist" | "wiki-compile" | "resource-fix" | "direction-guide" | "life-post";
+  | "verify-score" | "app-assistant" | "insight" | "note-assist" | "wiki-compile" | "resource-fix" | "direction-guide" | "life-post" | "graduation";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：
@@ -324,6 +324,13 @@ export const quizGradeSchema = z.object({
         },
         z.enum(["correct", "partially_correct", "incorrect", "ungradable"])
       ),
+      /** 判分证据：必须引用讲义/知识点原文作为本次判定依据。
+       *  v21：没有证据的 correct/partially_correct 会被降级为 ungradable（见 normalizeQuizGrade）——
+       *  验收的参照物是当天讲义，不是模型自己的记忆。 */
+      evidence: z.preprocess(
+        (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 400) : ""),
+        z.string()
+      ),
       feedback: z.string(),
       hintLevel: z.preprocess(
         (v) => (typeof v === "number" ? Math.min(5, Math.max(0, Math.round(v))) : undefined),
@@ -352,6 +359,30 @@ export const quizGradeSchema = z.object({
   ),
 });
 export type QuizGrade = z.infer<typeof quizGradeSchema>;
+
+/** 证据强制：把没有 evidence 的正向判定降级为 ungradable，并按降级后的 items 重算 overall。
+ *  为什么必须在代码里做而不是只写提示词：模型经常"结论对、依据错"或干脆不给依据，
+ *  而提示词约束不是确定性执行。这一层是验收可靠性的最后一道闸。 */
+export function normalizeQuizGrade(g: QuizGrade): QuizGrade {
+  const items = g.items.map((it) => {
+    const positive = it.verdict === "correct" || it.verdict === "partially_correct";
+    if (positive && !it.evidence) {
+      return {
+        ...it,
+        verdict: "ungradable" as const,
+        feedback: (it.feedback || "") + "（未引用讲义原文作为依据，本次判定不计为通过）",
+      };
+    }
+    return it;
+  });
+  const hasIncorrect = items.some((it) => it.verdict === "incorrect");
+  const hasPositive = items.some((it) => it.verdict === "correct" || it.verdict === "partially_correct");
+  const hasUngradable = items.some((it) => it.verdict === "ungradable");
+  /* 与提示词口径一致：全部 correct/partially 才算 pass；但模型说 pass 而实际没有正向证据时不得通过 */
+  const overall: "pass" | "fail" =
+    hasIncorrect || !hasPositive || hasUngradable ? "fail" : "pass";
+  return { ...g, items, overall };
+}
 
 export const bookProfileSchema = z.object({
   positioning: z.string(),
@@ -417,6 +448,42 @@ export const personaDistillSchema = z.object({
 });
 
 export const reviewGradeSchema = z.object({
-  verdict: z.enum(["pass", "fail"]),
+  verdict: z.preprocess(
+    (v) => {
+      const s = String(v ?? "").toLowerCase();
+      if (["pass", "correct", "true", "通过", "回忆成功"].includes(s)) return "pass";
+      return "fail";
+    },
+    z.enum(["pass", "fail"])
+  ),
+  /** 复习通过必须引用笔记原文作为依据；无证据的 pass 在 normalizeReviewGrade 里降级为 fail。 */
+  evidence: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 400) : ""),
+    z.string()
+  ),
   feedback: z.string(),
 });
+
+/** 复习证据强制：无 evidence 的 pass 一律改判 fail（不给"模棱两可也算记住"的口子）。 */
+export function normalizeReviewGrade(g: { verdict: "pass" | "fail"; evidence: string; feedback: string }) {
+  if (g.verdict === "pass" && !g.evidence) {
+    return {
+      ...g,
+      verdict: "fail" as const,
+      feedback: (g.feedback || "") + "（未能引用笔记原文作为依据，本次不计通过）",
+    };
+  }
+  return g;
+}
+
+export const graduationSchema = z.object({
+  noteMarkdown: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() : ""),
+    z.string().min(20, "结业笔记过短")
+  ),
+  nextSteps: z.preprocess(
+    (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).slice(0, 3) : []),
+    z.array(z.string())
+  ),
+});
+export type Graduation = z.infer<typeof graduationSchema>;

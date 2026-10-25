@@ -11,10 +11,11 @@ import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS } from "@/lib/types";
 import type { DayPlan, Goal, QuizItemResult } from "@/lib/types";
-import { extractJson, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
+import { extractJson, normalizeQuizGrade, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
 import { cn, formatDate, uid, rankResources, KIND_LABEL } from "@/lib/utils";
 import { refineResources } from "@/lib/resource-pipeline";
 import { masteryFromQuiz } from "@/lib/store";
+import { runGraduation } from "@/lib/graduation";
 
 /* 链接体检徽章:复用资源管线的模块级缓存(refine 已体检过的不再重复请求) */
 import type { LinkCheck } from "@/lib/resource-pipeline";
@@ -243,8 +244,9 @@ export default function GoalDetailPage() {
     : 0;
   const projection = (() => {
     if (!deadline || !remainingDays) return null;
+    // 截止日按"当天结束"算：date-input 语义是当天仍可交付，此前按 UTC 午夜算，东八区当天上午 8 点后就判"已过期"
     // eslint-disable-next-line react-hooks/purity -- 日程投影按"天"粒度，同帧内时间戳无副作用，重排一毫秒都不影响结论
-    const days = Math.ceil((new Date(deadline).getTime() - Date.now()) / 86400000);
+    const days = Math.ceil((new Date(`${deadline}T23:59:59`).getTime() - Date.now()) / 86400000);
     if (days <= 0) return { verdict: "已过期", perDay: 0, days: 0 };
     const perDay = remainingDays / days;
     return {
@@ -324,15 +326,102 @@ export default function GoalDetailPage() {
         <PhasePlanPanel goal={goal} phase={activePhase} />
       )}
       {goal.plan && !viewDay && !activePhase && (
-        <Card className="flex items-center justify-center gap-2 py-16 text-ink-dim">
-          <Trophy className="size-4 text-accent" />
-          全部阶段完成！去「第二大脑」看看你积累了什么。
-        </Card>
+        <GraduationPanel goal={goal} />
       )}
       {!goal.plan && (
         <RegeneratePlan goal={goal} />
       )}
     </div>
+  );
+}
+
+/* ================= 结业面板：最后一个阶段过门后的成就回路 ================= */
+function GraduationPanel({ goal }: { goal: Goal }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const graduated = Boolean(goal.graduatedAt);
+  const nextSteps = goal.nextSteps ?? [];
+
+  const days = goal.plan ? Object.values(goal.plan.days) : [];
+  const done = days.filter((d) => d.status === "passed" || d.status === "skipped").length;
+  const skipped = days.filter((d) => d.status === "skipped").length;
+  const points = days.flatMap((d) => d.knowledgePoints || []);
+  const durable = points.filter((k) => k.historicalHighest === "durable").length;
+  const transferable = points.filter((k) => k.historicalHighest === "transferable").length;
+
+  const generate = async () => {
+    setBusy(true);
+    setError(null);
+    const r = await runGraduation(goal.id);
+    setBusy(false);
+    if (!r.ok) {
+      setError(r.error || "生成失败");
+      toast.error("结业总结没生成成功：" + (r.error || "未知错误"));
+      return;
+    }
+    toast.success("结业笔记已写入第二大脑");
+  };
+
+  return (
+    <Card className="p-6">
+      <div className="flex items-start gap-3">
+        <Trophy className="mt-0.5 size-5 shrink-0 text-accent" />
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-bold text-ink">这个目标走完了</h2>
+          <p className="mt-1 text-sm text-ink-dim">
+            {done}/{days.length} 天完成
+            {skipped > 0 ? `（其中强制跳过 ${skipped} 天）` : ""} · 知识点 {points.length} 条
+            {durable > 0 ? ` · 长期保持 ${durable}` : ""}
+            {transferable > 0 ? ` · 能迁移 ${transferable}` : ""}
+          </p>
+
+          {!graduated && (
+            <div className="mt-4">
+              <p className="text-sm text-ink-dim">
+                再补一份结业总结：把你真正学会的能力、走过的坑、仍然薄弱的地方写进第二大脑，
+                并给出最多三条下一步建议（只建议，不会自动创建新目标）。
+              </p>
+              <Button className="mt-3" size="sm" onClick={generate} disabled={busy}>
+                {busy ? "生成中…" : "生成结业笔记与下一步"}
+              </Button>
+              {error && <p className="mt-2 text-xs text-bad">{error}</p>}
+            </div>
+          )}
+
+          {graduated && (
+            <div className="mt-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {goal.graduationNoteId && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => router.push(`/brain?note=${encodeURIComponent(goal.graduationNoteId!)}`)}
+                  >
+                    <BookMarked className="mr-1.5 size-3.5" />
+                    打开结业笔记
+                  </Button>
+                )}
+                <Badge tone="ok">结业于 {formatDate(goal.graduatedAt!.slice(0, 10))}</Badge>
+              </div>
+              {nextSteps.length > 0 && (
+                <div className="rounded-xl border border-border bg-surface-2/60 p-3.5">
+                  <p className="text-xs font-bold text-ink-dim">下一步建议（选一个再说，不自动创建）</p>
+                  <ul className="mt-2 space-y-1.5">
+                    {nextSteps.map((s, i) => (
+                      <li key={i} className="flex gap-2 text-sm text-ink">
+                        <span className="text-ink-3">{i + 1}.</span>
+                        <span>{s}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -725,7 +814,9 @@ function DayPanel({
         task: "quiz-grade",
         onDelta: () => {},
       });
-      const g = quizGradeSchema.parse(extractJson(full));
+      /* v21：证据强制——没有引用讲义原文的正向判定会被降级为 ungradable，
+       * overall 也随之重算。模型自己说 pass 不算，必须有可追溯的依据。 */
+      const g = normalizeQuizGrade(quizGradeSchema.parse(extractJson(full)));
       setGrade(g);
       setMode("result");
       store.getState().incrementAttempts(goal.id, day.id);
@@ -1126,6 +1217,11 @@ function DayPanel({
                     </span>
                     {r.feedback}
                   </p>
+                  {r.evidence && (
+                    <p className="mt-1.5 border-l-2 border-border pl-2.5 text-[11px] leading-relaxed text-ink-3">
+                      依据（讲义原文）：{r.evidence}
+                    </p>
+                  )}
                 </div>
               );
             })}

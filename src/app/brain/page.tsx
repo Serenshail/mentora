@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Badge, Button, Card, Modal,
 } from "@/components/ui";
@@ -10,12 +11,41 @@ import { NoteWorkspace } from "@/components/brain/note-workspace";
 import { Markdown } from "@/components/markdown";
 import { useAppStore, useDueReviews } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
-import { extractJson, reviewGradeSchema } from "@/lib/ai/client";
+import { extractJson, normalizeReviewGrade, reviewGradeSchema } from "@/lib/ai/client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Brain, RefreshCcw } from "lucide-react";
 
 type Tab = "notes" | "graph";
+
+/* URL 直达同步（⌘K 命令面板的跳转契约）：/brain?note=<id> 直接打开该笔记；?tab=graph 进图谱。
+ * useSearchParams 在静态预渲染必须有 Suspense 边界（同 login 页先例），故抽成小组件包起来。
+ * 依赖 searchParams：已在 /brain 页时 cmdk 再跳 ?note=id 只改 query 不重挂载，
+ * 依赖 [] 只跑一次的写法会漏掉同页跳转（2026-10-24 修复） */
+function BrainUrlSync({
+  setTab,
+  setOpenId,
+}: {
+  setTab: (t: Tab) => void;
+  setOpenId: (id: string | null) => void;
+}) {
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    // 挪一拍：effect 同步 setState 是级联渲染红线（lint）
+    const raf = requestAnimationFrame(() => {
+      const note = searchParams.get("note");
+      const tabParam = searchParams.get("tab");
+      if (note) {
+        setTab("notes");
+        setOpenId(note);
+      } else if (tabParam === "graph") {
+        setTab("graph");
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [searchParams, setTab, setOpenId]);
+  return null;
+}
 
 export default function BrainPage() {
   const hydrated = useHydrated();
@@ -27,22 +57,6 @@ export default function BrainPage() {
   const [wsMode, setWsMode] = useState<"preview" | "edit">("preview");
 
   /* URL 直达（⌘K 命令面板的跳转契约）：/brain?note=<id> 直接打开该笔记；?tab=graph 进图谱 */
-  useEffect(() => {
-    // 挪一拍：effect 同步 setState 是级联渲染红线（lint）
-    const raf = requestAnimationFrame(() => {
-      const p = new URLSearchParams(window.location.search);
-      const note = p.get("note");
-      const tabParam = p.get("tab");
-      if (note) {
-        setTab("notes");
-        setOpenId(note);
-      } else if (tabParam === "graph") {
-        setTab("graph");
-      }
-    });
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
   // 复习会话
   const [reviewQueue, setReviewQueue] = useState<string[]>([]);
   const [sessionTotal, setSessionTotal] = useState(0);
@@ -153,7 +167,8 @@ export default function BrainPage() {
         temperature: 0.2,
         onDelta: () => {},
       });
-      const g = reviewGradeSchema.parse(extractJson(full));
+      /* v21：复习通过必须有笔记原文依据，否则改判 fail（不给"感觉记住了"放水） */
+      const g = normalizeReviewGrade(reviewGradeSchema.parse(extractJson(full)));
       setVerdict(g);
       setPhase("graded");
       if (g.verdict === "pass") setCorrectCount((c) => c + 1);
@@ -177,6 +192,9 @@ export default function BrainPage() {
 
   return (
     <div>
+      <Suspense fallback={null}>
+        <BrainUrlSync setTab={setTab} setOpenId={setOpenId} />
+      </Suspense>
       {/* 紧凑顶栏：标题 + 统计 + 复习 + Tab */}
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
         <h1 className="flex items-center gap-2 text-[17px] font-bold tracking-[-0.01em] text-ink">

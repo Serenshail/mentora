@@ -203,6 +203,14 @@ export interface Goal {
   plan?: Plan;
   quizLog: QuizResult[];
   intakeTranscript: SocraticTurn[];
+  /** 结业回路（v21）：最后一个阶段过门后置 true，UI 生成结业笔记与下一步建议后清掉 */
+  needsGraduation?: boolean;
+  /** 结业完成时间（ISO）。有值表示结业笔记已生成，不再重复触发 */
+  graduatedAt?: string;
+  /** 结业笔记的知识条目 id（第二大脑里可点开） */
+  graduationNoteId?: string;
+  /** 下一步建议：模型基于已掌握知识点产出，仅建议、不自动创建目标 */
+  nextSteps?: string[];
 }
 
 /* ========= 第二大脑（Obsidian 式双链笔记） ========= */

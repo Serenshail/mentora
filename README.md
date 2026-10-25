@@ -110,9 +110,30 @@ src/
 
 乔布斯式做减法 + 纳瓦尔式的具体：**第一句话就是判断**；文案像人话不像产品说明书（依据 Apple HIG Writing 与 Material 3 content design 清过全站）；验收不放水；不承诺做不到的日期——学习量由任务决定，投入多少走多快；数据归用户，随时可带走。
 
-## Roadmap
+## Roadmap（下一步唯一主线）
 
-- [ ] 读书伙伴：参考站复刻（进行中）/ EPUB·PDF 上传
+### Founder-First：先让创始人自己愿意每天用
+
+当前最高优先级不是继续堆功能，而是把首页变成**一个入口、一个主智能体、四个工作空间**：用户只需说出想学什么、想整理什么、想读懂什么或正在纠结什么，Mentora 负责识别意图、给出下一步，并把确认后的结果沉淀为目标、笔记、复习或决策资产。
+
+- [ ] P0：统一首页主入口、意图识别、工作空间摘要、只读工具、提案卡、确认后写入
+- [ ] P0：50 条以上意图黄金集、动作安全测试、Demo/真实模型同形状
+- [ ] P1：计划 patch、双链提案、读书提案、Decision/ActionItem、Agent run 审计
+- [ ] P1：软删除/撤销、冲突状态、断线恢复、移动端和无障碍回归
+
+**规划文档**：[Founder-First PRD](docs/PRD-2026-10-24.md)
+
+**发布门禁**：[Founder-First Acceptance](docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md)
+
+**Obsidian 插件渠道执行规格**：[PLUGIN-EXECUTION-2026-10-24.md](docs/PLUGIN-EXECUTION-2026-10-24.md)
+
+**今天就能开始**：[DOGFOODING-7D.md](docs/DOGFOODING-7D.md)（7 天自用记录表，用来判断到底值不值得继续做）
+
+**重要说明**：上述 Founder-First 主智能体均为规划项，不代表当前版本已经实现或通过验收。当前已实现功能的基线仍以 [`ACCEPTANCE.md`](ACCEPTANCE.md) 为准。
+
+### 暂缓项
+
+- [ ] 读书伙伴：EPUB·PDF 上传
 - [ ] 同步升级：快照 last-write-wins → 字段级合并；数据量大后再评估 Postgres
 - [ ] Token 计量与用量面板 / 移动端 PWA + 复习推送
 - [ ] 增长：内容获客 / SEO
