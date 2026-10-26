@@ -51,6 +51,9 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "coach-qa": return P.ASK_COACH(s("ctx"));
     case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
+    /* RAG 增强（2026-10-26）：查询改写与精排都只输出 JSON，检索质量由代码裁决 */
+    case "query-rewrite": return P.QUERY_REWRITE(s("question"), s("context"));
+    case "rag-rerank": return P.RAG_RERANK(s("query"), s("candidates"));
     case "resource-fix": return P.RESOURCE_FIX(s("bad"), s("ctx"));
     case "direction-guide": return P.DIRECTION_GUIDE(s("ctx"));
     case "life-post": return P.LIFE_POST(s("events"), Number(args.streak ?? 0));
@@ -103,6 +106,15 @@ function demoTask(
     case "persona-distill":
       return (async function* () {
         yield* (await import("@/lib/ai/demo")).demoPersona();
+      })();
+    /* RAG 增强的 Demo 必须同形状：改写返回 queries、精排返回 picked，否则上层解析失败 */
+    case "query-rewrite":
+      return (async function* () {
+        yield* (await import("@/lib/ai/demo")).demoQueryRewrite(String(args.question ?? ""));
+      })();
+    case "rag-rerank":
+      return (async function* () {
+        yield* (await import("@/lib/ai/demo")).demoRagRerank(String(args.candidates ?? ""));
       })();
     case "coach-qa":
       return demoCouncil(messages);

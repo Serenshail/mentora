@@ -238,3 +238,71 @@ export function ragContext(hits: RagHit[], maxChars = 1200): string {
   }
   return out;
 }
+
+/* ========= 检索增强三件套（对照经典 RAG 改造方法，2026-10-26）=========
+ * 图片里的四个改造方向里，我们原本只有「向量混排」。这里补齐性价比最高的三项：
+ *   ① 查询侧：Step-Back + Multi-Query 改写（解决"问得模糊"）
+ *   ② 排序侧：LLM 精排 top-N → top-k（替代只有标签加分的伪 ReRank）
+ *   ③ 质量侧：CRAG 式自评——检索不足时改写重检，而不是硬塞空上下文
+ * 三者都是纯函数/注入式，不 import server-only，调用方决定是否启用。 */
+
+/** 多查询融合：把原始问句与改写问句各自的检索结果按 RRF 合并（RAG-Fusion 的最小实现） */
+export function fuseMultiQuery(
+  query: string,
+  variants: string[],
+  docs: RagDoc[],
+  k = 8
+): RagHit[] {
+  const queries = [query, ...variants].filter((q) => q && q.trim());
+  const lists = queries.map((q) => bm25Search(q, docs, k * 2));
+  const byId = new Map<string, RagHit>();
+  lists.forEach((hits) => {
+    hits.forEach((h, rank) => {
+      const prev = byId.get(h.doc.id);
+      const gain = 1 / (60 + rank + 1);
+      byId.set(h.doc.id, { doc: h.doc, score: (prev?.score ?? 0) + gain });
+    });
+  });
+  return [...byId.values()].sort((a, b) => b.score - a.score).slice(0, k);
+}
+
+/** 检索质量自评（CRAG 的轻量版）：不调模型，只看"命中数与分数是否够看"。
+ *  用途：判定要不要触发一次改写重检，避免把"其实没检索到"伪装成"已参考笔记"。 */
+export function assessRetrieval(hits: RagHit[], opts: { minHits?: number; minTopScore?: number } = {}) {
+  const { minHits = 2, minTopScore = 1.2 } = opts;
+  const top = hits[0]?.score ?? 0;
+  const weak = hits.length < minHits || top < minTopScore;
+  return { weak, reason: weak ? (hits.length < minHits ? "命中不足" : "相关度不够") : "" };
+}
+
+/** 精排提示词（LLM ReRank）：只让模型做"选与排序 + 一句理由"，不许改写笔记内容。
+ *  返回给调用方拼进 /api/chat 的 args，task=rag-rerank。 */
+export function rerankPrompt(query: string, hits: RagHit[], k = 3) {
+  const candidates = hits.map((h, i) => ({
+    idx: i + 1,
+    title: h.doc.title,
+    excerpt: h.doc.body.replace(/\[\[|\]\]/g, "").slice(0, 300),
+  }));
+  return {
+    instructions:
+      "按与用户问题的实际帮助程度排序，只保留最相关的 " +
+      k +
+      " 条；宁缺毋滥，全部不相关就返回空数组。只输出 JSON。",
+    query,
+    candidates,
+  };
+}
+
+/** 解析精排结果；失败/越界一律回退到原始顺序（绝不因精排异常丢结果） */
+export function applyRerank(hits: RagHit[], ranked: unknown, k = 3): RagHit[] {
+  if (!Array.isArray(ranked)) return hits.slice(0, k);
+  const picked: RagHit[] = [];
+  for (const item of ranked) {
+    const idx = typeof item === "number" ? item : Number((item as { idx?: number })?.idx);
+    if (!Number.isInteger(idx) || idx < 1 || idx > hits.length) continue;
+    const hit = hits[idx - 1];
+    if (hit && !picked.includes(hit)) picked.push(hit);
+    if (picked.length >= k) break;
+  }
+  return picked.length > 0 ? picked : hits.slice(0, k);
+}

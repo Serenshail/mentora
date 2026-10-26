@@ -10,6 +10,7 @@ import { extractJson, insightsSchema } from "@/lib/ai/client";
 import { heuristicVerify } from "@/lib/verify-heuristic";
 import { READING_MODES, defaultReadingMode, type ReadingMode } from "@/lib/ai/reading-modes";
 import { ragContext, wikiRetrieve } from "@/lib/rag";
+import { retrieveEnhanced } from "@/lib/rag-pipeline";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { ArrowLeft, Check, Lightbulb, PanelLeftClose, PanelLeftOpen, ShieldCheck } from "lucide-react";
@@ -89,28 +90,45 @@ export default function BookPage() {
     const text = input.trim();
     if (!text || streaming) return;
     setInput("");
-    /* RAG 第一步：按用户这句话，从第二大脑检索最相关的笔记注入上下文 */
-    const hits = wikiRetrieve(
-      `${text} ${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`,
-      useAppStore
+    void (async () => {
+      /* RAG 增强（2026-10-26）：基线图导航 → CRAG 自评 → 查询改写+多查询融合 → LLM 精排。
+       * 任何一步失败都回退到原行为（wikiRetrieve top-3），对话不受影响。 */
+      const notes = useAppStore
         .getState()
         .knowledge.filter((k) => !(k.tags ?? []).includes("MOC")) // 目录索引笔记不作种子,但可作为 hub 被导航到
         .map((k) => ({
           id: k.id, title: k.title, body: k.body, domain: k.domain,
           links: k.links, version: k.version, updatedAt: k.updatedAt, tags: k.tags,
-        })),
-      3
-    );
-    const ragCtx = ragContext(hits);
-    void send({
-      args: { bookCtx: bookCtx(), ragCtx, mode: activeMode },
-      userText: text,
-      task: "reading-chat",
-      onDone: (full) => {
-        addBookMsg(book.id, { id: uid("m"), role: "user", content: text, at: new Date().toISOString() });
-        addBookMsg(book.id, { id: uid("m"), role: "assistant", content: full, at: new Date().toISOString() });
-      },
-    });
+        }));
+      let ragCtx = "";
+      try {
+        const enhanced = await retrieveEnhanced(
+          text,
+          notes,
+          3,
+          { context: `${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`.trim() }
+        );
+        ragCtx = enhanced.context;
+      } catch {
+        // 兜底：增强链路整体失败 → 原行为（纯 wikiRetrieve）
+        ragCtx = ragContext(
+          wikiRetrieve(
+            `${text} ${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`,
+            notes,
+            3
+          )
+        );
+      }
+      void send({
+        args: { bookCtx: bookCtx(), ragCtx, mode: activeMode },
+        userText: text,
+        task: "reading-chat",
+        onDone: (full) => {
+          addBookMsg(book.id, { id: uid("m"), role: "user", content: text, at: new Date().toISOString() });
+          addBookMsg(book.id, { id: uid("m"), role: "assistant", content: full, at: new Date().toISOString() });
+        },
+      });
+    })();
   };
 
   /* ---- 三重验收（迁移自用户 CogniRead 项目：举例 30% + 迁移 30% + 贴合 40%） ---- */

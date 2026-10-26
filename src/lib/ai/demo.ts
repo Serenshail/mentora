@@ -431,3 +431,27 @@ ${per}
 **改判信号**：缓冲数字、外部约束、或第一步实际成本，任一超出预估两倍——重开这一桌。`
   );
 }
+
+/* ---------- RAG 增强（演示）：改写与精排同形状 ----------
+ * 契约：query-rewrite 必须返回 {"queries":[...]}，rag-rerank 必须返回 {"picked":[...]}，
+ * 否则上层 extractJson 解析失败会让检索降级——Demo 也要能跑通整条增强链路。 */
+export async function* demoQueryRewrite(question: string) {
+  const q = question.replace(/\s+/g, " ").trim().slice(0, 20) || "这个问题";
+  yield* chunked(
+    "```json\n" +
+      JSON.stringify({
+        queries: [`${q}背后的通用原理是什么`, `${q} 关键概念与术语`],
+      }) +
+      "\n```"
+  );
+}
+
+export async function* demoRagRerank(candidates: string) {
+  // 演示：按候选出现顺序取前 3 条（不假装有语义判断力）
+  const n = (candidates.match(/"idx"/g) || []).length;
+  const picked = Array.from({ length: Math.min(3, n) }, (_, i) => ({
+    idx: i + 1,
+    why: "（演示）按候选顺序保留",
+  }));
+  yield* chunked("```json\n" + JSON.stringify({ picked }) + "\n```");
+}

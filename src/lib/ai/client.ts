@@ -12,7 +12,8 @@ export type ChatTask =
   | "review-ask" | "review-grade"
   | "reading-plan" | "reading-chat" | "council"
   | "autolink" | "persona-distill" | "coach-qa"
-  | "verify-score" | "app-assistant" | "insight" | "note-assist" | "wiki-compile" | "resource-fix" | "direction-guide" | "life-post" | "graduation";
+  | "verify-score" | "app-assistant" | "insight" | "note-assist" | "wiki-compile" | "resource-fix" | "direction-guide" | "life-post" | "graduation"
+  /* RAG 增强（2026-10-26）：查询改写 / 结果精排 */ | "query-rewrite" | "rag-rerank";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：
