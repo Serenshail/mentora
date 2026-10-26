@@ -512,7 +512,12 @@ export default function CouncilPage() {
                       "group flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition cursor-pointer",
                       activeId === s.id ? "bg-accent/[0.08] font-medium text-accent" : "text-ink-dim hover:bg-black/[0.04]"
                     )}
-                    onClick={() => setActiveId(s.id)}
+                    onClick={() => {
+                      // 点会话必须同时退出选择页：newChat 会把 picking 置 true，
+                      // 只设 activeId 的话界面仍停在会话选择页（点旧会话看起来"没反应"）
+                      setPicking(false);
+                      setActiveId(s.id);
+                    }}
                   >
                     {s.personaId === "roundtable" ? (
                       <Users className="size-3.5 shrink-0" />
