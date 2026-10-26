@@ -132,7 +132,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   /* /admin 自带独立密码门，不需要登录态，也不参与登录跳转（否则和登录页互相弹） */
-  const isPublicPath = pathname === "/" || pathname === "/login" || pathname === "/admin";
+  const isAuthPage = pathname === "/login";
+  const isPublicPath = pathname === "/" || isAuthPage || pathname === "/admin";
   useEffect(() => {
     if (!checking && !user && !isPublicPath) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
@@ -170,7 +171,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const moreActive =
     MOBILE_MORE.some(({ href }) => isActive(href)) || pathname.startsWith("/admin");
 
-  if (!user) {
+  /* 登录页始终走全屏布局：注册成功的一瞬 user 已写入，但路由还没跳走，
+   * 若此时套上应用壳会和登录页双栏叠成三栏（旧实现靠整页空白规避，反而闪屏）。 */
+  if (!user || isAuthPage) {
     return (
       <div className="min-h-screen">
         {children}
