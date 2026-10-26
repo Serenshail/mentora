@@ -2,6 +2,37 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v22 — 2026-10-26（移动端 UI 适配第一批：P0-P2 落地）
+
+**依据**：`docs/PRD-2026-10-26-MOBILE-UI.md`（规划）→ 本次实现其 P0/P1/P2 与验收 M1/M2/M3 的可自动化子集。**真机（iOS/Android）与键盘实测未做**，见 ACCEPTANCE I21。
+
+### 壳层与几何（P0）
+- viewport 元数据：`layout.tsx` 新增 `Viewport` 导出（device-width/initialScale=1/viewportFit=cover/themeColor #f5f5f7）。
+- 全局几何变量唯一来源（globals.css）：`--mobile-topbar-h/--mobile-nav-h/--safe-*/--keyboard-inset/--mobile-content-bottom`；新增 `.above-mobile-nav`（fixed 层统一底距=底栏+safe+键盘+12px）、`.reserve-mobile-nav`（主内容预留）、`.tap-target`（44px 命中盒）。
+- `use-visual-viewport.ts`：visualViewport resize/scroll → 写入 `--keyboard-inset`；引用计数、卸载清零、无 API 降级；只写 CSS 变量不触发渲染。挂在 AppShell 一处，全站共享。
+- 底栏重排：7/8 格等权 → **5 主入口 +「更多」**（学习人生/设置/管理后台/退出进抽屉；隐藏路由时「更多」亮 active）。抽屉=bottom sheet，路由变化自动收起；Back 先关抽屉（pushState 哨兵+popstate）。
+- 主内容 `reserve-mobile-nav`：长内容可滚到「底栏+safe+16px」之上（M2-3）。
+- body 加 `overflow-x: clip` 保护网 + `100dvh` 后备。
+
+### 组件（P0）
+- Modal 手机=bottom sheet：贴底、顶部圆角+把手、`max-h-100dvh`、safe-bottom padding、关闭钮 44px；≥sm 保持居中弹窗不变（焦点陷阱/Esc/归还焦点沿用 v17 契约）。
+- 三处 composer（圆桌/引导/读书）的 `bottom-20 md:bottom-4` 硬编码统一替换为 `.above-mobile-nav`；发送钮手机 44px。
+
+### 页面（P1/P2）
+- 学习列表：输入+按钮手机纵向堆叠（按钮 44px）；目标卡移动=纵向三层（进度环+标题 / 方向 / 元数据+删除），删除钮 44px。
+- 学习详情：手机新增「任务导航」折叠条（显示 N/M 天进度）——当前日默认首屏，时间线可展开/选日/自动收起；桌面双栏 sticky 不变。
+- 第二大脑：编辑工具栏手机横向滚动、每工具 44px 命中盒（md 恢复 32px）；移动三 Tab ≥44px；工作区高度公式纳入 safe-top/safe-bottom/keyboard-inset。
+- 读书详情：阅读路线手机默认收起（≥1024 默认展开，SSG 端 window 不存在按桌面），折叠态提供 44px「阅读路线」展开横条；收起钮 44px。
+- 圆桌：会话历史手机默认折叠成横条（对话区占首屏），点会话/新建自动收起；桌面左栏常驻。
+- 助手挂件：默认位与拖拽下限避开 `--mobile-nav-h+--safe-bottom`；旧 localStorage 位置迁移时 clamp 回安全区。
+- 设置 Tab 命中盒 44px；学习人生里程碑 320px 起两列（原 4 列 10px 文字不可读）。
+
+### 验证
+- 新增 `scripts/smoke-mobile.mjs`：探针注册（邀请码/验证码双通道+重试）→ 320/375/390/412 四 viewport（hasTouch/isMobile）断言 M1-1/M1-2/M1-4/M2-1/M2-2/M3-1 → 桌面 1440 回归 → finally 自删。**94 PASS / 0 FAIL**（2026-10-26 本地 dev）。脚本纪律：waitForSelector 终态轮询而非固定 sleep（dev 首编译竞态会假 FAIL）。
+- 四道门禁全绿：tsc 0 错 / eslint 0 error / vitest 124 passed / build 38 页。
+- 截图证据：`.tmp-shots-mobile/`（gitignored）。
+- **未做**（诚实边界）：真机 iOS Safari/Android Chrome 键盘与 safe-area 实测（M7）、横屏、200% 字体、Back 手势真机验证；圆桌运行逻辑本次未动（v21.3 另行验收）。
+
 ## v21.3 — 2026-10-26（RAG 三件套 + 圆桌两个真实缺陷）
 
 ### RAG 增强（对照经典 RAG 改造方法补齐）

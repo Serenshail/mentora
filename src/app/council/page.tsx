@@ -11,7 +11,7 @@ import {
 import { extractJson, personaDistillSchema, streamChat } from "@/lib/ai/client";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { Compass, FlaskConical, Plus, Trash2, UserPlus, Users, Zap } from "lucide-react";
+import { ChevronRight, Compass, FlaskConical, Plus, Trash2, UserPlus, Users, Zap } from "lucide-react";
 import type { CustomPersona } from "@/lib/types";
 
 /* 内置席位在前端只有展示元数据（无 system 提示词）；自建人物带用户自己蒸馏的 system */
@@ -79,6 +79,8 @@ export default function CouncilPage() {
   const removeCustomPersona = useAppStore((s) => s.removeCustomPersona);
 
   const [activeId, setActiveId] = useState<string | null>(null);
+  /* 手机：会话历史默认收起（对话区优先），桌面始终左栏常驻（PRD §5.7） */
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const activeIdRef = useRef<string | null>(null);
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -506,9 +508,21 @@ export default function CouncilPage() {
         }
       />
 
+      <div className="mb-4 flex items-center gap-2 lg:hidden">
+        <button
+          onClick={() => setSessionsOpen((v) => !v)}
+          aria-expanded={sessionsOpen}
+          className="flex min-h-[44px] min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-xl border border-border bg-white px-3.5 py-2.5 text-left text-[13px] text-ink transition hover:bg-black/[0.02]"
+        >
+          <Users className="size-4 shrink-0 text-accent" />
+          <span className="min-w-0 flex-1 truncate font-medium">对话记录 · {sessions.length}</span>
+          <ChevronRight className={cn("size-4 shrink-0 text-ink-dim transition", sessionsOpen && "rotate-90")} />
+        </button>
+      </div>
+
       <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
-        {/* 会话列表 */}
-        <Card className="h-fit lg:sticky lg:top-8">
+        {/* 会话列表：桌面=左栏常驻；手机=可折叠横条（默认收起，对话区占首屏，M6-4） */}
+        <Card className={cn("h-fit lg:sticky lg:top-8", !sessionsOpen && "hidden lg:block")}>
           <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-ink-dim">
             对话记录
           </p>
@@ -530,6 +544,7 @@ export default function CouncilPage() {
                       // 只设 activeId 的话界面仍停在会话选择页（点旧会话看起来"没反应"）
                       setPicking(false);
                       setActiveId(s.id);
+                      setSessionsOpen(false); // 手机折叠条：选完即收，消息区回首屏
                     }}
                   >
                     {s.personaId === "roundtable" ? (
@@ -738,7 +753,7 @@ export default function CouncilPage() {
                 <div ref={bottomRef} />
               </div>
 
-              <div className="sticky bottom-20 mt-4 md:bottom-4">
+              <div className="above-mobile-nav sticky mt-4">
                 {isRoundtable && rtBusy && rtSessionId === activeId && (
                   <div className="mb-2 flex items-center justify-between rounded-xl border border-accent/25 bg-accent/[.05] px-3 py-2 text-xs text-accent">
                     <span>
@@ -781,7 +796,7 @@ export default function CouncilPage() {
                     }
                     disabled={streaming || (rtBusy && rtSessionId === activeId)}
                   />
-                  <Button onClick={doSend} loading={streaming || rtBusy} className="shrink-0">
+                  <Button onClick={doSend} loading={streaming || rtBusy} className="h-11 shrink-0 sm:h-10">
                     发送
                   </Button>
                 </div>

@@ -122,7 +122,7 @@ export default function LifePage() {
       {/* 里程碑相册格（最近 8 个验收通过） */}
       <Card className="mb-5">
         <p className="mb-3 text-sm font-bold text-ink">里程碑</p>
-        <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-8">
           {events.filter((e) => e.kind === "pass").slice(0, 8).map((e, i) => (
             <div
               key={i}

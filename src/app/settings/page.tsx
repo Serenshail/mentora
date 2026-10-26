@@ -682,14 +682,14 @@ export default function SettingsPage() {
       />
 
       <div className="mt-8 grid gap-8 md:grid-cols-[170px_1fr]">
-        {/* 标签栏：桌面竖排 / 移动横排 */}
+        {/* 标签栏：桌面竖排 / 移动横排（命中盒 ≥44px，M3-1） */}
         <nav className="flex gap-1 overflow-x-auto md:flex-col md:gap-0.5 md:overflow-visible">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               onClick={() => setTab(id)}
               className={cn(
-                "flex shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-[13.5px] font-medium transition",
+                "flex min-h-[44px] shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-3.5 py-2 text-[13.5px] font-medium transition",
                 tab === id
                   ? "bg-black/[0.05] font-semibold text-ink"
                   : "text-ink-dim hover:bg-black/[0.035] hover:text-ink"

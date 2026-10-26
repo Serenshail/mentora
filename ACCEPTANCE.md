@@ -143,6 +143,35 @@
 - 真实验证记录：[`圆桌真实问题记录表`](docs/DOGFOODING-7D.md)
 - 通过条件：完成 5 个真实问题对比，至少 3/5 次产生新增价值；当前版本不宣称通过。
 
+## I. 移动端 UI 适配（2026-10-26，docs/PRD-2026-10-26-MOBILE-UI）
+
+> 依据移动端 PRD（P0-P2 实现）。口径：「自动化」= smoke-mobile.mjs（320/375/390/412 viewport + 桌面回归，94 项断言）；「人工实测」= 真实 iOS Safari / Android Chrome（未做）。
+> M7 输入法 / 真机矩阵 / 横屏 / 200% 字体等仅 PRD 规划，全部 `⏳ NOT TESTED`，不得宣称移动端"已完成"。
+
+| # | 验收标准 | 口径 | 实测结果 |
+|---|----------|------|----------|
+| I1 | viewport 元数据：device-width/initialScale=1/viewportFit=cover/themeColor | 自动化 | ✅ layout.tsx Viewport 导出（构建通过） |
+| I2 | 全局几何变量唯一来源（--mobile-topbar-h/--mobile-nav-h/--safe-*/--keyboard-inset/--mobile-content-bottom） | 自动化 | ✅ globals.css `:root` + `.above-mobile-nav`/`.reserve-mobile-nav`/`.tap-target` |
+| I3 | 键盘 inset：visualViewport resize/scroll → --keyboard-inset，引用计数卸载清零，无 API 降级 | 自动化 | ✅ use-visual-viewport.ts（tsc/lint 过；真机行为 ⏳） |
+| I4 | 移动底栏 5 主入口 +「更多」抽屉（学习人生/设置/后台/退出）；隐藏路由时「更多」active；路由变化即收起 | 自动化 | ✅ smoke-mobile M1-1/M1-2 四 viewport 全过 |
+| I5 | Back 先关抽屉再离页（pushState 哨兵 + popstate） | 自动化 | ✅ 代码落地（真机 Back 手势 ⏳） |
+| I6 | 主内容 reserve：内容末尾可滚到底栏+safe+16px 之上 | 自动化 | ✅ AppShell main `.reserve-mobile-nav` |
+| I7 | 全页面无横向溢出（总览/学习/brain/read/council/life/settings × 4 viewport） | 自动化 | ✅ smoke-mobile M2-1：scrollWidth===innerWidth 32/32 |
+| I8 | 移动顶栏在视口内；桌面 1440 侧栏可见且无移动底栏 | 自动化 | ✅ smoke-mobile M2-2 + desktop 回归 |
+| I9 | 底栏入口命中盒 ≥44px | 自动化 | ✅ smoke-mobile M3-1（四 viewport） |
+| I10 | Modal 手机=bottom sheet（贴底/顶部圆角/dvh 高度/safe-bottom padding/44px 关闭钮），≥sm 居中弹窗不变 | 自动化 | ✅ ui.tsx 改造 + 构建/截图（焦点循环沿用 v17 契约） |
+| I11 | 三处 composer（圆桌/引导/读书）统一 `.above-mobile-nav`（底栏+safe+键盘），发送钮手机 44px | 自动化 | ✅ 替换 bottom-20 硬编码 ×3 |
+| I12 | 学习列表：输入/按钮纵向堆叠；目标卡移动三层布局；删除 44px 命中盒 | 自动化 | ✅ learn/page.tsx + 冒烟通过 |
+| I13 | 学习详情：手机「任务导航」折叠条（当前日优先），时间线可展开/选日/收起；桌面双栏不变 | 自动化 | ✅ smoke-mobile M1-4（url=/learn/g_*，展开后「路径设计」可见） |
+| I14 | 第二大脑：工具栏手机横向滚动+44px 命中盒；三 Tab ≥44px；工作区高度纳入 safe/键盘变量 | 自动化 | ✅ note-workspace.tsx + M2-1 |
+| I15 | 读书详情：手机阅读路线默认折叠（≥1024 才默认展开），折叠态有 44px 展开横条与收起钮 | 自动化 | ✅ read/[id]/page.tsx（真机 ⏳） |
+| I16 | 圆桌：会话历史手机默认折叠成横条，点会话/新建自动收起；桌面左栏常驻 | 自动化 | ✅ council/page.tsx（圆桌运行回归=v21.3 另行验收） |
+| I17 | 助手挂件：默认位与拖拽下限避开底栏+safe；旧位置迁移 clamp | 自动化 | ✅ assistant-widget.tsx（真机 ⏳） |
+| I18 | 设置 Tab/学习人生里程碑命中盒与列数适配 | 自动化 | ✅ settings/life 改造 + M2-1 |
+| I19 | `scripts/smoke-mobile.mjs`：探针注册→多 viewport 断言→桌面回归→自删，94 PASS / 0 FAIL | 自动化 | ✅ 2026-10-26 本地 dev 实测 |
+| I20 | 四道门禁：tsc 0 错 / eslint 0 error / vitest 124 passed / build 38 页 | 自动化 | ✅ 同日全绿 |
+| I21 | 真实 iOS Safari/Android Chrome：键盘遮挡、safe-area、Back 手势、200% 字体、横屏（M7/PRD §10.2） | 人工实测 | ⏳ NOT TESTED |
+
 ## 已知边界（v3 路线）
 
 - 数据在本机 localStorage：多端同步/账号体系需接云端数据库（数据层已收口 store.ts，迁移成本低）。

@@ -38,7 +38,7 @@ function LinkStatus({ url }: { url?: string }) {
 import { toast } from "sonner";
 import {
   ArrowLeft, BookMarked, BookOpen, Check, ChevronRight, CircleX, ExternalLink, Flag, Globe,
-  NotebookPen, Puzzle, Swords, Trophy,
+  ListOrdered, NotebookPen, Puzzle, Swords, Trophy,
 } from "lucide-react";
 
 /* ================= 即时答疑：学习中随时问教练 ================= */
@@ -74,9 +74,25 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
         knowledgePoints: day.knowledgePoints.map((k) => k.text),
         learnerProfile: goal.learnerProfile ?? [],
       });
+      /* 学习答疑也接第二大脑检索（2026-10-26）：这是最高频的对话入口，
+       * 用户问的多是老知识的延伸——把他自己记过的相关笔记当证据带上，回答才接得上。
+       * 检索失败/为空则不加，绝不影响答疑本身。 */
+      let ragCtx = "";
+      try {
+        const { retrieveEnhanced } = await import("@/lib/rag-pipeline");
+        const notes = useAppStore
+          .getState()
+          .knowledge.filter((k) => !(k.tags ?? []).includes("MOC"))
+          .map((k) => ({
+            id: k.id, title: k.title, body: k.body, domain: k.domain,
+            links: k.links, version: k.version, updatedAt: k.updatedAt, tags: k.tags,
+          }));
+        const r = await retrieveEnhanced(text, notes, 3, { context: day.title, rewrite: false });
+        ragCtx = r.context;
+      } catch { /* 检索是增强项，失败不阻塞答疑 */ }
       const full = await streamChat({
         task: "coach-qa",
-        args: { ctx },
+        args: { ctx, ragCtx },
         messages: newQa.slice(-6).map((m) => ({ role: m.role, content: m.content })),
         onDelta: (d) => setStreamText((p) => p + d),
       });
@@ -310,17 +326,15 @@ export default function GoalDetailPage() {
       </div>
 
       {goal.plan && viewDay && (
-        <div className="grid gap-6 lg:grid-cols-[300px_1fr] lg:items-start">
-          <div className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
-            <PlanTimeline
-              goal={goal}
-              activeDayId={activeDay?.id ?? null}
-              selectedDayId={viewDayId}
-              onSelect={setViewDayId}
-            />
-          </div>
-          <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={viewDay.id !== activeDay?.id} onGoToDay={setViewDayId} tone={settings.coachTone} />
-        </div>
+        <LearnBody
+          goal={goal}
+          viewDay={viewDay}
+          activeDayId={activeDay?.id ?? null}
+          selectedDayId={viewDayId}
+          onSelect={setViewDayId}
+          readOnly={viewDay.id !== activeDay?.id}
+          tone={settings.coachTone ?? "standard"}
+        />
       )}
       {goal.plan && !viewDay && activePhase && !activePhase.planned && activePhase.dayIds.length === 0 && (
         <PhasePlanPanel goal={goal} phase={activePhase} />
@@ -332,6 +346,73 @@ export default function GoalDetailPage() {
         <RegeneratePlan goal={goal} />
       )}
     </div>
+  );
+}
+
+/* ================= 目标详情主体：手机当前日优先，路径折叠为任务导航（PRD §5.3） ================= */
+function LearnBody({
+  goal,
+  viewDay,
+  activeDayId,
+  selectedDayId,
+  onSelect,
+  readOnly,
+  tone,
+}: {
+  goal: Goal;
+  viewDay: DayPlan;
+  activeDayId: string | null;
+  selectedDayId: string | null;
+  onSelect: (id: string | null) => void;
+  readOnly: boolean;
+  tone: "standard" | "gentle";
+}) {
+  /* 手机：任务导航默认收起（当前日才是主任务）；桌面始终双栏 */
+  const [navOpen, setNavOpen] = useState(false);
+  const remainingDays = goal.plan
+    ? Object.values(goal.plan.days).filter((d) => d.status === "active" || d.status === "locked").length
+    : 0;
+
+  return (
+    <>
+      {/* 手机任务导航条：一眼可见当前进度 + 展开/收起（M1 可发现性） */}
+      <button
+        onClick={() => setNavOpen((v) => !v)}
+        aria-expanded={navOpen}
+        className="mb-4 flex w-full cursor-pointer items-center gap-2 rounded-xl border border-border bg-white px-3.5 py-2.5 text-left text-[13px] text-ink transition hover:bg-black/[0.02] lg:hidden"
+      >
+        <ListOrdered className="size-4 shrink-0 text-accent" />
+        <span className="min-w-0 flex-1 truncate font-medium">任务导航 · {goal.topic}</span>
+        <span className="tabular shrink-0 text-xs text-ink-dim">
+          {Object.values(goal.plan?.days ?? {}).filter((d) => d.status === "passed" || d.status === "skipped").length}
+          /{Object.values(goal.plan?.days ?? {}).length} 天
+        </span>
+        <ChevronRight className={cn("size-4 shrink-0 text-ink-dim transition", navOpen && "rotate-90")} />
+      </button>
+
+      <div className="grid gap-6 lg:grid-cols-[300px_1fr] lg:items-start">
+        {/* 手机 = 可折叠面板；桌面 = sticky 侧栏（行为不变） */}
+        <div className={cn("lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto", navOpen ? "block" : "hidden lg:block")}>
+          <PlanTimeline
+            goal={goal}
+            activeDayId={activeDayId}
+            selectedDayId={selectedDayId}
+            onSelect={(id) => {
+              onSelect(id);
+              setNavOpen(false); // 选完当天收起导航，正文立刻占据首屏
+            }}
+          />
+          {/* 手机折叠态的收起出口；桌面隐藏 */}
+          {navOpen && (
+            <Button variant="ghost" size="sm" className="mt-2 w-full lg:hidden" onClick={() => setNavOpen(false)}>
+              收起导航
+            </Button>
+          )}
+          {remainingDays === 0 && <p className="mt-2 text-center text-xs text-ink-dim lg:hidden">全部学习日已完成。</p>}
+        </div>
+        <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={readOnly} onGoToDay={onSelect} tone={tone} />
+      </div>
+    </>
   );
 }
 

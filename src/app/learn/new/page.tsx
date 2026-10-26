@@ -329,7 +329,7 @@ function IntakeInner() {
 
       {/* 输入框 */}
       {stage === "chat" && (
-        <div className="sticky bottom-20 mt-6 md:bottom-4">
+        <div className="above-mobile-nav sticky mt-6">
           <div className="flex gap-2">
             <Input
               value={input}
@@ -338,7 +338,7 @@ function IntakeInner() {
               placeholder="回答教练的问题…（Enter 发送）"
               disabled={streaming}
             />
-            <Button onClick={doSend} loading={streaming} className="shrink-0">
+            <Button onClick={doSend} loading={streaming} className="h-11 shrink-0 sm:h-10">
               发送
             </Button>
           </div>

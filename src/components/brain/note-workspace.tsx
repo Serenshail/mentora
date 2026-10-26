@@ -1145,7 +1145,7 @@ export function NoteWorkspace({
   return (
     <div>
       {/* 工作台：左缘 ribbon + 文件夹树 + 编辑器 + 功能面板（可收起） */}
-      {/* 移动端单栏切换 Tab（桌面隐藏） */}
+      {/* 移动端单栏切换 Tab（桌面隐藏）；命中盒 ≥44px（M3-1） */}
       <div className="mb-2 flex gap-1 md:hidden">
         {(
           [
@@ -1158,7 +1158,7 @@ export function NoteWorkspace({
             key={key}
             onClick={() => setMobilePane(key)}
             className={cn(
-              "flex-1 rounded-lg py-2 text-[12.5px] transition cursor-pointer",
+              "min-h-[44px] flex-1 rounded-lg py-2 text-[12.5px] transition cursor-pointer",
               mobilePane === key ? "bg-ink/[0.07] font-semibold text-ink" : "text-ink-dim hover:bg-black/[0.04]"
             )}
           >
@@ -1168,7 +1168,9 @@ export function NoteWorkspace({
       </div>
       <div
         className={cn(
-          "flex h-[calc(100dvh-200px)] min-h-[420px] overflow-hidden rounded-2xl border border-border bg-white",
+          /* 高度几何（PRD §7.1）：手机 = dvh - 顶栏(52+safeTop) - 底栏reserve(60+safeBottom) - 移动Tab行 - 页头/页边；
+           * 键盘弹出时 --keyboard-inset 由 JS 写入自动收缩。桌面保持原式。 */
+          "flex h-[calc(100dvh-var(--safe-top)-var(--safe-bottom)-var(--keyboard-inset)-390px)] min-h-[360px] overflow-hidden rounded-2xl border border-border bg-white",
           "md:h-[calc(100vh-150px)] md:min-h-[500px]"
         )}
       >
@@ -1263,9 +1265,9 @@ export function NoteWorkspace({
                 </button>
               </div>
 
-              {/* 工具栏（编辑态） */}
+              {/* 工具栏（编辑态）：手机可横向滚动，每个工具命中盒 ≥44px（M3-1/M5-2） */}
               {mode === "edit" && (
-                <div className="flex flex-wrap items-center gap-0.5 border-b border-border bg-surface-2/60 px-3 py-1.5">
+                <div className="flex items-center gap-0.5 overflow-x-auto border-b border-border bg-surface-2/60 px-2 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:flex-wrap md:px-3 md:py-1.5">
                   {TOOLBAR.map((b) => (
                     <button
                       key={b.title}
@@ -1274,9 +1276,9 @@ export function NoteWorkspace({
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => b.run(h)}
                       disabled={b.id === "autolink" && linking}
-                      className="rounded-md p-1.5 text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
+                      className="grid size-11 shrink-0 place-items-center rounded-md text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40 md:size-8"
                     >
-                      <b.icon className="size-3.5" />
+                      <b.icon className="size-4" />
                     </button>
                   ))}
                   <button
@@ -1295,7 +1297,7 @@ export function NoteWorkspace({
                         setAiBusy(false);
                       }
                     }}
-                    className="rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
+                    className="grid h-11 shrink-0 place-items-center rounded-md px-2.5 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40 md:h-8"
                   >
                     <Sparkles className="mr-0.5 inline size-3" /> {aiBusy ? "AI 中…" : "AI 总结"}
                   </button>
@@ -1316,7 +1318,7 @@ export function NoteWorkspace({
                         setAiBusy(false);
                       }
                     }}
-                    className="rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
+                    className="grid h-11 shrink-0 place-items-center rounded-md px-2.5 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40 md:h-8"
                   >
                     {aiBusy ? "AI 中…" : "AI 润色"}
                   </button>
@@ -1341,18 +1343,18 @@ export function NoteWorkspace({
                         setAiBusy(false);
                       }
                     }}
-                    className="rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40"
+                    className="grid h-11 shrink-0 place-items-center rounded-md px-2.5 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40 md:h-8"
                   >
                     {aiBusy ? "AI 中…" : "AI 整理"}
                   </button>
                   <button
                     onClick={() => setEditStyle((s) => (s === "live" ? "raw" : "live"))}
                     title={editStyle === "live" ? "切到源码模式（整篇 MD）" : "切回实时预览（点哪段改哪段）"}
-                    className="ml-auto rounded-md px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer"
+                    className="ml-auto grid h-11 shrink-0 place-items-center rounded-md px-2.5 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer md:h-8"
                   >
                     {editStyle === "live" ? "源码" : "实时预览"}
                   </button>
-                  <span className="flex items-center gap-1 pr-1 text-[10px] text-ink-dim/50">
+                  <span className="hidden shrink-0 items-center gap-1 pr-1 text-[10px] text-ink-dim/50 md:flex">
                     <ArrowDownUp className="size-3" /> 改动即存
                   </span>
                 </div>

@@ -35,7 +35,11 @@ export default function BookPage() {
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [answers, setAnswers] = useState<string[]>(["", "", ""]);
   const [grading, setGrading] = useState(false);
-  const [planOpen, setPlanOpen] = useState(true);
+  /* 阅读路线（PRD §5.6）：手机默认收起（当前章节+对话才是主任务），桌面默认展开；
+   * 初始值在首帧读取视口，SSG 期间 window 不存在时按桌面处理，客户端水合后一致。 */
+  const [planOpen, setPlanOpen] = useState(() =>
+    typeof window === "undefined" ? true : window.innerWidth >= 1024
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -291,7 +295,8 @@ export default function BookPage() {
             <button
               onClick={() => setPlanOpen(false)}
               title="收起阅读路线"
-              className="rounded-md p-1 text-ink-dim/60 transition hover:text-ink cursor-pointer"
+              aria-label="收起阅读路线"
+              className="tap-target grid place-items-center rounded-md text-ink-dim/60 transition hover:text-ink cursor-pointer"
             >
               <PanelLeftClose className="size-4" />
             </button>
@@ -489,16 +494,28 @@ export default function BookPage() {
         </Card>
         )}
 
-        {/* 折叠时的展开入口 */}
+        {/* 折叠时的展开入口：桌面=左缘竖排把手；手机=对话区上方的横条按钮（M6-4） */}
         {!planOpen && (
-          <button
-            onClick={() => setPlanOpen(true)}
-            title="展开阅读路线"
-            className="fixed left-4 top-1/2 z-20 hidden -translate-y-1/2 flex-col items-center gap-1 rounded-r-xl border border-l-0 border-border bg-white px-1.5 py-4 text-[10px] text-ink-dim shadow-sm transition hover:text-ink cursor-pointer lg:flex"
-          >
-            <PanelLeftOpen className="size-4" />
-            <span className="[writing-mode:vertical-lr] tracking-widest">阅读路线</span>
-          </button>
+          <>
+            <button
+              onClick={() => setPlanOpen(true)}
+              title="展开阅读路线"
+              className="fixed left-4 top-1/2 z-20 hidden -translate-y-1/2 flex-col items-center gap-1 rounded-r-xl border border-l-0 border-border bg-white px-1.5 py-4 text-[10px] text-ink-dim shadow-sm transition hover:text-ink cursor-pointer lg:flex"
+            >
+              <PanelLeftOpen className="size-4" />
+              <span className="[writing-mode:vertical-lr] tracking-widest">阅读路线</span>
+            </button>
+            <button
+              onClick={() => setPlanOpen(true)}
+              className="mb-4 flex min-h-[44px] w-full cursor-pointer items-center gap-2 rounded-xl border border-border bg-white px-3.5 py-2.5 text-left text-[13px] text-ink transition hover:bg-black/[0.02] lg:hidden"
+            >
+              <PanelLeftOpen className="size-4 shrink-0 text-accent" />
+              <span className="min-w-0 flex-1 truncate font-medium">阅读路线 · {book.chapters.length} 个单元</span>
+              <span className="shrink-0 text-xs text-ink-dim">
+                {book.chapters.filter((c) => c.status === "done").length} 已读
+              </span>
+            </button>
+          </>
         )}
 
         {/* 对话区 */}
@@ -572,7 +589,7 @@ export default function BookPage() {
             <div ref={bottomRef} />
           </div>
 
-          <div className="sticky bottom-20 mt-4 md:bottom-4">
+          <div className="above-mobile-nav sticky mt-4">
             <div className="flex gap-2">
               <Input
                 value={input}
@@ -581,7 +598,7 @@ export default function BookPage() {
                 placeholder="说说你的理解、困惑，或反驳…"
                 disabled={streaming}
               />
-              <Button onClick={doSend} loading={streaming} className="shrink-0">
+              <Button onClick={doSend} loading={streaming} className="h-11 shrink-0 sm:h-10">
                 发送
               </Button>
             </div>

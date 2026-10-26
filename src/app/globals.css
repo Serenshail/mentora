@@ -107,6 +107,33 @@ html {
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
 }
 
+/* ============================================================
+ * 移动几何契约（docs/PRD-2026-10-26-MOBILE-UI §4.2）——唯一来源
+ * 顶栏/底栏/safe-area/键盘 inset 全站统一；页面不得自行猜测
+ * bottom-20 或 100vh。H_content = visualViewport - topbar - nav
+ * - safe - keyboard - 16px。
+ * ============================================================ */
+:root {
+  /* 实测：py-3(24) + 字标行高(22) ≈ 46px；为未来加返回按钮留裕量取 52。
+   * 变量只被"预期几何"消费（文档/固定层公式），顶栏本身高度仍由内容决定。 */
+  --mobile-topbar-h: 52px;
+  --mobile-nav-h: 60px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  /* JS（useVisualViewportInset）在键盘弹出时更新；无 API 时恒 0 */
+  --keyboard-inset: 0px;
+  /* 主内容底距 = 底栏 + 安全区 + 呼吸空间 */
+  --mobile-content-bottom: calc(var(--mobile-nav-h) + var(--safe-bottom) + 16px);
+}
+@media (min-width: 768px) {
+  :root {
+    /* 桌面无底栏/顶栏占用，归零防止残留变量污染 fixed 层 */
+    --keyboard-inset: 0px;
+  }
+}
+
 /* 玻璃配方：只用在真正层叠的地方（侧栏/吸顶栏/弹层）——普通内容永远实心白+柔和阴影 */
 .glass-chrome {
   background: rgba(245, 245, 247, 0.72);
@@ -128,11 +155,15 @@ body {
   background: var(--color-bg);
   color: var(--color-ink);
   min-height: 100vh;
+  min-height: 100dvh;
   font-family: var(--font-sans);
   font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   letter-spacing: 0.005em;
+  /* M2 几何：页面本身永不横移；真需要横滚的内容在局部容器内滚动。
+   * clip 只是保护网，不能用来掩盖被截断的主内容。 */
+  overflow-x: clip;
 }
 
 h1, h2, h3 {
@@ -443,4 +474,32 @@ html[data-period="night"] { --color-bg: #f1f1f5; --color-accent: #6d28d9; }
   .scrolled-chrome {
     border-bottom-color: rgba(0, 0, 0, 0.35) !important;
   }
+}
+
+/* ---- 移动 composer/浮层统一契约 ----
+ * fixed 输入条必须落在底栏+safe+键盘之上；键盘 inset 由 JS 写入 --keyboard-inset。
+ * 桌面（md+）不启用这套变量。 */
+.above-mobile-nav {
+  bottom: calc(var(--mobile-nav-h) + var(--safe-bottom) + var(--keyboard-inset) + 12px);
+}
+@media (min-width: 768px) {
+  .above-mobile-nav {
+    bottom: 1rem;
+  }
+}
+
+/* 移动主内容底部预留：内容末尾至少能滚到「底栏 + safe + 16px」之上（M2-3） */
+.reserve-mobile-nav {
+  padding-bottom: var(--mobile-content-bottom);
+}
+@media (min-width: 768px) {
+  .reserve-mobile-nav {
+    padding-bottom: 2rem;
+  }
+}
+
+/* 44px 触控命中盒：图标可以小，命中盒不能小（M3-1） */
+.tap-target {
+  min-width: 44px;
+  min-height: 44px;
 }

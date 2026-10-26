@@ -228,7 +228,132 @@ export function wikiRetrieve(query: string, notes: WikiNote[], k = 3): RagHit[] 
   return ranked;
 }
 
-/** 把检索结果压成可注入提示词的上下文块 */
+/* ========= 上下文构建（回答质量的第一道闸，2026-10-26 重构）=========
+ * 旧实现「每篇只取正文前 220 字、总上限 1200」有两个硬伤：
+ *   ① 长笔记的关键定义/结论常在后半段，被腰斩后模型只能看到开头 → 回答空洞；
+ *   ② 注入的是原始片段堆叠，模型分不清哪条是定义、哪条是边界、哪条是例子。
+ * 新做法：
+ *   ① 按 Markdown 结构切块（标题段/代码块/列表/普通段），不再机械截断；
+ *   ② 按与问题的相关度给每块打分，只取最相关的块，并保留它所属的小标题作上下文；
+ *   ③ 输出带来源标注，让模型知道「这句依据来自哪篇笔记的哪一节」。 */
+
+export interface ContextChunk {
+  title: string;
+  heading: string;
+  text: string;
+  score: number;
+}
+
+/** 把一篇笔记切成结构块：按 ## 标题分段，代码块整体保留，超长段落再按句切开 */
+export function splitIntoChunks(doc: RagDoc): ContextChunk[] {
+  const body = doc.body.replace(/\r\n/g, "\n");
+  const lines = body.split("\n");
+  const chunks: ContextChunk[] = [];
+  let heading = "";
+  let buf: string[] = [];
+  let inFence = false;
+
+  const flush = () => {
+    const text = buf.join("\n").trim();
+    if (text) chunks.push({ title: doc.title, heading: heading || doc.title, text, score: 0 });
+    buf = [];
+  };
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      buf.push(line);
+      // 代码块闭合时立刻成块，避免和后面正文混在一起
+      if (!inFence) flush();
+      continue;
+    }
+    if (inFence) {
+      buf.push(line);
+      continue;
+    }
+    const h = line.match(/^(#{1,4})\s+(.+)$/);
+    if (h) {
+      flush();
+      heading = h[2].trim();
+      continue;
+    }
+    if (!line.trim() && buf.length > 0) {
+      // 空行 = 段落边界；但短段落先攒着，避免碎片过多
+      if (buf.join("").length > 80) flush();
+      continue;
+    }
+    buf.push(line);
+  }
+  flush();
+
+  // 超长块按句切开（每块 ≤ 400 字），保证单块可读且不丢信息
+  const out: ContextChunk[] = [];
+  for (const c of chunks) {
+    if (c.text.length <= 400) {
+      out.push(c);
+      continue;
+    }
+    const sentences = c.text.split(/(?<=[。！？.!?；;])\s*/);
+    let acc = "";
+    for (const s of sentences) {
+      if (acc.length + s.length > 400 && acc) {
+        out.push({ ...c, text: acc.trim() });
+        acc = "";
+      }
+      acc += s;
+    }
+    if (acc.trim()) out.push({ ...c, text: acc.trim() });
+  }
+  return out;
+}
+
+/** 给块打分：词法命中 + 小标题命中加权；返回排序后的块 */
+function scoreChunks(chunks: ContextChunk[], query: string): ContextChunk[] {
+  const qTokens = new Set(tokenize(query));
+  if (qTokens.size === 0) return chunks;
+  return chunks
+    .map((c) => {
+      const bodyTokens = tokenize(c.text);
+      const headTokens = tokenize(c.heading);
+      let hit = 0;
+      for (const t of bodyTokens) if (qTokens.has(t)) hit += 1;
+      for (const t of headTokens) if (qTokens.has(t)) hit += 3; // 小标题命中更值钱
+      // 归一到「每百字命中数」，避免长块靠体量取胜
+      const score = (hit / Math.max(1, c.text.length)) * 100;
+      return { ...c, score };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * 构建高质量注入上下文：结构化选段 + 来源标注。
+ * @param maxChars 总字符预算（默认 2600——比旧版 1200 大一倍多，但用的是相关段落而非流水账）
+ */
+export function buildContext(hits: RagHit[], query: string, maxChars = 2600): string {
+  if (hits.length === 0) return "";
+  const blocks: string[] = [];
+  let used = 0;
+  for (const h of hits) {
+    const chunks = scoreChunks(splitIntoChunks(h.doc), query);
+    // 每篇最多贡献 3 块，且至少保留得分最高的一块（哪怕 0 分，也比空着强）
+    const picked = chunks.slice(0, 3);
+    if (picked.length === 0) continue;
+    const merged = picked
+      .map((c) => (c.heading && c.heading !== h.doc.title ? `（${c.heading}）${c.text}` : c.text))
+      .join("\n");
+    const block = `【${h.doc.title}】\n${merged}`;
+    if (used + block.length > maxChars) {
+      const room = maxChars - used;
+      if (room > 200) blocks.push(block.slice(0, room) + "…");
+      break;
+    }
+    blocks.push(block);
+    used += block.length;
+  }
+  return blocks.join("\n\n");
+}
+
+/** 把检索结果压成可注入提示词的上下文块（旧接口，保留兼容；新代码用 buildContext） */
 export function ragContext(hits: RagHit[], maxChars = 1200): string {
   let out = "";
   for (const h of hits) {

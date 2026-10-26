@@ -52,17 +52,17 @@ export default function LearnPage() {
       {/* 方向迷茫：第一性原理引导对话 */}
       <DirectionGuideCard />
 
-      {/* 新目标入口 */}
+      {/* 新目标入口：手机纵向堆叠（输入独占一行，按钮全宽 ≥44px），桌面保持横排 */}
       <Card className="mb-8">
         <p className="mb-3 text-sm font-semibold text-ink">想学点什么？</p>
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           <Input
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && start()}
             placeholder="比如：Python、雅思、政治学、钢琴……"
           />
-          <Button onClick={start} className="shrink-0">
+          <Button onClick={start} className="h-11 shrink-0 sm:h-10">
             <Plus className="size-4" /> 开始引导
           </Button>
         </div>
@@ -98,43 +98,50 @@ export default function LearnPage() {
                   router.push(g.status === "draft" ? `/learn/new?goal=${g.id}` : `/learn/${g.id}`)
                 }
               >
-                <div className="flex items-center gap-5">
-                  <ProgressRing
-                    value={prog.ratio}
-                    label={`${prog.total ? Math.round(prog.ratio * 100) : 0}%`}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-base font-bold text-ink">{g.topic}</h3>
-                      <Badge tone={DOMAIN_TONE[g.domainKind]}>{DOMAIN_LABELS[g.domainKind]}</Badge>
-                      {g.status === "draft" && <Badge tone="warn">引导中 · 点击继续</Badge>}
-                      {g.status === "done" && <Badge tone="ok">已完成</Badge>}
-                      {g.status === "paused" && <Badge tone="dim">已暂停</Badge>}
+                {/* 移动：纵向三层（进度+标题 → 方向 → 元数据+删除）；桌面保持横排（M4/§5.2） */}
+                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-5">
+                  <div className="flex w-full min-w-0 items-center gap-4">
+                    <ProgressRing
+                      value={prog.ratio}
+                      label={`${prog.total ? Math.round(prog.ratio * 100) : 0}%`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-base font-bold text-ink">{g.topic}</h3>
+                        <Badge tone={DOMAIN_TONE[g.domainKind]}>{DOMAIN_LABELS[g.domainKind]}</Badge>
+                        {g.status === "draft" && <Badge tone="warn">引导中 · 点击继续</Badge>}
+                        {g.status === "done" && <Badge tone="ok">已完成</Badge>}
+                        {g.status === "paused" && <Badge tone="dim">已暂停</Badge>}
+                      </div>
+                      <p className="mt-1 truncate text-sm text-ink-dim">
+                        {g.direction || "（还在引导对话中，方向未定）"}
+                      </p>
                     </div>
-                    <p className="mt-1 truncate text-sm text-ink-dim">
-                      {g.direction || "（还在引导对话中，方向未定）"}
-                    </p>
-                    <p className="mt-2 text-xs text-ink-dim/80">
-                      {prog.done}/{prog.total} 天完成 · 每周 {g.weeklyHours} 小时
-                      {g.deadline ? ` · 截止 ${g.deadline}` : ""}
-                    </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {g.status === "active" && (
-                      <Badge tone="accent">
-                        <StatusDot status="active" /> 进行中
-                      </Badge>
-                    )}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setConfirmId(g.id);
-                      }}
-                      className="rounded-lg p-2 text-ink-dim/60 transition hover:bg-bad/10 hover:text-bad cursor-pointer"
-                      aria-label="删除目标"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
+                  <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+                    <p className="mt-0 min-w-0 flex-1 text-xs text-ink-dim/80 sm:mt-2 sm:flex-none">
+                      <span className="block truncate">
+                        {prog.done}/{prog.total} 天完成 · 每周 {g.weeklyHours} 小时
+                        {g.deadline ? ` · 截止 ${g.deadline}` : ""}
+                      </span>
+                    </p>
+                    <div className="ml-auto flex shrink-0 items-center gap-2">
+                      {g.status === "active" && (
+                        <Badge tone="accent">
+                          <StatusDot status="active" /> 进行中
+                        </Badge>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmId(g.id);
+                        }}
+                        className="tap-target grid place-items-center rounded-lg text-ink-dim/60 transition hover:bg-bad/10 hover:text-bad cursor-pointer"
+                        aria-label="删除目标"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </Card>

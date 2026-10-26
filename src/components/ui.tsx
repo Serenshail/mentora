@@ -314,7 +314,7 @@ function ModalDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px] p-4"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 backdrop-blur-[2px] p-0 sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
@@ -324,17 +324,23 @@ function ModalDialog({
         aria-labelledby={labelId}
         tabIndex={-1}
         className={cn(
-          "materialize w-full rounded-2xl border border-border bg-white p-4 shadow-overlay max-h-[88vh] overflow-y-auto md:p-6 outline-none",
+          /* 手机 = bottom sheet（PRD §5.10）：贴底、圆角只在顶部、高度基于 dvh+安全区；
+           * ≥sm 保持居中弹窗不变。max-h 同时考虑键盘（--keyboard-inset 由 JS 写入）。 */
+          "materialize max-h-[100dvh] w-full overflow-y-auto rounded-t-2xl border border-border bg-white p-4 shadow-overlay outline-none",
+          "sm:max-h-[88vh] sm:rounded-2xl md:p-6",
           shown && "open",
-          wide ? "max-w-3xl" : "max-w-lg"
+          wide ? "sm:max-w-3xl" : "sm:max-w-lg"
         )}
+        style={{ paddingBottom: "calc(var(--safe-bottom) + 16px)" }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* sheet 顶部把手：仅在手机显示，承载"这是可关闭的底部弹层"语义 */}
+        <div className="mx-auto mb-2 h-1 w-10 shrink-0 rounded-full bg-faint sm:hidden" />
         <div className="mb-4 flex items-center justify-between">
           <h3 id={labelId} className="text-lg font-bold text-ink tracking-[-0.02em]">{title}</h3>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-ink-dim hover:bg-black/[0.045] hover:text-ink cursor-pointer transition"
+            className="tap-target -mr-2 -mt-1 grid place-items-center rounded-lg text-ink-dim hover:bg-black/[0.045] hover:text-ink cursor-pointer transition"
             aria-label="关闭"
           >
             <X className="size-4" />

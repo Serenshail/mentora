@@ -25,9 +25,15 @@ const FEATURE_CTX = `- 第二大脑 = 内嵌 Obsidian：三栏（文件夹树/�
 - 常见问题：页面空白先强刷（Ctrl+F5）；数据没同步点侧栏「退出」重登；Obsidian 导入后笔记不进复习队列是设计如此（参考类笔记）。`;
 
 function defaultPos() {
-  /* 右下角：左下是侧栏用户区/提示条，压住它们=挡信息；右下空旷，面板向上展开 */
+  /* 右下角，但必须落在移动底栏+safe-area 之上（PRD §5.10）：
+   * --mobile-nav-h(60) + --safe-bottom + 间距，桌面无底栏时只有 16px 边距。 */
   if (typeof window === "undefined") return { x: 600, y: 600 };
-  return { x: window.innerWidth - BTN - 16, y: window.innerHeight - BTN - 16 };
+  const rootStyle = getComputedStyle(document.documentElement);
+  const navH = parseFloat(rootStyle.getPropertyValue("--mobile-nav-h")) || 60;
+  const safeBottom = parseFloat(rootStyle.getPropertyValue("--safe-bottom")) || 0;
+  const isDesktop = window.innerWidth >= 768;
+  const bottomGap = isDesktop ? 16 : navH + safeBottom + 12;
+  return { x: window.innerWidth - BTN - 16, y: window.innerHeight - BTN - bottomGap };
 }
 
 function loadPos() {
@@ -35,7 +41,17 @@ function loadPos() {
     const raw = localStorage.getItem(POS_KEY);
     if (raw) {
       const p = JSON.parse(raw) as { x: number; y: number };
-      if (typeof p.x === "number" && typeof p.y === "number") return p;
+      if (typeof p.x === "number" && typeof p.y === "number") {
+        /* 旧版本存的位置可能压在移动底栏下（v22 前 defaultPos 没有底栏概念）：迁移一次 */
+        const rootStyle = getComputedStyle(document.documentElement);
+        const navH = parseFloat(rootStyle.getPropertyValue("--mobile-nav-h")) || 60;
+        const safeBottom = parseFloat(rootStyle.getPropertyValue("--safe-bottom")) || 0;
+        const bottomGap = window.innerWidth >= 768 ? 8 : navH + safeBottom + 8;
+        return {
+          x: clamp(p.x, 8, window.innerWidth - BTN - 8),
+          y: clamp(p.y, 8, window.innerHeight - BTN - bottomGap),
+        };
+      }
     }
   } catch { /* 忽略 */ }
   return defaultPos();
@@ -75,7 +91,7 @@ export function AssistantWidget() {
     d.moved = true;
     setPos({
       x: clamp(d.ox + dx, 8, window.innerWidth - BTN - 8),
-      y: clamp(d.oy + dy, 8, window.innerHeight - BTN - 8),
+      y: clamp(d.oy + dy, 8, window.innerHeight - BTN - bottomLimit()),
     });
   };
   const onPointerUp = () => {
@@ -90,6 +106,16 @@ export function AssistantWidget() {
     const title = firstLine.slice(0, 30);
     useAppStore.getState().addKnowledge([{ title, body: content, domain: "笔记" }], "manual", "AI 助手");
     toast.success(`已存为笔记「${title}」`);
+  };
+
+  /* 拖拽/初始定位的下边界：手机不得越过底栏+safe（固定浮层避让，PRD §5.10） */
+  const bottomLimit = () => {
+    if (typeof window === "undefined") return 8;
+    if (window.innerWidth >= 768) return 8;
+    const rootStyle = getComputedStyle(document.documentElement);
+    const navH = parseFloat(rootStyle.getPropertyValue("--mobile-nav-h")) || 60;
+    const safeBottom = parseFloat(rootStyle.getPropertyValue("--safe-bottom")) || 0;
+    return navH + safeBottom + 8;
   };
 
   const doSend = () => {

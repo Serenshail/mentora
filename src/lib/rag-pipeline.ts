@@ -13,8 +13,8 @@ import { extractJson, streamChat } from "@/lib/ai/client";
 import {
   applyRerank,
   assessRetrieval,
+  buildContext,
   fuseMultiQuery,
-  ragContext,
   rerankPrompt,
   wikiRetrieve,
   type RagHit,
@@ -160,5 +160,11 @@ export async function retrieveEnhanced(
     }
   }
 
-  return { hits: finalHits, context: ragContext(finalHits), trace };
+  /**
+   * 上下文构建：按结构选段 + 来源标注（不再机械截前 220 字），
+   * 这是回答质量的第一道闸——检索对了但上下文被腰斩，模型照样答得空洞。
+   */
+  const ctx = buildContext(finalHits, query);
+
+  return { hits: finalHits, context: ctx, trace };
 }

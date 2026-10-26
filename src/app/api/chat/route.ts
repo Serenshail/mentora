@@ -40,7 +40,15 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "reading-plan": return P.READING_PLAN(s("desc"));
     case "reading-chat": {
       const rag = s("ragCtx")
-        ? `\n\n## 你的主人的第二大脑里有这些相关笔记（聊天时自然引用，别硬塞）\n${s("ragCtx")}`
+        ? `\n\n## 用户第二大脑里检索到的相关笔记（这是**证据**，不是答案）
+${s("ragCtx")}
+
+### 如何使用这些证据（硬纪律，决定回答可信度）
+1. **先消化再回答**：用你自己的话把证据融入答案，禁止整段照抄笔记。
+2. **该用就用，不相关就别说**：与当前问题无关时宁可不用，不要为了显得用了资料而硬塞。
+3. **引用要精确**：需要精确表述时引用原句，并标出来自哪篇笔记（如「你在《闭包与状态快照》里记过……」）。
+4. **不要假装记过**：笔记里没有的内容，不要说"你笔记里提到过"。没检索到就说没检索到，改用通识回答并标明这是通识。
+5. **有冲突要指出**：证据之间矛盾时明确说出矛盾点，不要含糊合并。`
         : "";
       // 五模式引擎：显式 mode 走模式硬契约；未传 mode 保留旧的按知识类型自适应
       return s("mode") ? P.READING_MODE_CHAT(s("mode") as never, s("bookCtx")) + rag : P.READING_CHAT(s("bookCtx")) + rag;
@@ -48,7 +56,7 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
     case "verify-score": return P.VERIFY_SCORE(args as Parameters<typeof P.VERIFY_SCORE>[0]);
     case "insight": return P.INSIGHT_EXTRACT(s("text"));
     case "autolink": return P.AUTOLINK({ note: s("note"), candidates: s("candidates") });
-    case "coach-qa": return P.ASK_COACH(s("ctx"));
+    case "coach-qa": return P.ASK_COACH(s("ctx"), s("ragCtx"));
     case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
     /* RAG 增强（2026-10-26）：查询改写与精排都只输出 JSON，检索质量由代码裁决 */

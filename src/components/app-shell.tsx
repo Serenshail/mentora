@@ -12,6 +12,7 @@ import {
   Compass,
   LayoutDashboard,
   GraduationCap,
+  MoreHorizontal,
   Search,
   Settings2,
   LogOut,
@@ -26,6 +27,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { applyPeriodTheme, periodOf, PERIOD_LABEL } from "@/lib/period";
 import { useAuth, useAutoPush, useSyncStatus, useFlushOnHide } from "@/lib/auth-client";
 import { isAdminEmail } from "@/lib/admin-emails";
+import { useVisualViewportInset } from "@/lib/use-visual-viewport";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -38,6 +40,11 @@ const NAV = [
   { href: "/life", label: "学习人生", icon: Footprints },
   { href: "/settings", label: "设置", icon: Settings2 },
 ];
+
+/* 移动底栏：5 个主入口 +「更多」（PRD-2026-10-26-MOBILE-UI §3.1）。
+ * 其余入口进更多抽屉；当前在隐藏路由时「更多」显示 active（M1-2）。 */
+const MOBILE_PRIMARY = NAV.slice(0, 5);
+const MOBILE_MORE = NAV.slice(5);
 
 /* 管理员邮箱（与 /admin 服务端鉴权同一份白名单）；非管理员不显示入口 */
 
@@ -132,8 +139,36 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
   }, [checking, user, isPublicPath, pathname, router]);
 
+  /* 移动「更多」抽屉：只该在已登录的应用内出现 */
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => {
+    // 路由变化即收起：抽屉不能跨页面残留（effect 同步 setState 是 lint 红线，挪一拍）
+    const raf = requestAnimationFrame(() => setMoreOpen(false));
+    return () => cancelAnimationFrame(raf);
+  }, [pathname]);
+
+  /* Back 先关抽屉再离开页面（M1-3）：pushState 塞一条哨兵记录，popstate 时收抽屉 */
+  useEffect(() => {
+    if (!user || !moreOpen) return;
+    history.pushState({ mentoraMore: true }, "");
+    const onPop = () => setMoreOpen(false);
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      // 抽屉因其它原因（路由跳转/组件卸载）关闭时，把哨兵记录退掉，避免 Back 需按两次
+      if (history.state?.mentoraMore) history.back();
+    };
+  }, [user, moreOpen]);
+
+  /* 键盘 inset：挂在壳层一处，全站 fixed 层共享（§4.3） */
+  useVisualViewportInset(!!user);
+
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
+
+  /* 「更多」是否该亮：当前路由落在抽屉内的任一入口（含管理员后台） */
+  const moreActive =
+    MOBILE_MORE.some(({ href }) => isActive(href)) || pathname.startsWith("/admin");
 
   if (!user) {
     return (
@@ -335,6 +370,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 移动端顶栏：玻璃配方 + 滚动边缘（内容滚到下面才显发丝线，顶部时无痕） */}
         <header
+          style={{ paddingTop: "var(--safe-top)" }}
           className={cn(
             "glass-chrome sticky top-0 z-40 flex items-center justify-between border-b border-transparent px-4 py-3 transition-[border-color,box-shadow] duration-300 md:hidden",
             scrolled && "scrolled-chrome"
@@ -345,46 +381,105 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Link>
         </header>
 
-        <main className="flex w-full flex-1 flex-col px-4 py-6 md:px-7 md:py-8">
+        <main className="reserve-mobile-nav flex w-full flex-1 flex-col px-4 pt-6 md:px-7 md:py-8">
           <div key={pathname} className="page-fade">
             <ErrorBoundary>{children}</ErrorBoundary>
           </div>
         </main>
 
-        {/* 移动端底部导航（管理员多一个「后台」入口） */}
+        {/* 移动端底部导航：5 主入口 +「更多」（管理员入口在更多抽屉内，不再挤占格位） */}
         <nav
-          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-          className={cn(
-            "sticky bottom-0 z-40 grid border-t border-border bg-white/90 backdrop-blur md:hidden",
-            isAdmin ? "grid-cols-8" : "grid-cols-7"
-          )}
+          style={{ paddingBottom: "calc(env(safe-area-inset-bottom) * 0.6)" }}
+          className="sticky bottom-0 z-40 grid grid-cols-6 border-t border-border bg-white/90 backdrop-blur md:hidden"
         >
-          {NAV.map(({ href, label, icon: Icon }) => (
+          {MOBILE_PRIMARY.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
               className={cn(
-                "flex flex-col items-center gap-1 py-2.5 text-[10px]",
+                "flex min-w-0 flex-col items-center justify-center gap-1 py-2 text-[10px] leading-none",
                 isActive(href) ? "font-semibold text-accent" : "text-ink-dim"
               )}
             >
-              <Icon className="size-5" />
-              {label}
+              <span className="grid h-7 w-7 place-items-center">
+                <Icon className="size-5" />
+              </span>
+              <span className="w-full truncate px-0.5 text-center">{label}</span>
             </Link>
           ))}
-          {isAdmin && (
-            <Link
-              href="/admin"
-              className={cn(
-                "flex flex-col items-center gap-1 py-2.5 text-[10px]",
-                isActive("/admin") ? "font-semibold text-accent" : "text-ink-dim"
-              )}
-            >
-              <ShieldCheck className="size-5" />
-              后台
-            </Link>
-          )}
+          <button
+            onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+            aria-label="更多"
+            className={cn(
+              "flex min-w-0 flex-col items-center justify-center gap-1 py-2 text-[10px] leading-none",
+              moreActive ? "font-semibold text-accent" : "text-ink-dim"
+            )}
+          >
+            <span className="grid h-7 w-7 place-items-center">
+              <MoreHorizontal className="size-5" />
+            </span>
+            <span className="w-full text-center">更多</span>
+          </button>
         </nav>
+
+        {/* 「更多」抽屉：学习人生/设置/后台/账号（M1-2）。Back 先关这里再离页。 */}
+        {moreOpen && (
+          <div className="fixed inset-0 z-50 flex items-end bg-black/30 backdrop-blur-[2px] md:hidden" onClick={() => setMoreOpen(false)}>
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="更多"
+              style={{ paddingBottom: "calc(var(--safe-bottom) + 12px)" }}
+              className="materialize open w-full rounded-t-2xl border-t border-border bg-white px-2 pb-2 pt-3 shadow-overlay"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-faint" />
+              <div className="grid grid-cols-3 gap-1.5">
+                {MOBILE_MORE.map(({ href, label, icon: Icon }) => (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={cn(
+                      "flex min-h-[64px] flex-col items-center justify-center gap-1.5 rounded-xl border px-1 py-2 text-xs transition",
+                      isActive(href)
+                        ? "border-accent/30 bg-accent/[0.08] font-semibold text-accent"
+                        : "border-border text-ink-dim hover:bg-black/[0.03] hover:text-ink"
+                    )}
+                  >
+                    <Icon className="size-5" />
+                    <span className="w-full truncate px-0.5 text-center">{label}</span>
+                  </Link>
+                ))}
+                {isAdmin && (
+                  <Link
+                    href="/admin"
+                    className={cn(
+                      "flex min-h-[64px] flex-col items-center justify-center gap-1.5 rounded-xl border px-1 py-2 text-xs transition",
+                      pathname.startsWith("/admin")
+                        ? "border-accent/30 bg-accent/[0.08] font-semibold text-accent"
+                        : "border-border text-ink-dim hover:bg-black/[0.03] hover:text-ink"
+                    )}
+                  >
+                    <ShieldCheck className="size-5" />
+                    <span className="text-center">管理后台</span>
+                  </Link>
+                )}
+                <button
+                  onClick={async () => {
+                    setMoreOpen(false);
+                    await logout();
+                    router.push("/");
+                  }}
+                  className="flex min-h-[64px] flex-col items-center justify-center gap-1.5 rounded-xl border border-border px-1 py-2 text-xs text-ink-dim transition hover:bg-bad/[0.06] hover:text-bad cursor-pointer"
+                >
+                  <LogOut className="size-5" />
+                  退出登录
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

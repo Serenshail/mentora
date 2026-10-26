@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   applyRerank,
   assessRetrieval,
+  buildContext,
   fuseMultiQuery,
   ragContext,
   rerankPrompt,
+  splitIntoChunks,
   wikiRetrieve,
   type RagDoc,
 } from "../rag";
@@ -109,5 +111,58 @@ describe("ragContext（注入裁剪）", () => {
     const ctx = ragContext(hits, 120);
     expect(ctx.length).toBeLessThanOrEqual(200);
     expect(ctx).toContain("《");
+  });
+});
+
+describe("splitIntoChunks / buildContext（上下文不再腰斩）", () => {
+  const longDoc: RagDoc = {
+    id: "long",
+    title: "React 状态管理全解",
+    body: `## 开篇
+这是一段很长的铺垫文字，讲为什么要用状态管理，大约占据很长的篇幅，用户真正想要的结论不在这一段里，而在后面的小节中。
+
+## 核心机制
+状态快照的本质：每次渲染都是一个独立的闭包，捕获的是当次渲染的变量值。这是理解 stale state 的关键。
+
+## 常见坑
+定时器里读到旧值，是因为回调闭包捕获了创建时的渲染快照，而不是最新值。
+
+## 边界
+只有在你把回调传给异步边界时才会出现；同步调用不受影响。`,
+  };
+
+  it("按 Markdown 标题切块，而不是只取开头", () => {
+    const chunks = splitIntoChunks(longDoc);
+    expect(chunks.length).toBeGreaterThanOrEqual(3);
+    expect(chunks.map((c) => c.heading)).toContain("核心机制");
+  });
+
+  it("关键结论在后半段时也能被选中（旧实现只会拿到开篇）", () => {
+    const hit = { doc: longDoc, score: 1 };
+    const ctx = buildContext([hit], "定时器读到旧值的原因", 2600);
+    expect(ctx).toContain("定时器里读到旧值");
+    expect(ctx).toContain("核心机制");
+  });
+
+  it("代码块整体保留不被切断", () => {
+    const doc: RagDoc = {
+      id: "c",
+      title: "示例",
+      body: "## 代码\n```js\nconst a = 1;\nconst b = 2;\n```\n## 说明\n这段解释变量含义。",
+    };
+    const chunks = splitIntoChunks(doc);
+    const codeChunk = chunks.find((c) => c.text.includes("const a"));
+    expect(codeChunk?.text).toContain("const b");
+    expect(codeChunk?.text).toContain("```");
+  });
+
+  it("总预算生效且不产生空上下文", () => {
+    const ctx = buildContext([{ doc: longDoc, score: 1 }], "状态", 300);
+    expect(ctx.length).toBeLessThanOrEqual(400);
+    expect(ctx).not.toBe("");
+  });
+
+  it("无命中返回空字符串", () => {
+    expect(buildContext([], "任意")).toBe("");
   });
 });
