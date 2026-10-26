@@ -195,6 +195,7 @@ export default function CouncilPage() {
     });
     setActiveId(sessionId);
     setMessages([]);
+    setPicking(false); // 选择页显隐条件含 picking：不清它，新建的圆桌会被选择页盖住
     setForgeRoundtableOpen(false);
     toast.success("圆桌已就位——把问题扔进来，每位与会者都会独立发言，最后有主持人纪要。");
   };
@@ -347,6 +348,17 @@ export default function CouncilPage() {
       }
 
       setRtPhase("host");
+      /* 部分失败：≥2 席足以综合，但失败席位必须留补答入口，否则标红的席位永远补不齐 */
+      const failedSeats = participants.filter((p) => !takesMap[p.id]);
+      if (failedSeats.length > 0) {
+        setRtRetry({
+          sessionId,
+          question,
+          seats: failedSeats,
+          goodTakes: takesMap,
+          note: `${failedSeats.length} 席发言失败（纪要已按 ${validIds.length} 席生成）`,
+        });
+      }
       try {
         const names = validIds.map(nameOf).join("、");
         const takes = validIds.map((id) => `【${nameOf(id)}】${takesMap[id]}`).join("\n\n");
@@ -364,7 +376,8 @@ export default function CouncilPage() {
         addSessionMsg(sessionId, {
           id: uid("m"),
           role: "assistant",
-          content: `## 圆桌纪要\n\n${full}`,
+          // 重试补齐后的第二份纪要标明席位数，避免两条纪要看起来互相矛盾
+          content: retry ? `## 圆桌纪要（补答后重出 · ${validIds.length} 席）\n\n${full}` : `## 圆桌纪要\n\n${full}`,
           at: new Date().toISOString(),
         });
       } catch {
