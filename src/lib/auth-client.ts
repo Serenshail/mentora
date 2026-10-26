@@ -26,7 +26,7 @@ interface AuthStore {
   user: AuthUser | null;
   checking: boolean;
   login: (email: string, password: string) => Promise<AuthUser>;
-  register: (email: string, password: string, name: string, code?: string, inviteCode?: string) => Promise<AuthUser>;
+  register: (email: string, password: string, name: string, inviteCode: string) => Promise<AuthUser>;
   logout: () => Promise<void>;
   updateProfile: (patch: { name?: string; avatar?: string | null }) => Promise<AuthUser>;
 }
@@ -49,11 +49,11 @@ export const useAuthStore = create<AuthStore>((set) => ({
     return j.user as AuthUser;
   },
 
-  register: async (email, password, name, code, inviteCode?: string) => {
+  register: async (email, password, name, inviteCode) => {
     const res = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, name, code, inviteCode }),
+      body: JSON.stringify({ email, password, name, inviteCode }),
     });
     const j = await res.json();
     if (!res.ok) throw new Error(j.error || "注册失败");

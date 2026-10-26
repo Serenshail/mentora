@@ -3,7 +3,6 @@ import crypto from "node:crypto";
 import { dbGet, dbPut, dbEventSave, emailHash } from "@/lib/server/db";
 import { hashPassword, mintSession } from "@/lib/server/auth";
 import { checkEmailDeliverable } from "@/lib/email-check";
-import { verifyCode } from "@/lib/server/mail";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
@@ -28,16 +27,17 @@ export async function POST(req: NextRequest) {
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
   const name = String(body.name ?? "").trim() || email.split("@")[0];
-  /* 内测邀请码通道：配置 INVITE_CODE 后凭码免邮箱验证码。
-   * 内测期（未配发信服务）它是唯一注册路径；正式期与邮件验证码并存。
-   * 未配置 env 时通道自动关闭（无后门）。timing-safe 比对。 */
+  /* 注册唯一凭据：内测邀请码（邮箱验证码通道已取消）。
+   * 未配置 INVITE_CODE 时通道关闭（无后门）。timing-safe 比对。 */
   const inviteRaw = String(body.inviteCode ?? "").trim();
   const inviteExpected = (process.env.INVITE_CODE || "").trim();
-  let invited = false;
-  if (inviteExpected && inviteRaw) {
-    const a = Buffer.from(inviteRaw);
-    const b = Buffer.from(inviteExpected);
-    invited = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!inviteExpected) {
+    return Response.json({ error: "注册通道暂未开放" }, { status: 503 });
+  }
+  const inviteA = Buffer.from(inviteRaw);
+  const inviteB = Buffer.from(inviteExpected);
+  if (!inviteRaw || inviteA.length !== inviteB.length || !crypto.timingSafeEqual(inviteA, inviteB)) {
+    return Response.json({ error: "邀请码不对" }, { status: 401 });
   }
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
@@ -51,13 +51,6 @@ export async function POST(req: NextRequest) {
   if (password.length < 6) {
     return Response.json({ error: "密码至少 6 位" }, { status: 400 });
   }
-  /* 邮箱归属验证码：证明"这个邮箱是你的"。dev 模式(未配 RESEND_API_KEY)下由
-   * send-code 返回 devCode,前端自动填入——链路可测,上线配 Key 即全量生效。 */
-  const code = String(body.code ?? "").trim();
-  if (!invited && !(await verifyCode(email, "register", code))) {
-    return Response.json({ error: "验证码不对或已过期，请重新获取" }, { status: 401 });
-  }
-
   const path = `users/${emailHash(email)}.json`;
   let existing = null;
   try {
@@ -87,6 +80,6 @@ export async function POST(req: NextRequest) {
 
   const user = { userId: record.userId, email, name, sv: 0 };
   await mintSession(user);
-  await dbEventSave({ name: "signup", account: emailHash(email), path: "/api/auth/register", props: `{"invited":${invited}}` });
+  await dbEventSave({ name: "signup", account: emailHash(email), path: "/api/auth/register", props: `{"invited":true}` });
   return Response.json({ user: { userId: user.userId, email, name } });
 }

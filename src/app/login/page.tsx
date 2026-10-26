@@ -79,17 +79,7 @@ function LoginInner() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [code, setCode] = useState("");
-  const [codeCooldown, setCodeCooldown] = useState(0);
-  const [codeBusy, setCodeBusy] = useState(false);
   const [invite, setInvite] = useState("");
-
-  /* 验证码 60s 倒计时 */
-  useEffect(() => {
-    if (codeCooldown <= 0) return;
-    const t = setTimeout(() => setCodeCooldown((s) => s - 1), 1000);
-    return () => clearTimeout(t);
-  }, [codeCooldown]);
 
   /* 已登录还访问 /login：直接回目标页，不渲染登录表单（否则出现三栏叠层） */
   useEffect(() => {
@@ -116,63 +106,29 @@ function LoginInner() {
     setBusy(true);
     try {
       if (mode === "reset") {
-        // 忘记密码：验证码 + 新密码一步重置；成功后回登录态，不自动签发会话
+        // 忘记密码：邮箱 + 邀请码 + 新密码一步重置；成功后回登录态，不自动签发会话
         const res = await fetch("/api/auth/reset-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email.trim(), code: code.trim(), newPassword: password }),
+          body: JSON.stringify({ email: email.trim(), inviteCode: invite.trim(), newPassword: password }),
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(j.error || "重置失败");
         toast.success("密码已重置，用新密码登录吧（其他设备需重新登录）");
         setMode("login");
         setPassword("");
-        setCode("");
+        setInvite("");
       } else if (mode === "login") {
         await login(email.trim(), password);
         await afterAuth();
       } else {
-        await register(email.trim(), password, name.trim(), code.trim(), invite.trim());
+        await register(email.trim(), password, name.trim(), invite.trim());
         await afterAuth();
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "出错了");
     } finally {
       setBusy(false);
-    }
-  };
-
-  /* 验证码发送（register / reset 共用一个入口，purpose 不同） */
-  const doSendCode = async () => {
-    if (codeBusy || codeCooldown > 0) return;
-    const em = email.trim();
-    if (!em) {
-      toast.error("先填邮箱再获取验证码");
-      return;
-    }
-    setCodeBusy(true);
-    try {
-      const res = await fetch("/api/auth/send-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: em, purpose: mode === "reset" ? "reset" : "register" }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.error || "发送失败");
-      if (j.ignored) {
-        // 找回场景邮箱未注册：服务端静默处理，这里也给出无差别提示（防账号枚举）
-        toast.success("如果该邮箱注册过，验证码稍后送达");
-      } else if (j.devCode) {
-        setCode(String(j.devCode));
-        toast("开发模式：验证码已自动填入（线上需配置发信服务）");
-      } else {
-        toast.success("验证码已发送到你的邮箱，10 分钟内有效");
-      }
-      setCodeCooldown(60);
-    } catch (e2) {
-      toast.error(e2 instanceof Error ? e2.message : "发送失败");
-    } finally {
-      setCodeBusy(false);
     }
   };
 
@@ -194,7 +150,7 @@ function LoginInner() {
           </h2>
           <p className="mt-2 text-sm leading-relaxed text-ink-dim">
             {mode === "reset"
-              ? "用注册邮箱收验证码，设一个新密码。改完后其他设备都要重新登录。"
+              ? "用内测邀请码重置密码。改完后其他设备都要重新登录。"
               : "登录后，你的学习计划、笔记和对话跟着你走——换设备也在。"}
           </p>
 
@@ -219,36 +175,18 @@ function LoginInner() {
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
               />
-              {mode === "register" && (
-                <Input
-                  placeholder="内测邀请码（可选——有它无需邮箱验证码）"
-                  value={invite}
-                  onChange={(e) => setInvite(e.target.value)}
-                />
-              )}
               {mode !== "login" && (
                 <div>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="邮箱验证码"
-                      inputMode="numeric"
-                      maxLength={6}
-                      value={code}
-                      onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                      onKeyDown={(e) => e.key === "Enter" && submit()}
-                    />
-                    <Button
-                      variant="outline"
-                      className="shrink-0"
-                      disabled={codeCooldown > 0 || codeBusy}
-                      loading={codeBusy}
-                      onClick={doSendCode}
-                    >
-                      {codeCooldown > 0 ? `${codeCooldown}s` : "获取验证码"}
-                    </Button>
-                  </div>
+                  <Input
+                    placeholder="邀请码（必填）"
+                    value={invite}
+                    onChange={(e) => setInvite(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && submit()}
+                  />
                   <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim/70">
-                    验证码用于确认这个邮箱真的是你的——收不到请检查垃圾箱。
+                    {mode === "register"
+                      ? "内测期凭邀请码开通账号，没有邀请码暂时无法注册。"
+                      : "凭内测邀请码重置密码，邀请码请联系发放人获取。"}
                   </p>
                 </div>
               )}

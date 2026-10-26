@@ -2,6 +2,16 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v22.1 — 2026-10-26（认证改为邀请码制，邮箱验证码通道下线）
+
+内测期发信通道不稳定，产品决策：暂停邮箱验证码，注册与找回统一走内测邀请码。
+
+- 删除 `/api/auth/send-code`；注册、重置密码只校验 `INVITE_CODE`（未配置 503、错误 401，timing-safe 比对）。
+- 登录页移除验证码输入与 60s 倒计时，注册/重置恢复「邀请码（必填）」。
+- 同步冒烟脚本 `scripts/smoke-auth-v17.mjs` 为邀请码流程；隐私政策文案改为「账号找回」。
+- 验证：tsc 0 错 / eslint 0 error / vitest 129 通过 / build 通过；本地认证冒烟 **17/17**。
+- 回退：`backup/pre-invite-20261026`（部署前线上状态）；代码回退用 `git revert`，平台回退用 Vercel Promote 上一版本。
+
 ## v22 — 2026-10-26（移动端 UI 适配第一批：P0-P2 落地）
 
 **依据**：`docs/PRD-2026-10-26-MOBILE-UI.md`（规划）→ 本次实现其 P0/P1/P2 与验收 M1/M2/M3 的可自动化子集。**真机（iOS/Android）与键盘实测未做**，见 ACCEPTANCE I21。

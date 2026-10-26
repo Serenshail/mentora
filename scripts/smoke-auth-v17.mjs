@@ -1,7 +1,11 @@
 /* v17 认证/同步端到端冒烟（需 dev server 在 3000 且 D1 可达；一次性探针账号，跑完自删）。
- * 覆盖：注册验证码 → 会话 sv → sync 上传与版本存档 → 改密吊销旧会话 → 登录失败锁定 → 重置密码吊销+解锁。
- * 用法: node scripts/smoke-auth-v17.mjs */
+ * 覆盖：邀请码注册 → 会话 sv → sync 上传与版本存档 → 改密吊销旧会话 → 登录失败锁定 → 邀请码重置吊销+解锁。
+ * 用法: node scripts/smoke-auth-v17.mjs（邀请码读 INVITE_CODE 或 .env.local） */
+import fs from "node:fs";
 const BASE = "http://localhost:3000";
+const INVITE =
+  process.env.INVITE_CODE ||
+  (/^INVITE_CODE=(.*)$/m.exec(fs.readFileSync(".env.local", "utf8"))?.[1] ?? "").trim();
 const stamp = Date.now().toString(36);
 const EMAIL = `v17-smoke-${stamp}@163.com`;
 const PW1 = "v17test-aaa-1";
@@ -31,12 +35,11 @@ async function req(path, opts = {}, withCookie = true) {
 }
 
 const main = async () => {
-  // 1) 发码 + 注册
-  let r = await req("/api/auth/send-code", { method: "POST", body: JSON.stringify({ email: EMAIL }) });
-  check("send-code 返回 devCode（dev 模式）", r.status === 200 && r.body?.devCode, `status=${r.status}`);
-  const code1 = r.body?.devCode;
-  r = await req("/api/auth/register", { method: "POST", body: JSON.stringify({ email: EMAIL, password: PW1, name: "冒烟", code: code1 }) });
-  check("注册成功且签发会话", r.status === 200 && cookie.length > 20, `status=${r.status}`);
+  // 1) 邀请码注册（邮箱验证码通道已取消）
+  let r = await req("/api/auth/register", { method: "POST", body: JSON.stringify({ email: EMAIL, password: PW1, name: "冒烟", inviteCode: "wrong-invite" }) });
+  check("错误邀请码被拒（401）", r.status === 401, `status=${r.status}`);
+  r = await req("/api/auth/register", { method: "POST", body: JSON.stringify({ email: EMAIL, password: PW1, name: "冒烟", inviteCode: INVITE }) });
+  check("邀请码注册成功且签发会话", r.status === 200 && cookie.length > 20, `status=${r.status}`);
 
   // 2) sync 上传 + 版本存档
   r = await req("/api/sync", { method: "POST", body: JSON.stringify({ data: { goals: [{ id: "g1", topic: "冒烟目标" }], knowledge: [], books: [], sessions: [], customPersonas: [], settings: {} } }) });
@@ -71,11 +74,11 @@ const main = async () => {
   r = await req("/api/auth/login", { method: "POST", body: JSON.stringify({ email: EMAIL, password: PW2 }) });
   check("8 次失败后正确密码也被锁（429）", r.status === 429 && /锁定/.test(r.body?.error || ""), `status=${r.status}`);
 
-  // 5) 忘记密码 → 解锁 + 改密 + 旧会话吊销
-  r = await req("/api/auth/send-code", { method: "POST", body: JSON.stringify({ email: EMAIL, purpose: "reset" }) });
-  check("reset 验证码发出", r.status === 200 && r.body?.devCode, `status=${r.status}`);
-  r = await req("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ email: EMAIL, code: r.body?.devCode, newPassword: PW3 }) });
-  check("重置密码成功", r.status === 200 && r.body?.ok, `status=${r.status} ${JSON.stringify(r.body?.error || "")}`);
+  // 5) 忘记密码（邀请码）→ 解锁 + 改密 + 旧会话吊销
+  r = await req("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ email: EMAIL, inviteCode: "wrong-invite", newPassword: PW3 }) });
+  check("错误邀请码重置被拒（401）", r.status === 401, `status=${r.status}`);
+  r = await req("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ email: EMAIL, inviteCode: INVITE, newPassword: PW3 }) });
+  check("邀请码重置密码成功", r.status === 200 && r.body?.ok, `status=${r.status} ${JSON.stringify(r.body?.error || "")}`);
   r = await req("/api/auth/login", { method: "POST", body: JSON.stringify({ email: EMAIL, password: PW3 }) });
   check("重置后锁定清除、新密码可登录", r.status === 200 && r.body?.user, `status=${r.status}`);
 

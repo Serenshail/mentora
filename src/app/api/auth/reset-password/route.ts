@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
+import crypto from "node:crypto";
 import { dbGet, dbPut, dbDelete, emailHash } from "@/lib/server/db";
 import { verifyPassword, hashPassword } from "@/lib/server/auth";
-import { verifyCode } from "@/lib/server/mail";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { deployEnv } from "@/lib/server/deploy-env";
 
@@ -19,12 +19,13 @@ interface UserRecord {
   _sha?: string;
 }
 
-/** 忘记密码（v17）：注册验证码基础设施的第二个用途。
- *  流程：send-code?purpose=reset → 邮箱收码 → 本路由验码并设新密码。
+/** 忘记密码：邀请码重置（邮箱验证码通道已取消）。
+ *  流程：邮箱 + 邀请码 + 新密码 → 校验邀请码并设新密码。
  *  安全语义：
- *  - 验证码跨 isolate 存 KV，一次性消费；
- *  - 成功改密后 sv+1：旧设备上所有会话立即吊销（拿到邮箱者不能继续潜伏）；
- *  - 登录失败锁定随之清除（用户已通过邮箱证明所有权）；
+ *  - 邀请码 timing-safe 比对，与注册共用同一个 INVITE_CODE；
+ *  - 拿到邀请码即可重置任意已知邮箱的密码——因此必须有更严的限流；
+ *  - 成功改密后 sv+1：旧设备上所有会话立即吊销；
+ *  - 登录失败锁定随之清除；
  *  - 本路由不签发新会话——改完必须回登录页重新登录，一步一个脚印。 */
 export async function POST(req: NextRequest) {
   if (!(await rateLimitPersistent(`reset:${clientIp(req)}`, { capacity: 5, refillPerSec: 5 / 60 }))) {
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
   }
   const body = await req.json().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
-  const code = String(body.code ?? "").trim();
+  const inviteRaw = String(body.inviteCode ?? "").trim();
   const newPassword = String(body.newPassword ?? "");
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
@@ -41,8 +42,14 @@ export async function POST(req: NextRequest) {
   if (newPassword.length < 6) {
     return Response.json({ error: "新密码至少 6 位" }, { status: 400 });
   }
-  if (!(await verifyCode(email, "reset", code))) {
-    return Response.json({ error: "验证码不对或已过期，请重新获取" }, { status: 401 });
+  const inviteExpected = (process.env.INVITE_CODE || "").trim();
+  if (!inviteExpected) {
+    return Response.json({ error: "重置通道暂未开放" }, { status: 503 });
+  }
+  const inviteA = Buffer.from(inviteRaw);
+  const inviteB = Buffer.from(inviteExpected);
+  if (!inviteRaw || inviteA.length !== inviteB.length || !crypto.timingSafeEqual(inviteA, inviteB)) {
+    return Response.json({ error: "邀请码不对" }, { status: 401 });
   }
 
   const path = `users/${emailHash(email)}.json`;
@@ -71,7 +78,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "保存失败，稍后再试" }, { status: 503 });
   }
 
-  // 清掉防爆破锁定：用户已通过邮箱验证码证明所有权
+  // 清掉防爆破锁定：用户已凭邀请码完成重置
   const failPath = `loginfail/${deployEnv()}/${emailHash(email)}.json`;
   await dbDelete(failPath, null).catch(() => {});
 

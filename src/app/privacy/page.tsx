@@ -15,7 +15,7 @@ export default function PrivacyPage() {
       <section className="mt-8 space-y-3">
         <h2 className="text-lg font-semibold">我们收集什么</h2>
         <ul className="list-disc space-y-2 pl-6">
-          <li><strong>邮箱</strong>：仅用于注册、登录验证码与（经你 opt-in 的）每周学习周报。不发营销邮件。</li>
+          <li><strong>邮箱</strong>：仅用于注册、账号找回与（经你 opt-in 的）每周学习周报。不发营销邮件。</li>
           <li><strong>学习数据</strong>：你输入的目标、计划、笔记、读书与对话内容。这些数据只属于你。</li>
           <li><strong>行为日志</strong>：功能漏斗埋点（如「开始引导」「生成计划」的匿名计数）与调用计量（服务商、token 数量），用于改进产品。<strong>不含对话原文，不含个人身份信息。</strong></li>
           <li><strong>IP 地址</strong>：仅用于限流与防滥用计数，不与学习数据关联分析。</li>
