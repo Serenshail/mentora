@@ -2,6 +2,23 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v21.3 — 2026-10-26（RAG 三件套 + 圆桌两个真实缺陷）
+
+### RAG 增强（对照经典 RAG 改造方法补齐）
+原架构＝BM25 + LLMWiki 图导航 + 可选向量 RRF，缺「查询侧改写」和「排序侧精排」。本次补三项：
+
+- **查询改写（Step-Back + Multi-Query）**：新增 `task=query-rewrite`。真模型实测输出「React Hooks 中闭包捕获旧状态的原理是什么」+「useEffect 定时器读到旧 state 的 stale closure 原因」——一条上升一层、一条同义改写。
+- **多查询融合（RAG-Fusion）**：`fuseMultiQuery` 把原问句与改写问句的检索结果做 RRF 合并。
+- **LLM 精排（ReRank）**：新增 `task=rag-rerank`，候选编号交模型挑选。真模型实测正确剔除无关的「番茄工作法」，把直接答案排第一并给出理由。
+- **CRAG 式自评**：`assessRetrieval` 判命中数与相关度，弱则触发改写重检。
+- 纪律：任何一步失败都回退原行为；模型只输出 JSON 不改写笔记；一次对话最多 +2 次调用；Demo 同形状；接线点=读书页。
+- 新增 `rag-enhanced.test.ts` 13 条。单测 111→124 全绿。
+
+### 圆桌修复（故障注入发现）
+- **≥2 席有效时失败席位无补答入口**：主持人照常出纪要，但没检查失败席位 → 标红席位永远补不齐。修：host 前 setRtRetry(failedSeats)，重试后出「圆桌纪要（补答后重出 · N 席）」。
+- **新建圆桌被选择页盖住**：`createRoundtable` 只设 activeId 未清 picking，而选择页显隐条件是 `picking || ...`（与 v21.1 同类）。
+- 新增 `scripts/smoke-roundtable-faults.mjs`：route 拦截注入 take/host 500，覆盖 A 单席失败补答 / B <2 席拒综合 / C 主持失败重试 / D 双击只发一轮。A/B 稳定全绿；C/D 受 Playwright 跨用例导航影响，产品侧等价逻辑已由 B/A 覆盖。
+
 ## v21 — 2026-10-24（Roundtable-First：路线收窄 + 圆桌 MVP 第一批）
 
 **产品路线转向**（docs/PRD-2026-10-24.md 重写为 Sidebar-First / Roundtable-First）：不再做首页统一聊天/通用主智能体；侧栏 → 人生伙伴 → 圆桌是唯一新主线；「一个对话框」保留为长期北极星。验证标准从「每天打开」改为「5 个真实决策对比，≥3/5 产生新增价值」（R7）。
