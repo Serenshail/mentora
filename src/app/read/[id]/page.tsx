@@ -13,7 +13,7 @@ import { ragContext, wikiRetrieve } from "@/lib/rag";
 import { retrieveEnhanced } from "@/lib/rag-pipeline";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Lightbulb, PanelLeftClose, PanelLeftOpen, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Lightbulb, MessagesSquare, PanelLeftClose, PanelLeftOpen, ShieldCheck } from "lucide-react";
 
 export default function BookPage() {
   const hydrated = useHydrated();
@@ -40,6 +40,8 @@ export default function BookPage() {
   const [planOpen, setPlanOpen] = useState(() =>
     typeof window === "undefined" ? true : window.innerWidth >= 1024
   );
+  /* 模式选择菜单（输入框左侧）开关 */
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,6 +72,7 @@ export default function BookPage() {
   const chapter = book.chapters.find((c) => c.id === currentChapter) ?? book.chapters.find((c) => c.status === "todo") ?? null;
   /* 五模式：book 级锁定;未锁定按章节知识类型推荐 */
   const activeMode: ReadingMode = (book.chatMode as ReadingMode) || defaultReadingMode(chapter?.knowledgeType);
+  const activeModeMeta = READING_MODES.find((m) => m.id === activeMode) ?? READING_MODES[0];
 
   const bookCtx = () =>
     JSON.stringify(
@@ -528,36 +531,6 @@ export default function BookPage() {
               <p className="mt-2 text-sm text-ink-dim">
                 本章带着这个问题读：<b className="text-ink">{chapter.focusQuestion}</b>
               </p>
-              {/* 五模式引擎：切换=换底层交互契约(只提问/只听讲/站对面/逐段带/合书检验),非口吻切换 */}
-              <div className="mt-3 border-t border-border/60 pt-2.5">
-                <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim/70">
-                  对话模式{!book.chatMode && "（按章节类型默认，点一下锁定）"}
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {READING_MODES.map((m) => (
-                    <button
-                      key={m.id}
-                      title={m.hint}
-                      onClick={() => {
-                        const switching = book.chatMode !== m.id;
-                        updateBook(book.id, { chatMode: book.chatMode === m.id ? undefined : m.id, modeJustSwitched: switching });
-                        toast(switching ? `已切换「${m.label}」——下一句生效，伙伴会按新模式的流程来` : "已恢复自动模式");
-                      }}
-                      className={cn(
-                        "cursor-pointer rounded-full border px-2.5 py-1 text-[11.5px] transition",
-                        activeMode === m.id
-                          ? "border-accent/50 bg-accent/[0.08] font-semibold text-accent"
-                          : "border-border text-ink-dim hover:bg-black/[0.04] hover:text-ink"
-                      )}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-dim/70">
-                  {READING_MODES.find((m) => m.id === activeMode)?.hint}
-                </p>
-              </div>
             </Card>
           )}
 
@@ -593,6 +566,56 @@ export default function BookPage() {
           </div>
 
           <div className="above-mobile-nav sticky mt-4">
+            {/* 模式选择器：输入框左侧，点开弹出五模式菜单。切换即时生效（下一句按新模式流程走） */}
+            <div className="relative mb-2">
+              <button
+                onClick={() => setModeMenuOpen((v) => !v)}
+                className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-white px-3 py-1.5 text-[11.5px] text-ink-dim transition hover:border-accent/50 hover:text-accent"
+                aria-expanded={modeMenuOpen}
+              >
+                <MessagesSquare className="size-3.5" />
+                <span className="font-semibold">{activeModeMeta.label}</span>
+                <span className="max-w-[320px] truncate text-ink-dim/60">{activeModeMeta.hint}</span>
+                <ChevronDown className={cn("size-3.5 transition", modeMenuOpen && "rotate-180")} />
+              </button>
+              {modeMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setModeMenuOpen(false)} />
+                  <div className="absolute bottom-full left-0 z-40 mb-2 w-[340px] overflow-hidden rounded-2xl border border-border bg-white shadow-overlay">
+                    <p className="border-b border-border/60 px-4 py-2.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim/70">
+                      对话模式 · 切换后下一句生效
+                    </p>
+                    {READING_MODES.map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => {
+                          const switching = book.chatMode !== m.id;
+                          updateBook(book.id, { chatMode: book.chatMode === m.id ? undefined : m.id, modeJustSwitched: switching });
+                          setModeMenuOpen(false);
+                          toast(switching ? `已切换「${m.label}」——下一句生效` : "已恢复自动模式");
+                        }}
+                        className={cn(
+                          "flex w-full cursor-pointer flex-col gap-0.5 px-4 py-2.5 text-left transition hover:bg-black/[0.035]",
+                          activeMode === m.id && "bg-accent/[0.06]"
+                        )}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className={cn("text-[13px] font-semibold", activeMode === m.id ? "text-accent" : "text-ink")}>
+                            {m.label}
+                          </span>
+                          <span className="text-[10px] text-ink-dim/50">适合：{m.forType}</span>
+                          {activeMode === m.id && <Check className="ml-auto size-3.5 shrink-0 text-accent" />}
+                        </span>
+                        <span className="text-[11px] leading-relaxed text-ink-dim">{m.hint}</span>
+                      </button>
+                    ))}
+                    <div className="border-t border-border/60 px-4 py-2 text-[10.5px] leading-relaxed text-ink-dim/60">
+                      未手动选择时，按每章的知识类型自动匹配。
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
             <div className="flex gap-2">
               <Input
                 value={input}
