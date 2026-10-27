@@ -474,6 +474,8 @@ export const readingPlanSchema = z.object({
 export type ReadingPlan = z.infer<typeof readingPlanSchema>;
 
 export const insightsSchema = z.object({
+  /** 允许空数组：INSIGHT_EXTRACT 的纪律是「只提炼真实有内容的洞见，没有就输出空数组」。
+   *  旧 schema 的 .min(1) 会把模型诚实的空结果变成 parse 异常，用户看到的是"提炼失败"而不是"没聊出来"。 */
   insights: z
     .array(
       z.object({
@@ -481,8 +483,7 @@ export const insightsSchema = z.object({
         body: z.string().optional().nullable(),
         knowledgePoint: z.string().optional().nullable(),
       })
-    )
-    .min(1),
+    ),
 });
 
 export const autolinkSchema = z.object({

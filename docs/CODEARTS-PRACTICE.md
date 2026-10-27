@@ -52,7 +52,7 @@
 12. **PowerShell 5.1 编码陷阱×2**：UTF-8 无 BOM 中文脚本被按 GBK 解析致语法错；`Set-Content -Encoding UTF8` 写出的 BOM 令 docker config.json 解析失败（push 无认证头）。修复：单 BOM 规范 + `[IO.File]::WriteAllText` 无 BOM 重写 + 每脚本过 PSParser 语法校验（`e35eee7`）。
 13. **DCS 批删参数结构与版本差异**：`DeleteInstance` operation 不存在（需 `BatchDeleteInstances`）；body 字段为单数 `instance_id` 且 KooCLI 支持数组 KV 语法 `--instances.1=<id>`（实操日志归档）。
 
-**可出示证据**：上述每条对应提交/文件/运行日志（`docs/evidence/logs/` 已归档 15 份，全部脱敏扫描）。
+**可出示证据**：上述每条对应提交/文件/运行日志（`docs/evidence/logs/` 已归档 **14 份**：step1×3 + step2×11，全部脱敏扫描）。
 
 ## 五、项目构建与部署上线环节
 

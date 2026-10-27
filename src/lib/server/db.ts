@@ -681,6 +681,21 @@ export async function dbDelete(path: string, sha: string | null): Promise<void> 
   if (res.status >= 300) throw new Error(`DB 删除失败（${res.status}）`);
 }
 
+/** 级联删一个目录下的所有键，返回删除条数。
+ *  用于注销账号时清掉派生数据（versions/<userId>/ 历史快照）。
+ *  单个文件删失败不阻断整体——残留的历史版本不该反过来阻止用户注销。 */
+export async function dbDeleteDir(dir: string): Promise<number> {
+  let n = 0;
+  const files = await dbList(dir);
+  for (const f of files) {
+    try {
+      await dbDelete(`${dir}/${f.name}`, f.sha || null);
+      n++;
+    } catch { /* 单个失败继续下一个 */ }
+  }
+  return n;
+}
+
 export function emailHash(email: string): string {
   return crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 24);
 }

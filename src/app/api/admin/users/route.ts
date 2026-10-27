@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { dbGet, dbList, dbDelete, emailHash } from "@/lib/server/db";
+import { dbGet, dbList, dbDelete, dbDeleteDir, emailHash } from "@/lib/server/db";
 import { authorizeAdmin } from "@/lib/server/admin-auth";
 
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ interface UserRecord {
   createdAt: string;
 }
 
-/** 删除用户：连同其云端数据一并移除 */
+/** 删除用户：连同其云端数据与历史快照一并移除 */
 export async function DELETE(req: NextRequest) {
   const denied = await requireAdmin(req);
   if (denied) return Response.json({ error: denied.error }, { status: denied.status });
@@ -35,6 +35,10 @@ export async function DELETE(req: NextRequest) {
     const dataFile = await dbGet(`data/${rec.userId}.json`, { encrypted: true });
     if (dataFile) await dbDelete(`data/${rec.userId}.json`, dataFile._sha ?? null);
   } catch { /* 数据文件删除失败不阻断 */ }
+  /* 与自助注销同口径：versions/<userId>/ 的历史快照同样是用户数据，删号就要删干净 */
+  try {
+    await dbDeleteDir(`versions/${rec.userId}`);
+  } catch { /* 列目录失败不阻断 */ }
   return Response.json({ ok: true });
 }
 

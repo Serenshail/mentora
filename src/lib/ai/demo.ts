@@ -12,6 +12,37 @@ export async function* chunked(text: string, size = 6, delay = 12) {
   }
 }
 
+/* ---------- 演示模式也要守真实链路的闸门 ----------
+ * demo 不是"绕过验收"，而是"用最省的方式走同一条路"。真实判分的硬闸门是
+ * 「正向判定必须逐字引用讲义/笔记原文，否则降级为 ungradable/fail」
+ * （见 client.ts normalizeQuizGrade / normalizeReviewGrade）。
+ * 所以 demo 的 evidence 一律从请求里带上来的原文（ctx.lesson / ctx.excerpt）现场摘取：
+ * 取得到才判通过，取不到就如实判不通过——绝不输出无依据的 pass 再被降级，
+ * 那样演示结果和真实产品是两件事。 */
+
+/** 从提示词里嵌的 ctx JSON 中取出某个字符串字段（含 \" \\ \n 转义还原）。 */
+function ctxField(system: string, name: string): string {
+  const m = system.match(new RegExp(`"${name}":\\s*"((?:[^"\\\\]|\\\\.)*)"`, "s"));
+  if (!m) return "";
+  return m[1].replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
+/** 找第一段"像样"的正文（去掉 markdown 标记后 ≥12 字），返回它的**原样一行**作依据。
+ *  返回原文而不是清洗后的文本：判分依据必须能在讲义里逐字找到，剥掉 # 和 * 就不算引用了。 */
+function firstSubstantiveLine(text: string): string {
+  for (const raw of text.split("\n")) {
+    const bare = raw.replace(/^[\s>#*`\-]+/, "").trim();
+    if (bare.length >= 12) return raw.trim().slice(0, 160);
+  }
+  return "";
+}
+
+/** 从 ctx.knowledgePoints 数组文本里取第一条，用于拼演示版迁移题。 */
+function firstKnowledgePoint(system: string): string {
+  const m = system.match(/"knowledgePoints":\s*\[\s*"([^"]{2,60})"/);
+  return m ? m[1] : "";
+}
+
 /* ---------- 苏格拉底引导（脚本化六问） ---------- */
 const INTAKE_QUESTIONS = [
   (topic: string) => `（演示模式）好，我们开始。第一个问题：你学 ${topic} 是为了干什么？想用它做到什么具体的事？`,
@@ -54,19 +85,35 @@ export async function* demoIntake(messages: Msg[]) {
   );
 }
 
-/* ---------- 计划生成 ---------- */
-export async function* demoPlan(system: string) {
-  const topic = system.match(/"topic":\s*"([^"]+)"/)?.[1] ?? "Python";
-  const hours = system.match(/"weeklyHours":\s*(\d+)/)?.[1] ?? "8";
-  const plan = {
-    summary: `（演示模式）围绕「${topic}」的项目驱动路线：先用两周建立最小核心，再进入实战项目，边做边补。节奏按每周 ${hours} 小时设计，宁可慢不可断。`,
-    totalDays: 6,
-    weeklyHours: Number(hours) || 8,
-    phases: [
-      {
-        title: "阶段一：最小核心",
-        outcome: `能用 ${topic} 写出一个小而完整的程序，并讲清每行为什么这么写`,
-        days: [
+/* ---------- 计划生成（演示：与真实两级计划协议同形状输出） ----------
+ * 真实链路把 plan 拆成三个提示词、三套 schema：
+ *   master       → masterPlanSchema（总纲要：阶段 / outcome / outline / boundary）
+ *   phase-list   → phaseListSchema（天清单：boundary + 每天标题与知识点文本）
+ *   phase-detail → phasePlanSchema（把清单里指定的几天展开成完整日计划）
+ * 旧 demo 只输出早已淘汰的 planSchema，于是演示模式下「生成计划」在 parse 处就炸。
+ * demo 必须和真实链路同形状——演示的意义就是把闭环完整走通给人看。
+ * 分支靠提示词里的固定措辞判别（见 prompts.ts PLANNER_* 原文），不额外引入参数。 */
+
+/** 演示日计划模板的形状（与 phasePlanSchema 的必填项对齐，字段故意放松以便演示内容复用）。 */
+interface DemoDayTemplate {
+  title: string;
+  knowledgePoints: string[];
+  resources: { title: string; url?: string; why: string }[];
+  method: string;
+  example?: { title: string; description: string; code?: string };
+  acceptance: { kind: string; question: string; hint?: string }[];
+}
+
+/** 「本轮要写的天」清单项：真实链路传进来的是 phase-list 的结果，形状二选一。 */
+interface DemoRequestedDay {
+  title?: string;
+  knowledgePoints?: (string | { text?: string })[];
+}
+
+/** 四天细节模板：phase-detail 按清单标题回填它；master / phase-list 从它派生形状。
+ * 一份内容三种形状，避免 demo 里再堆一份会跟真实契约漂移的假计划。 */
+function demoDayTemplates(topic: string): DemoDayTemplate[] {
+  return [
           {
             title: "Day 1：核心数据结构",
             knowledgePoints: [
@@ -104,12 +151,6 @@ export async function* demoPlan(system: string) {
               { kind: "apply", question: "变体题：加一个『撤销最近一次完成』的命令，怎么设计？", hint: "考察状态管理" },
             ],
           },
-        ],
-      },
-      {
-        title: "阶段二：实战项目",
-        outcome: `独立完成一个 ${topic} 小项目，能向别人讲清设计取舍`,
-        days: [
           {
             title: "Day 3：项目起步",
             knowledgePoints: ["需求拆解", "最小可运行版本", "调试基本法"],
@@ -130,11 +171,108 @@ export async function* demoPlan(system: string) {
               { kind: "oral", question: "3 分钟费曼讲解：你的项目解决什么问题？最大的设计取舍是什么？", hint: "讲给外行听" },
             ],
           },
-        ],
+  ];
+}
+
+/** 知识点粗分类（演示用）：真实链路由判分/设计模型按当日内容给出。 */
+function guessKnowledgeType(text: string): string {
+  if (/区别|选型|判断|该不该|边界|为什么用/.test(text)) return "discrimination";
+  if (/步骤|流程|搭建|实现|动手|调试|测试|骨架/.test(text)) return "procedure";
+  if (/取舍|策略|规划|设计|范围|需求/.test(text)) return "judgment";
+  if (/定义|术语|事实|清单/.test(text)) return "fact";
+  return "concept";
+}
+
+/** master：总纲要（阶段 + 可验证 outcome + syllabus 清单 + 范围与不学）。 */
+function demoMasterPlan(topic: string, hours: string) {
+  const days = demoDayTemplates(topic);
+  return {
+    summary: `（演示模式）围绕「${topic}」的项目驱动路线：先用两周建立最小核心，再进入实战项目，边做边补。节奏按每周 ${hours} 小时设计，宁可慢不可断。`,
+    totalDaysEstimate: 12,
+    phases: [
+      {
+        title: "阶段一：最小核心",
+        outcome: `能用 ${topic} 写出一个小而完整的程序，并讲清每行为什么这么写`,
+        estDays: 6,
+        outline: days.slice(0, 2).flatMap((d) => d.knowledgePoints),
+        boundary: `范围：只学做出这个小工具用得上的 ${topic} 基础。不学：框架、部署运维、性能调优、语言冷门特性。`,
+      },
+      {
+        title: "阶段二：实战项目",
+        outcome: `独立完成一个 ${topic} 小项目，能向别人讲清设计取舍`,
+        estDays: 6,
+        outline: days.slice(2).flatMap((d) => d.knowledgePoints),
+        boundary: "范围：一个能演示的最小项目与它的复盘。不学：团队协作流程、CI/CD、大型架构。",
       },
     ],
   };
-  yield* chunked("```json\n" + JSON.stringify(plan, null, 2) + "\n```", 10, 6);
+}
+
+/** phase-list：天清单（只出标题与知识点文本，细节留给下一批）。
+ *  演示模式固定出 3 天：够走完「清单→细节→讲义→验收」整条链，又不把 demo 拖慢。 */
+function demoPhaseList(topic: string, maxDays: number) {
+  const days = demoDayTemplates(topic).slice(0, Math.min(3, Math.max(1, maxDays || 3)));
+  return {
+    boundary: `范围：只做这条路线用得上的部分。不学：与当前项目无关的进阶特性。`,
+    days: days.map((d) => ({ title: d.title, knowledgePoints: d.knowledgePoints })),
+  };
+}
+
+/** phase-detail：把清单里指定的这几天展开成完整日计划——标题与知识点原文照抄，
+ *  只补资源/方法/验收，和真实提示词的「不得增删改、不得重新编号」是同一条纪律。 */
+function demoPhaseDetail(topic: string, requested: DemoRequestedDay[]) {
+  const templates = demoDayTemplates(topic);
+  const source: DemoRequestedDay[] = requested.length
+    ? requested
+    : templates.slice(0, 2).map((d) => ({ title: d.title, knowledgePoints: d.knowledgePoints }));
+  return {
+    days: source.map((r, i) => {
+      const title = String(r?.title ?? templates[i % templates.length].title);
+      const tpl = templates.find((d) => title.slice(0, 6) === d.title.slice(0, 6)) ?? templates[i % templates.length];
+      const rawKps = Array.isArray(r?.knowledgePoints) && r.knowledgePoints.length
+        ? r.knowledgePoints
+        : tpl.knowledgePoints;
+      const knowledgePoints = rawKps.map((k) => {
+        const text = typeof k === "string" ? k : String(k?.text ?? "");
+        return { text, knowledgeType: guessKnowledgeType(text) };
+      });
+      return {
+        title,
+        knowledgePoints: knowledgePoints.length ? knowledgePoints : tpl.knowledgePoints.map((t) => ({ text: t, knowledgeType: guessKnowledgeType(t) })),
+        resources: tpl.resources,
+        method: tpl.method,
+        example: tpl.example,
+        acceptance: tpl.acceptance,
+      };
+    }),
+  };
+}
+
+/** 真实链路把「本轮要写的天」原样写进提示词，demo 从同一位置解析回来照抄。 */
+function parseRequestedDays(system: string): DemoRequestedDay[] {
+  const head = system.indexOf("## 本轮要写的天");
+  if (head < 0) return [];
+  const rest = system.slice(head);
+  const start = rest.indexOf("[");
+  const end = rest.lastIndexOf("]");
+  if (start < 0 || end <= start) return [];
+  try {
+    const parsed = JSON.parse(rest.slice(start, end + 1));
+    return Array.isArray(parsed) ? (parsed as DemoRequestedDay[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function* demoPlan(system: string) {
+  const topic = ctxField(system, "topic") || "Python";
+  const hours = ctxField(system, "weeklyHours") || "8";
+  const draft = system.includes("本轮只为清单里")
+    ? demoPhaseDetail(topic, parseRequestedDays(system))
+    : system.includes("总学习纲要")
+      ? demoMasterPlan(topic, hours)
+      : demoPhaseList(topic, Number(system.match(/最多\s*(\d+)\s*天/)?.[1] ?? 3));
+  yield* chunked("```json\n" + JSON.stringify(draft, null, 2) + "\n```", 10, 6);
 }
 
 /* ---------- 每日教学文档 ---------- */
@@ -179,23 +317,51 @@ def report():
 2. 把 report 改成返回字符串而不是打印，想想调用方因此能多做什么。`);
 }
 
-/* ---------- 验收评分（演示：通过） ---------- */
+/* ---------- 验收评分（演示：带依据才判通过） ----------
+ * 真实链路的闸门：正向判定必须逐字引用讲义原文，否则 normalizeQuizGrade 降级为
+ * ungradable、overall 变 fail。demo 不绕开这道闸——它从 ctx.lesson 里现场摘一句原文。
+ * 摘不到（讲义还没生成）就如实判 ungradable，与真实行为一致。 */
 export async function* demoQuizGrade(system: string) {
   const ids = [...system.matchAll(/"itemId":\s*"([^"]+)"/g)].map((m) => m[1]);
-  const items = ids.length
-    ? ids
-    : ["q1", "q2"];
+  const items = ids.length ? ids : ["q1", "q2"];
+  const evidence = firstSubstantiveLine(ctxField(system, "lesson"));
+
+  if (!evidence) {
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          items: items.map((id) => ({
+            itemId: id,
+            verdict: "ungradable",
+            evidence: "",
+            hintLevel: 0,
+            feedback: "（演示）没有收到当天的讲义原文，给不出可核对的依据——本次判定不计为通过。",
+          })),
+          overall: "fail",
+          summary: "（演示）验收未通过：判分的参照物是当天讲义，没有原文就没有依据。",
+          reviewAdvice: "回到今天那一课，先生成讲义，再来提交验收。",
+          transferQuestion: null,
+        }) +
+        "\n```"
+    );
+    return;
+  }
+
+  const kp = firstKnowledgePoint(system) || "今天的核心概念";
   yield* chunked(
     "```json\n" +
       JSON.stringify({
         items: items.map((id) => ({
           itemId: id,
-          verdict: "pass",
-          feedback: "（演示）核心机制讲对了，细节表达可以再练。",
+          verdict: "correct",
+          evidence,
+          hintLevel: 0,
+          feedback: "（演示）核心机制讲对了，且与讲义原文一致；细节表达还可以再练。",
         })),
         overall: "pass",
-        summary: "（演示）验收通过，知识点已经真正长在你脑子里。",
-        reviewAdvice: "这些知识点已进入间隔复习队列（1/3/7/15 天），按提醒回来刷即可。",
+        summary: "（演示）验收通过：每条判定都附了讲义原文依据，不是模型口头认可。",
+        reviewAdvice: "这些知识点已按 FSRS（目标保持率 90%）排进复习队列，到期那天第二大脑会提醒回来。",
+        transferQuestion: `换个新场景：如果要把「${kp}」用到一个和今天完全不同的任务里，哪些原理照搬就行、哪些细节必须重写？先说不变的，再说要改的。`,
       }) +
       "\n```"
   );
@@ -258,12 +424,86 @@ export async function* demoReview(system: string) {
   );
 }
 
-export async function* demoReviewGrade() {
+/* ---------- 复习判分（演示：引用笔记原文才算通过） ----------
+ * 与 quiz-grade 同一道闸：normalizeReviewGrade 会把无依据的 pass 改判 fail，
+ * 所以 demo 直接从 ctx.excerpt 摘一句真原文；摘不到就判不通过，不放水。 */
+export async function* demoReviewGrade(system: string) {
+  const evidence = firstSubstantiveLine(ctxField(system, "excerpt"));
+  yield* chunked(
+    "```json\n" +
+      JSON.stringify(
+        evidence
+          ? {
+              verdict: "pass",
+              evidence,
+              feedback: "（演示）你说清了机制，依据见左侧笔记原文。按 FSRS 顺延到下一轮复习。",
+            }
+          : {
+              verdict: "fail",
+              evidence: "",
+              feedback: "（演示）这篇笔记没能摘出可核对的原文依据，本次不计通过——复习的意义就在于此。",
+            }
+      ) +
+      "\n```"
+  );
+}
+
+/* ---------- 读书洞见（演示：只提炼用户自己说过的话） ----------
+ * insightsSchema 允许空数组（真实提示词的纪律是「没有就输出空数组」）。
+ * demo 同样宁缺毋滥：找不到用户说过实质内容，就返回空，由页面如实提示。 */
+export async function* demoInsight(system: string) {
+  const said: string[] = [];
+  for (const m of system.matchAll(/用户：([\s\S]{6,200}?)(?:\n\n|$)/g)) {
+    const line = m[1].replace(/\s+/g, " ").trim();
+    if (line.length >= 10 && !/^（演示/.test(line)) said.push(line);
+  }
+  const pick = said[said.length - 1] ?? said[0] ?? "";
+  if (!pick) {
+    yield* chunked("```json\n" + JSON.stringify({ insights: [] }) + "\n```");
+    return;
+  }
+  const title = pick.replace(/[。！？].*$/, "").slice(0, 20);
   yield* chunked(
     "```json\n" +
       JSON.stringify({
-        verdict: "pass",
-        feedback: "（演示）核心机制说对了，记忆稳固，下轮复习顺延。",
+        insights: [
+          {
+            title: title || "你在对话里的一句话",
+            body: `（演示）这是你自己说出来的想法，不是书上的原话：\n\n> ${pick.slice(0, 150)}`,
+            knowledgePoint: title.slice(0, 30),
+          },
+        ],
+      }) +
+      "\n```"
+  );
+}
+
+/* ---------- 结业总结（演示：只用材料里真实存在的数字） ---------- */
+export async function* demoGraduation(system: string) {
+  const topic = ctxField(system, "topic") || "这个目标";
+  const completed = Number(system.match(/"completedDays":\s*(\d+)/)?.[1] ?? 0);
+  const kpCount = (system.match(/"text":/g) ?? []).length;
+  yield* chunked(
+    "```json\n" +
+      JSON.stringify({
+        noteMarkdown: [
+          `# 结业 · ${topic}`,
+          ``,
+          `（演示模式）这个目标最终拿到的能力：能独立做出一个最小可用的东西，并讲清每步为什么这么做。`,
+          ``,
+          `## 走过的路`,
+          `- 完成天数：${completed} 天`,
+          `- 入库知识点：${kpCount} 条（掌握分布由客户端按真实掌握状态补齐）`,
+          ``,
+          `## 仍然薄弱的`,
+          `- 演示模式没有真实判分记录，此处如实留白：接上真模型后，这一节会列出仍是 exposed/guided 的知识点。`,
+          ``,
+          `复习节奏：FSRS 已把这些知识点排进队列，按提醒回来，别靠感觉。`,
+        ].join("\n"),
+        nextSteps: [
+          `把已会的东西用起来：给「${topic}」找一个真实的小需求，做完并写三百字复盘。`,
+          "回炉复习里错得最多的那条：不是重读讲义，是合上材料重做一遍。",
+        ],
       }) +
       "\n```"
   );

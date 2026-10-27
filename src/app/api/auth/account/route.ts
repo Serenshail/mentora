@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { dbGet, dbDelete, emailHash } from "@/lib/server/db";
+import { dbGet, dbDelete, dbDeleteDir, emailHash } from "@/lib/server/db";
 import { verifySession, verifyPassword, clearSessionCookie } from "@/lib/server/auth";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 
@@ -40,6 +40,11 @@ export async function DELETE(req: NextRequest) {
     const dataFile = await dbGet(`data/${record.userId}.json`, { encrypted: true });
     if (dataFile) await dbDelete(`data/${record.userId}.json`, dataFile._sha ?? null);
   } catch { /* 数据文件删除失败不阻断 */ }
+  /* 历史快照也是用户数据：注销必须一并清掉，否则 versions/ 里留着最多 10 份加密全量备份，
+   * 账号删了内容还在——这是隐私承诺上的漏洞（工程债清单 H4 的第 4 条，本条修复）。 */
+  try {
+    await dbDeleteDir(`versions/${record.userId}`);
+  } catch { /* 列目录失败不阻断注销 */ }
 
   await clearSessionCookie();
   return Response.json({ ok: true, userId: record.userId });

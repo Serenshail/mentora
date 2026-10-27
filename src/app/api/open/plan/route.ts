@@ -150,7 +150,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  /* ---- 任务 ②：今天到期的复习（间隔重复 1/3/7/15 + FSRS） ---- */
+  /* ---- 任务 ②：今天到期的复习（FSRS 排期） ---- */
   const dueReviews = knowledge
     .filter((k) => k && k.nextReviewAt && String(k.nextReviewAt).slice(0, 10) <= today)
     .sort((a, b) => String(a.nextReviewAt).localeCompare(String(b.nextReviewAt)));

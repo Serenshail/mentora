@@ -1,10 +1,13 @@
 "use client";
 
 /* 学习日历（GitHub 提交墙的 Mentora 变体）：
- * - 格子语义不同：一格 = 当天验收事件（含复习通过），强度 = 验收"质量"
- *   (0 无 → 1 仅复习 → 2 通过了部分 → 3 全部通过)。我们的验收是双轨制,不数"提交次数"。
- * - 点击格子弹出当天详情（通过了哪些验收/复习对错），可回溯——正反馈=可看见的成长。
- * - 数据全部从现有 quizLog/knowledge 推导,零新存储。 */
+ * - 格子语义：一格 = 当天有没有验收事件，强度 = 验收"质量"
+ *   (0 无 → 1 只有新掌握、没做验收 → 2 有通过也有未过 → 3 当天验收全过)。
+ *   我们的验收是双轨制，不数"提交次数"。
+ * - 复习不单独造格子：FSRS 卡只存当前状态（st/due/last），回推不出"历史上每天复习了几条"，
+ *   与其铺一层假数据，不如只画真实存在的验收事件（2026-10-27 删掉了曾经恒为 0 的复习字段）。
+ * - 点击格子弹出当天验收详情，可回溯——正反馈=可看见的成长。
+ * - 数据全部从现有 quizLog/knowledge 推导，零新存储。 */
 
 import { useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
@@ -16,9 +19,8 @@ interface DayCell {
   level: 0 | 1 | 2 | 3;
   quizPassed: number;
   quizTotal: number;
-  reviewOk: number;
-  reviewBad: number;
   mastered: number; // 当日新掌握知识点数
+  future?: boolean; // 今天之后的空格子：不可点、不着色
 }
 
 function localDateStr(d: Date): string {
@@ -35,7 +37,7 @@ export function StudyHeatmap() {
     const byDate = new Map<string, DayCell>();
     const ensure = (d: Date): DayCell => {
       const k = localDateStr(d);
-      if (!byDate.has(k)) byDate.set(k, { date: k, level: 0, quizPassed: 0, quizTotal: 0, reviewOk: 0, reviewBad: 0, mastered: 0 });
+      if (!byDate.has(k)) byDate.set(k, { date: k, level: 0, quizPassed: 0, quizTotal: 0, mastered: 0 });
       return byDate.get(k)!;
     };
 
@@ -53,11 +55,7 @@ export function StudyHeatmap() {
       const c = ensure(d);
       c.mastered++;
     }
-    // 复习事件：知识点的 lastReviewOk + 最近复习日(nextReviewAt 推不回,用 fsrs 之外字段近似)
-    for (const k of knowledge ?? []) {
-      if (k.lastReviewOk === undefined || !k.fsrs) continue;
-      // fsrs 只存状态;复习日期以 reviewStage>0 且 masteredAt 后的第一轮近似,不强行造数据
-    }
+    // 复习事件不进格子：FSRS 卡只有当前状态，回推不出每天复习了几条（见文件头注释）。
 
     // 26 周 × 7 天的墙
     const cells: DayCell[][] = [];
@@ -73,13 +71,13 @@ export function StudyHeatmap() {
         const d = new Date(start);
         d.setDate(start.getDate() + w * 7 + i);
         if (d > today) {
-          col.push({ date: localDateStr(d), level: 0, quizPassed: 0, quizTotal: 0, reviewOk: 0, reviewBad: 0, mastered: 0, ...({ future: true } as object) } as DayCell);
+          col.push({ date: localDateStr(d), level: 0, quizPassed: 0, quizTotal: 0, mastered: 0, future: true });
           continue;
         }
         const c = ensure(d);
-        // level：3=当天验收全过 / 2=有通过也有未过 / 1=仅复习或仅零星掌握 / 0=无
+        // level：3=当天验收全过 / 2=有通过也有未过 / 1=没做验收但当天新掌握了东西 / 0=无
         if (c.quizTotal > 0) c.level = c.quizPassed === c.quizTotal ? 3 : 2;
-        else if (c.mastered > 0 || c.reviewOk > 0) c.level = 1;
+        else if (c.mastered > 0) c.level = 1;
         col.push(c);
       }
       cells.push(col);
@@ -122,7 +120,7 @@ export function StudyHeatmap() {
           {weeks.map((col, wi) => (
             <div key={wi} className="flex flex-col gap-[3px]">
               {col.map((c, di) => {
-                const future = (c as DayCell & { future?: boolean }).future;
+                const future = c.future;
                 return (
                   <button
                     key={c.date}

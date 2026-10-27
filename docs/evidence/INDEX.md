@@ -20,7 +20,7 @@
 | ✅ | 发信双轨 EMAIL_CHANNEL | `637c715` |
 | ✅ | RAG 向量混排（回退 BM25） | `46eb8cc` |
 | ✅ | 漏斗聚合管理端点 | `73f34a7` |
-| ✅ | 单测 81 passed / 7 skipped（vitest 输出） | 本文件同目录 `ci-gates.md`（⏳ 归档运行输出） |
+| ✅ | 单测：改造期 81 passed → 2026-10-27 本地 `vitest run` **144 passed / 7 skipped**（7 条为 e2e.local，需 `E2E=1` 与本地 dev server） | 本文件同目录 `ci-gates.md`（⏳ 归档云端 CI 运行输出；本地数字来自实测，非 CI 留档） |
 
 ## 项目构建环节
 
@@ -43,7 +43,7 @@
 
 | 状态 | 证据 | 说明 |
 | --- | --- | --- |
-| ✅ | RDS/DCS 创建→就绪→删除全链路实测（规格预查询/幂等重跑） | `docs/evidence/logs/step2-*.log` 15 份（脱敏） |
+| ✅ | RDS/DCS 创建→就绪→删除全链路实测（规格预查询/幂等重跑） | `docs/evidence/logs/` 实有 **14 份**（step1×3 + step2×11，脱敏） |
 | ✅ | VPC/SWR 组织/凭证链打通 | 同上 |
 | ✅ | 沙箱↔华为云 API 直连可行性论证（服务域名白名单内，9 种端点实测） | 会话记录+日志 |
 | ⏳ | HW-D-02 首次部署耗时记录 | 按 PRD 方案 A 演示窗口执行后归档 `first-deploy.md` |
@@ -57,4 +57,4 @@
 | ⏳ | HW-O-04 演示素材 OBS 链接 | 回填 README |
 | ⏳ | HW-C-02 eval 质量对比（MaaS vs 旧服务商） | 归档 `eval-compare.md` |
 | ⏳ | HW-P-04 CodeArts 流水线/扫描留档 | 归档 `codearts-pipeline.md` |
-| ⏳ | CCE 服务授权 | 控制台单击确认（已核查无 CLI/API 通道，PRD §8） |
+| ✅ | CCE 服务授权（2026-10-20 控制台单击完成，三委托 `cce_admin_trust`/`cce_cluster_agency`/`CCENodeAgency` 已建） | 无 CLI/API 通道，PRD §8；集群创建与部署仍待演示窗口（`CceClusterId` 目前为空） |

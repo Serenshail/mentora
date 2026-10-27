@@ -85,12 +85,15 @@ export default function LifePage() {
     }
   };
 
+  /* 色板只用 globals.css @theme 里真实定义的 token。
+   * 此前写的 text-info / bg-info / text-primary 在 @theme 里不存在，
+   * Tailwind v4 不生成这些类，图标与标签实际是继承色（看起来"颜色没生效"）。 */
   const KIND_META: Record<LifeEvent["kind"], { label: string; cls: string }> = {
     pass: { label: "验收通过", cls: "text-ok" },
     skip: { label: "跳过", cls: "text-warn" },
     mastered: { label: "新掌握", cls: "text-accent" },
-    council: { label: "圆桌", cls: "text-info" },
-    book: { label: "读书", cls: "text-primary" },
+    council: { label: "圆桌", cls: "text-accent-2" },
+    book: { label: "读书", cls: "text-ink-dim" },
   };
 
   if (!hydrated) return <div className="h-64 animate-pulse rounded-2xl bg-surface/60" />;
@@ -146,7 +149,7 @@ export default function LifePage() {
           {events.slice(0, 40).map((e, i) => (
             <div key={i} className="flex gap-3">
               <div className="flex flex-col items-center">
-                <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", e.kind === "pass" ? "bg-ok" : e.kind === "mastered" ? "bg-accent" : e.kind === "council" ? "bg-info" : "bg-ink-dim/30")} />
+                <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", e.kind === "pass" ? "bg-ok" : e.kind === "mastered" ? "bg-accent" : e.kind === "council" ? "bg-accent-2" : "bg-ink-dim/30")} />
                 {i < Math.min(events.length, 40) - 1 && <span className="w-px flex-1 bg-border" />}
               </div>
               <div className="pb-4">

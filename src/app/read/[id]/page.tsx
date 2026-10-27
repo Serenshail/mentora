@@ -232,6 +232,12 @@ export default function BookPage() {
         onDelta: () => {},
       });
       const parsed = insightsSchema.parse(extractJson(full));
+      /* 空结果是诚实答案，不是失败：模型没提炼出属于用户自己的洞见时，
+       * 不要写空笔记、也不要报"提炼出 0 条"。 */
+      if (parsed.insights.length === 0) {
+        toast("这段对话里还没有属于你自己的洞见——再往深处聊两轮，或者把例子讲具体些，再来提炼。");
+        return;
+      }
       parsed.insights.forEach((i) =>
         addInsight(book.id, i.knowledgePoint ? `${i.title} —— ${i.knowledgePoint}` : i.title)
       );

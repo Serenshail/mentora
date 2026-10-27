@@ -10,7 +10,7 @@ import { isDeployed } from "@/lib/server/deploy-env";
 import * as P from "@/lib/ai/prompts";
 import { logEvent } from "@/lib/server/config";
 import {
-  demoCouncil, demoIntake, demoLesson, demoPlan, demoQuizGrade,
+  demoCouncil, demoGraduation, demoInsight, demoIntake, demoLesson, demoPlan, demoQuizGrade,
   demoReadingChat, demoReadingPlan, demoReview, demoReviewGrade,
   demoRoundtableHost, demoRoundtableTake,
 } from "@/lib/ai/demo";
@@ -118,7 +118,11 @@ function demoTask(
     case "lesson": return demoLesson();
     case "quiz-grade": return demoQuizGrade(s);
     case "review-ask": return demoReview(s);
-    case "review-grade": return demoReviewGrade();
+    case "review-grade": return demoReviewGrade(s);
+    /* 读书洞见与结业总结都有 schema 硬校验：落进 default 的 demoCouncil 会直接 parse 失败，
+     * 演示模式反而走不完闭环。二者各自输出契约形状（洞见宁缺毋滥，允许空数组）。 */
+    case "insight": return demoInsight(s);
+    case "graduation": return demoGraduation(s);
     case "reading-plan": return demoReadingPlan(s);
     case "reading-chat": return demoReadingChat(messages);
     case "autolink":

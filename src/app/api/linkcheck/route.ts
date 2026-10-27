@@ -14,6 +14,12 @@ const AD_TITLE = /(广告|推广|优惠|折扣|购买|选购|注册送|免费领
 const AD_DOMAIN = /(doubleclick|adservice|adserver|affiliate|commission-junction|clickbank)/i;
 const AFFILIATE_PARAM = /(utm_source|utm_medium|aff=|affiliate|ref=affiliate|campaign=)/i;
 
+/* 无学习价值页面：URL 形态就能断定"点开学不到内容"——
+ * 登录/注册、控制台/工作台、试用/活动营销、个人空间/动态、搜索/标签聚合。
+ * 这类页面往往 HTTP 200 可访问，通用探测拦不住，但对学习者就是死链（产品核心投诉）。 */
+const USELESS_URL = /(\/login|\/signin|\/sign-in|\/signup|\/sign-up|\/register|\/oauth|\/sso\b|\/console\b|\/workbench|\/dashboard\b|\/free\b|\/free-trial|\/trial\b|\/activity|\/promotion|\/campaign|\/member\b|\/vip\b|space\.bilibili\.com|\/dynamic|\/search\?|\/tag\/|\/tags\/|\/topics?\/?$)/i;
+const USELESS_TITLE = /(登录|注册|立即注册|控制台|工作台|免费试用|限时活动|新人专享|账号登录|用户中心|个人中心)/;
+
 interface CheckResult {
   url: string;
   ok: boolean;
@@ -119,6 +125,10 @@ async function checkVideo(raw: string): Promise<CheckResult | null> {
   const host = u.hostname.toLowerCase().replace(/^(www|m)\./, "");
   const base = baseOf(raw);
 
+  /* 无学习价值页面：URL 形态先拦（重定向到登录页也算） */
+  if (USELESS_URL.test(u.pathname + u.search)) {
+    return { ...base, dead: true, reason: "入口/登录/营销页，不是学习内容" };
+  }
   if (host === "youtu.be") return verifyYouTube(raw, u.pathname.split("/").filter(Boolean)[0] ?? "");
   if (host === "youtube.com") {
     if (u.pathname === "/watch") return verifyYouTube(raw, u.searchParams.get("v") ?? "");
@@ -142,6 +152,13 @@ async function checkOne(raw: string): Promise<CheckResult> {
   const v = await checkVideo(raw);
   if (v) return v;
   const base: CheckResult = { url: raw, ok: false, dead: false, ad: false, status: 0, title: "", finalUrl: raw, reason: "" };
+  // 入口页形态先拦（通用路径）：登录/控制台/试用/空间/搜索页，不用等 HTTP 探测
+  try {
+    const u0 = new URL(raw);
+    if (USELESS_URL.test(u0.pathname + u0.search)) {
+      return { ...base, dead: true, reason: "入口/登录/营销页，不是学习内容" };
+    }
+  } catch { /* 交给 url-guard 报格式错误 */ }
   const entry = await assertSafePublicUrl(raw, { allowHttp: true });
   if (!entry.ok) return { ...base, dead: true, reason: "链接格式不受支持" };
   /* redirect:"manual" 逐跳校验后再跟进——此前 redirect:"follow" 请求先打出去、复检只是事后诸葛，
@@ -183,9 +200,21 @@ async function checkOne(raw: string): Promise<CheckResult> {
       const html = (await res.text().catch(() => "")).slice(0, 200_000);
       const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
       base.title = (m?.[1] ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+      // 重定向后的终页也要复核（如 /free 跳到登录页）：URL 形态 + 页面标题双查
+      let finalUrlObj: URL;
+      try {
+        finalUrlObj = new URL(base.finalUrl);
+        if (USELESS_URL.test(finalUrlObj.pathname + finalUrlObj.search)) {
+          return { ...base, dead: true, reason: "重定向到入口/登录/营销页" };
+        }
+      } catch { /* finalUrl 解析失败不做二次判定 */ }
+      const uselessByTitle = USELESS_TITLE.test(base.title);
       const adByTitle = AD_TITLE.test(base.title);
       const adByDomain = AD_DOMAIN.test(new URL(base.finalUrl).hostname);
       const adByParam = AFFILIATE_PARAM.test(base.finalUrl);
+      if (uselessByTitle) {
+        return { ...base, dead: true, reason: "页面是登录/控制台/试用入口，不是学习内容" };
+      }
       if (adByTitle || adByDomain || adByParam) {
         return { ...base, ad: true, reason: adByTitle ? "标题含营销词" : adByDomain ? "广告域名" : "带affiliate参数" };
       }
