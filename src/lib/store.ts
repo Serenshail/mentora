@@ -348,10 +348,10 @@ export const useAppStore = create<AppState>()(
                   status: "locked",
                   attempts: 0,
                 };
-              } else {
+              } else if (old.stub) {
+                // 已展开的天只做目录索引，不覆盖标题/详情（避免老数据标题与正文错位）
                 old.title = c.title;
-                // 已展开的天只改标题，绝不覆盖详情（目录只是索引）
-                if (old.stub) old.knowledgePoints = kps;
+                old.knowledgePoints = kps;
               }
             }
             phase.dayIds = catalog.map((c) => c.id);

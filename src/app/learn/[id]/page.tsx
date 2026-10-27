@@ -800,13 +800,21 @@ function ensurePhaseCatalog(goalId: string, phaseId: string): void {
       const detailed = freshPhase.dayIds
         .map((id) => fresh.plan!.days[id])
         .filter((d) => d && !d.stub);
-      const catalog = days.map((d, i) => ({
-        id: freshPhase.catalog?.[i]?.id ?? detailed[i]?.id ?? uid("day"),
-        title: `Day ${i + 1}：${dayNo(d.title)}`,
-        knowledgePoints: d.knowledgePoints
-          .map((kp) => (typeof kp === "string" ? kp : kp.text))
-          .slice(0, 8),
-      }));
+      const catalog = days.map((d, i) => {
+        /* 老数据已展开的天：沿用原 id/标题/知识点，保证目录与正文一致；
+         * 只有目录里新补的天才用模型这次的标题。 */
+        const old = detailed[i];
+        if (old) {
+          return { id: old.id, title: old.title, knowledgePoints: old.knowledgePoints.map((kp) => kp.text) };
+        }
+        return {
+          id: freshPhase.catalog?.[i]?.id ?? uid("day"),
+          title: `Day ${i + 1}：${dayNo(d.title)}`,
+          knowledgePoints: d.knowledgePoints
+            .map((kp) => (typeof kp === "string" ? kp : kp.text))
+            .slice(0, 8),
+        };
+      });
       /* 目录比已展开的天还短（模型这次排少了）：把多出来的天追加回去，绝不丢已完成/已展开的进度 */
       for (let i = catalog.length; i < detailed.length; i++) {
         catalog.push({
