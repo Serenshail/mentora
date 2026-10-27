@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
+import { ChunkRecovery } from "@/components/chunk-recovery";
 import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
@@ -26,6 +27,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN" className="h-full antialiased">
       <body className="min-h-full flex flex-col">
+        <ChunkRecovery />
         <AppShell>{children}</AppShell>
         <Toaster theme="light" position="top-center" richColors />
       </body>
