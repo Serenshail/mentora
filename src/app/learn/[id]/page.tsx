@@ -1,7 +1,7 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { MASTERY_LABELS, MASTERY_ORDER } from "@/lib/types";
 import {
   Badge, Button, Card, Input, Modal, PageHeader, ProgressRing, StatusDot, Textarea,
@@ -212,13 +212,21 @@ function QuickNotes({ goal, day }: { goal: Goal; day: DayPlan }) {
 }
 
 /* ================= 页面 ================= */
-export default function GoalDetailPage() {
+function GoalDetailInner() {
   const hydrated = useHydrated();
   const { id } = useParams<{ id: string }>();
   const goal = useAppStore((s) => s.goals.find((g) => g.id === id));
   const settings = useAppStore((s) => s.settings);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [viewDayId, setViewDayId] = useState<string | null>(null);
+  /* 学习窗口：由计划页 window.open 打开的新标签页（?day=<id>&focus=1），
+   * 只渲染当天学习视图。计划页留在原标签不动，退出学习窗口不会丢计划。 */
+  const focusParam = searchParams.get("day");
+  const isFocus = searchParams.get("focus") === "1";
+  /* 在窗口内切到下一天时用本地覆盖值，不必为 URL 参数再同步一次 state */
+  const [focusOverride, setFocusOverride] = useState<string | null>(null);
+  const focusDayId = focusOverride ?? focusParam;
   /* 日程投影（视图层，不进目标卡 schema）：用户给一个目标日期,反推每天节奏。
    * ⚠️ Hook 必须在一切条件 return 之前（踩坑 #9：hydrated/goal 翻转时钩子数量变化→React #310） */
   const [deadline, setDeadline] = useState<string>(() => {
@@ -236,6 +244,34 @@ export default function GoalDetailPage() {
     return { ratio: days.length ? done / days.length : 0, done, total: days.length };
   }, [goal]);
 
+  const activeDay =
+    Object.values(goal?.plan?.days ?? {}).find((d) => d.status === "active") ??
+    /* 迁移门（v17）：判过但未过门的当天顶替"当前任务"——否则无 active 日、视图空转，门卡无处显 */
+    Object.values(goal?.plan?.days ?? {}).find((d) => d.status === "passed" && d.pendingUnlock) ??
+    null;
+  const activePhase = goal?.plan?.phases.find((p) => p.status === "active") ?? null;
+  const viewDay = (viewDayId ? goal?.plan?.days[viewDayId] : null) ?? activeDay;
+  const focusDay = (focusDayId ? goal?.plan?.days[focusDayId] : null) ?? activeDay;
+
+  /* 内容自动补齐（无需用户点「生成」）：
+   *   阶段没目录 → 先出全目录；当天还是目录占位 → 展开当天；当天已展开 → 预取后面两天。
+   * 失败不狂重试：错误留在对应面板上，用户可手动重试；刷新后这里会自动续跑。 */
+  const catalogLen = activePhase?.catalog?.length ?? 0;
+  const activePhaseStatus = activePhase?.status;
+  useEffect(() => {
+    if (!hydrated || !goal?.plan || !activePhase || activePhaseStatus !== "active") return;
+    if (catalogLen === 0) {
+      ensurePhaseCatalog(goal.id, activePhase.id);
+      return;
+    }
+    if (activeDay?.stub) {
+      ensureDayDetail(goal.id, activeDay.id);
+      return;
+    }
+    if (activeDay) prefetchUpcoming(goal.id, activeDay.id, 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只按 id/stub 变化驱动
+  }, [hydrated, goal?.id, activePhase?.id, activePhaseStatus, catalogLen, activeDay?.id, activeDay?.stub]);
+
   if (!hydrated) return <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />;
   if (!goal) {
     return (
@@ -248,13 +284,58 @@ export default function GoalDetailPage() {
     );
   }
 
-  const activeDay =
-    Object.values(goal.plan?.days ?? {}).find((d) => d.status === "active") ??
-    /* 迁移门（v17）：判过但未过门的当天顶替"当前任务"——否则无 active 日、视图空转，门卡无处显 */
-    Object.values(goal.plan?.days ?? {}).find((d) => d.status === "passed" && d.pendingUnlock) ??
-    null;
-  const activePhase = goal.plan?.phases.find((p) => p.status === "active") ?? null;
-  const viewDay = (viewDayId ? goal.plan?.days[viewDayId] : null) ?? activeDay;
+  const closeStudyWindow = () => {
+    router.push(`/learn/${goal.id}`);
+  };
+
+  /* 学习窗口：只留当天内容，窄栏居中；不再渲染计划侧栏/日程投影等管理信息 */
+  if (isFocus) {
+    return (
+      <div className="mx-auto max-w-3xl">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <button
+            onClick={closeStudyWindow}
+            className="flex items-center gap-1.5 text-sm text-ink-dim hover:text-ink cursor-pointer"
+          >
+            <ArrowLeft className="size-4" /> 返回计划
+          </button>
+          <span className="truncate text-xs text-ink-dim">{goal.topic}</span>
+          <Button variant="outline" size="sm" onClick={closeStudyWindow}>
+            关闭学习窗口
+          </Button>
+        </div>
+        {focusDay ? (
+          focusDay.stub ? (
+            <DayStubPanel goal={goal} day={focusDay} />
+          ) : (
+            <DayPanel
+              key={focusDay.id}
+              goal={goal}
+              day={focusDay}
+              tone={settings.coachTone ?? "standard"}
+              openWindow={false}
+              onGoToDay={(next) => {
+                if (next && goal.plan?.days[next]) {
+                  setFocusOverride(next);
+                  window.history.replaceState(null, "", `/learn/${goal.id}?day=${next}&focus=1`);
+                } else {
+                  closeStudyWindow();
+                }
+              }}
+            />
+          )
+        ) : (
+          <Card>
+            <p className="text-sm text-ink-dim">这一天不在计划里（可能已被删除）。</p>
+            <Button variant="outline" size="sm" className="mt-3" onClick={closeStudyWindow}>
+              返回计划
+            </Button>
+          </Card>
+        )}
+      </div>
+    );
+  }
+
   const remainingDays = goal.plan
     ? Object.values(goal.plan.days).filter((d) => d.status === "active" || d.status === "locked").length
     : 0;
@@ -336,8 +417,8 @@ export default function GoalDetailPage() {
           tone={settings.coachTone ?? "standard"}
         />
       )}
-      {/* partial（分批生成中）：Day 1 已激活可学——主体给学习视图，面板收进下方继续显示生成进度 */}
-      {goal.plan && !viewDay && activePhase && !activePhase.planned && (
+      {/* 阶段还没目录：先给阶段概览 + 自动生成进度（生成完会自动进入第一天） */}
+      {goal.plan && !viewDay && activePhase && (
         <PhasePlanPanel goal={goal} phase={activePhase} />
       )}
       {goal.plan && !viewDay && !activePhase && (
@@ -347,6 +428,14 @@ export default function GoalDetailPage() {
         <RegeneratePlan goal={goal} />
       )}
     </div>
+  );
+}
+
+export default function GoalDetailPage() {
+  return (
+    <Suspense fallback={<div className="h-40 animate-pulse rounded-2xl bg-surface/60" />}>
+      <GoalDetailInner />
+    </Suspense>
   );
 }
 
@@ -411,7 +500,11 @@ function LearnBody({
           )}
           {remainingDays === 0 && <p className="mt-2 text-center text-xs text-ink-dim lg:hidden">全部学习日已完成。</p>}
         </div>
-        <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={readOnly} onGoToDay={onSelect} tone={tone} />
+        {viewDay.stub ? (
+          <DayStubPanel goal={goal} day={viewDay} />
+        ) : (
+          <DayPanel key={viewDay.id} goal={goal} day={viewDay} readOnly={readOnly} onGoToDay={onSelect} tone={tone} />
+        )}
       </div>
     </>
   );
@@ -528,30 +621,28 @@ function friendlyGenError(e: unknown): string {
   return msg || "生成失败，请重试";
 }
 
-/** 生成流程（模块级，不碰 React 状态——进度经 onProgress/onThink 回调上报给后台任务注册表）。
- *  流程：①天清单（快） → ②每批 2 天展开细节，每批落盘可续跑 → ③编号归一化后激活。
- *  天数硬约束：清单阶段就钉死 ≤ min(estDays||6, 8)——用户等待时长 ∝ 天数，预估 8 天就出 8 天，
- *  不许模型自由发挥到 10 天（历史上出过 8 天阶段生成 10 天的事故）。 */
-async function doGenerate(
-  goal: Goal,
-  phase: NonNullable<Goal["plan"]>["phases"][number],
-  onProgress: (s: string) => void,
-  onThink: () => void
-): Promise<void> {
-  const { streamChat, phasePlanSchema, phaseListSchema } = await import("@/lib/ai/client");
-  const { phaseDraftToDays } = await import("@/lib/plan");
+/* ================= 生成流程：目录一次出全，单日按需展开 =================
+ * 旧实现的痛点是「等整阶段细节全部生成完」：一次请求几分钟、退出即断、刷新只剩前两天还没目录。
+ * 现在分三步，每一步都可单独重试、都可落盘：
+ *   ① 目录：一次生成全阶段的天标题+目录级知识点（小请求，几十秒）→ 立刻完整可见；
+ *   ② 前两天：目录落盘后马上展开第 1、2 天细节（用户马上要学）；
+ *   ③ 滚动：每学完/跳过一天，就把后面 2 天展开好；剩下的天永远是「目录里的待生成」。
+ * 资源链接体检改为异步补做，不再挡在生成主链路上。 */
+
+const dayNo = (title: string) => title.replace(/^Day\s*\d+[：:]\s*/, "");
+
+/** 生成用的学习背景（目录/细节共用） */
+function genCtx(goal: Goal, phase: NonNullable<Goal["plan"]>["phases"][number]) {
   const plan = goal.plan!;
-  // 已掌握：所有已通过/跳过天的知识点
   const mastered = Object.values(plan.days)
     .filter((d) => d.status === "passed" || d.status === "skipped")
     .flatMap((d) => d.knowledgePoints.map((k) => k.text));
-  // 薄弱点：最近未通过的验收
   const weakPoints = goal.quizLog
     .filter((q) => !q.passed)
     .slice(0, 5)
     .flatMap((q) => {
-      const day = plan.days[q.dayId];
-      return day ? [`${day.title}（${q.items.filter((i) => i.verdict === "incorrect").length} 题未过）`] : [];
+      const d = plan.days[q.dayId];
+      return d ? [`${d.title}（${q.items.filter((i) => i.verdict === "incorrect").length} 题未过）`] : [];
     });
   const maxDays = Math.min(Math.max(phase.estDays ?? 6, 2), 8);
   const ctx = JSON.stringify(
@@ -579,170 +670,220 @@ async function doGenerate(
     null,
     1
   );
-  const call = (mode: "phase-list" | "phase-detail", extra: Record<string, unknown>, userText: string) => () =>
-    streamChat({
-      task: "plan",
-      args: { mode, ctx, ...extra },
-      messages: [{ role: "user", content: userText }],
-      onDelta: () => {},
-      onThink,
-    });
-
-  /* ① 天清单：只出 boundary + 每天的标题与知识点文本，请求小、几十秒内返回。 */
-  const listRaw = await chatWithRetry(
-    2,
-    call("phase-list", { maxDays }, `先只输出这个阶段的天清单（最多 ${maxDays} 天，只要 JSON）。`)
-  );
-  const list = phaseListSchema.parse(extractJson(listRaw));
-  const boundary = list.boundary?.trim() || phase.boundary || "";
-  // 天数硬约束在代码层兜底：模型多给了就砍到 maxDays，绝不出现"8 天阶段生成 10 天"
-  const planned = list.days.slice(0, maxDays);
-
-  /* ② 分批展开细节（每批 ≤2 天）：每个请求都短，断了只重发这一批。
-   * 每批完成立刻落盘（partial），后续批次再失败也不会丢掉已生成的天。 */
-  const BATCH = 2;
-  // 上次中断留下的进度：已落盘的天数与清单顺序一致，跳过即可续跑
-  const already = phase.dayIds.length;
-  const batches: typeof planned[] = [];
-  for (let i = already; i < planned.length; i += BATCH) batches.push(planned.slice(i, i + BATCH));
-  const days: NonNullable<Goal["plan"]>["days"] = {};
-  const label = (t: string) => t.match(/Day\s*\d+/i)?.[0] ?? t.slice(0, 10);
-  for (let bi = 0; bi < batches.length; bi++) {
-    const batch = batches[bi];
-    onProgress(
-      `正在展开 ${label(batch[0].title)}\u2013${label(batch[batch.length - 1].title)}` +
-        `（第 ${bi + 1}/${batches.length} 批 · 全阶段共 ${planned.length} 天）…`
-    );
-    const detailRaw = await chatWithRetry(
-      2,
-      call(
-        "phase-detail",
-        { boundary, days: JSON.stringify(batch) },
-        "为指定的这些天写出完整细节（只要 JSON）。"
-      )
-    );
-    const parsedDays = phasePlanSchema.parse(extractJson(detailRaw)).days;
-    // 编号归一化（bug 根修）：detail 模型偶尔无视"不得重新编号"，按本批清单顺序重写 Day N，
-    // 绝不让"Day 2"出现在两个天身上。全局序号 = 已落盘天数 + 批内偏移。
-    const normalized = parsedDays.map((d, i) => ({
-      ...d,
-      title: d.title.replace(/^Day\s*\d+[：:]\s*/, `Day ${already + bi * BATCH + i + 1}：`),
-    }));
-    const batchDays = phaseDraftToDays({ boundary, days: normalized }, phase.id);
-    // 资源体检闭环：失效/广告的链接重新找替代，仍坏则丢弃——绝不把坏链推给用户
-    await Promise.all(
-      Object.entries(batchDays).map(async ([id, d]) => {
-        batchDays[id] = {
-          ...d,
-          resources: await refineResources(d.resources, `${goal.topic}：${phase.title} — ${d.title}`),
-        };
-      })
-    );
-    Object.assign(days, batchDays);
-    useAppStore.getState().setPhasePlan(goal.id, phase.id, boundary, days, { partial: true });
-  }
-
-  useAppStore.getState().setPhasePlan(goal.id, phase.id, boundary, days);
-  // 阶段计划入第二大脑关系链
-  const masterNote = `${goal.topic} 学习计划 · 学习总纲要`;
-  // 用全阶段的天（含上次中断前已完成的），不只本轮新生成的
-  const saved = useAppStore.getState().goals.find((g) => g.id === goal.id)?.plan;
-  const savedPhase = saved?.phases.find((p) => p.id === phase.id);
-  // d.title 本身已含 "Day N：",不再重复前缀;用项目符号列表,Markdown 才换行成结构化清单
-  const daysOverview = (savedPhase?.dayIds ?? [])
-    .map((id) => saved?.days[id])
-    .filter((d): d is NonNullable<typeof d> => Boolean(d))
-    .map((d) => `- **${d.title.replace(/^Day\s*\d+[：:]\s*/, "")}** — ${d.knowledgePoints.map((k) => k.text).join("、")}`)
-    .join("\n");
-  useAppStore.getState().addKnowledge(
-    [{
-      title: `${goal.topic} 学习计划 · ${phase.title}`,
-      body: `**阶段目标：**${phase.outcome}\n\n**边界：**${boundary || "—"}\n\n## 每日安排\n\n${daysOverview}\n\n关联：[[${masterNote}]]`,
-      domain: `${goal.topic}/计划`,
-    }],
-    "learn",
-    `${goal.topic} · 阶段计划`
-  );
+  return { ctx, maxDays };
 }
 
-/* 后台生成注册表（模块级，不随组件卸载丢失）：
- * 用户切去别的页面时生成继续跑（不 abort），回来自动接上显示实时进度/结果。
- * key=goalId:phaseId；每批完成即落盘（partial），即使整页刷新也只丢在途的那一批。 */
-const bgGen = new Map<
-  string,
-  { busy: boolean; progress: string; thinking: boolean; error: string | null; doneAt: number | null; run: () => Promise<void> }
->();
-function bgKey(goalId: string, phaseId: string) {
-  return `${goalId}:${phaseId}`;
+/* 后台任务注册表（模块级，不随组件卸载丢失）：切页不中断，回来自动接上；
+ * 每完成一步立即落盘，整页刷新也只丢正在跑的那一次调用。 */
+type BgEntry = {
+  busy: boolean;
+  progress: string;
+  thinking: boolean;
+  error: string | null;
+  doneAt: number | null;
+};
+const bgGen = new Map<string, BgEntry>();
+const dayRuns = new Map<string, Promise<void>>();
+const genKey = (kind: "catalog" | "detail", goalId: string, id: string) => `${kind}:${goalId}:${id}`;
+
+/** 订阅某个后台任务的状态（700ms 轮询，字段不变不重渲染） */
+function useGenState(key: string) {
+  const [snap, setSnap] = useState<BgEntry | undefined>(() => bgGen.get(key));
+  useEffect(() => {
+    const sync = () => {
+      const st = bgGen.get(key);
+      const next = st ? { ...st } : undefined;
+      setSnap((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    };
+    sync();
+    const t = setInterval(sync, 700);
+    return () => clearInterval(t);
+  }, [key]);
+  return snap;
+}
+
+/** 展开单日细节（目录 id 复用；同一天并发去重） */
+function runDayDetail(goalId: string, dayId: string): Promise<void> {
+  const k = `${goalId}:${dayId}`;
+  const running = dayRuns.get(k);
+  if (running) return running;
+  const p = (async () => {
+    const { streamChat, phasePlanSchema } = await import("@/lib/ai/client");
+    const { phaseDraftToDay } = await import("@/lib/plan");
+    const goal = useAppStore.getState().goals.find((g) => g.id === goalId);
+    const day = goal?.plan?.days[dayId];
+    const phase = goal?.plan?.phases.find((ph) => ph.id === day?.phaseId);
+    if (!goal?.plan || !day || !phase || !day.stub) return;
+    const { ctx } = genCtx(goal, phase);
+    const daysJson = JSON.stringify([
+      { title: day.title, knowledgePoints: day.knowledgePoints.map((kp) => kp.text) },
+    ]);
+    const raw = await chatWithRetry(2, () =>
+      streamChat({
+        task: "plan",
+        args: { mode: "phase-detail", ctx, boundary: phase.boundary ?? "", days: daysJson },
+        messages: [{ role: "user", content: "为指定的这一天写出完整细节（只要 JSON）。" }],
+        onDelta: () => {},
+      })
+    );
+    const parsed = phasePlanSchema.parse(extractJson(raw)).days[0];
+    if (!parsed) throw new Error("这一天没拿到细节，请重试");
+    const built = phaseDraftToDay(parsed, phase.id, dayId);
+    useAppStore.getState().setDayDetail(goalId, phase.id, dayId, built);
+    /* 链接体检/替换异步补做：绝不挡「今天能不能开始学」，坏链发现后再静默换掉 */
+    void refineResources(built.resources, `${goal.topic}：${phase.title} — ${built.title}`)
+      .then((rs) => useAppStore.getState().updateDayResources(goalId, dayId, rs))
+      .catch(() => {});
+  })();
+  dayRuns.set(k, p);
+  void p.then(
+    () => dayRuns.delete(k),
+    () => dayRuns.delete(k)
+  );
+  return p;
+}
+
+/** 单日展开的可见任务（错误可重试；与目录流程共享 runDayDetail 去重） */
+function ensureDayDetail(goalId: string, dayId: string): void {
+  const key = genKey("detail", goalId, dayId);
+  if (bgGen.get(key)?.busy) return;
+  const goal = useAppStore.getState().goals.find((g) => g.id === goalId);
+  const day = goal?.plan?.days[dayId];
+  if (!goal?.plan || !day?.stub) return;
+  const st: BgEntry = { busy: true, progress: "正在展开这一天的内容…", thinking: false, error: null, doneAt: null };
+  bgGen.set(key, st);
+  void (async () => {
+    try {
+      await runDayDetail(goalId, dayId);
+    } catch (e) {
+      console.error(e);
+      st.error = friendlyGenError(e);
+    } finally {
+      st.busy = false;
+      st.progress = "";
+      st.doneAt = Date.now();
+    }
+  })();
+}
+
+/** 阶段目录：一次排齐全阶段的天（只出目录，细节留给按天展开） */
+function ensurePhaseCatalog(goalId: string, phaseId: string): void {
+  const key = genKey("catalog", goalId, phaseId);
+  if (bgGen.get(key)?.busy) return;
+  const goal = useAppStore.getState().goals.find((g) => g.id === goalId);
+  const phase = goal?.plan?.phases.find((ph) => ph.id === phaseId);
+  if (!goal?.plan || !phase || phase.catalog?.length) return;
+  const st: BgEntry = { busy: true, progress: "正在排出本阶段的全部学习日…", thinking: false, error: null, doneAt: null };
+  bgGen.set(key, st);
+  void (async () => {
+    try {
+      const { streamChat, phaseListSchema } = await import("@/lib/ai/client");
+      const { ctx, maxDays } = genCtx(goal, phase);
+      const raw = await chatWithRetry(2, () =>
+        streamChat({
+          task: "plan",
+          args: { mode: "phase-list", ctx, maxDays },
+          messages: [{ role: "user", content: `先只输出这个阶段的学习日目录（最多 ${maxDays} 天，只要 JSON）。` }],
+          onDelta: () => {},
+          onThink: () => {
+            st.thinking = true;
+          },
+        })
+      );
+      const list = phaseListSchema.parse(extractJson(raw));
+      const boundary = list.boundary?.trim() || phase.boundary || "";
+      const days = list.days.slice(0, maxDays);
+      /* 老数据（此前只生成过前两天、没有目录）也能无损续上：已展开的天按顺序沿用 id */
+      const fresh = useAppStore.getState().goals.find((g) => g.id === goalId);
+      const freshPhase = fresh?.plan?.phases.find((ph) => ph.id === phaseId);
+      if (!fresh?.plan || !freshPhase) return;
+      const detailed = freshPhase.dayIds
+        .map((id) => fresh.plan!.days[id])
+        .filter((d) => d && !d.stub);
+      const catalog = days.map((d, i) => ({
+        id: freshPhase.catalog?.[i]?.id ?? detailed[i]?.id ?? uid("day"),
+        title: `Day ${i + 1}：${dayNo(d.title)}`,
+        knowledgePoints: d.knowledgePoints
+          .map((kp) => (typeof kp === "string" ? kp : kp.text))
+          .slice(0, 8),
+      }));
+      /* 目录比已展开的天还短（模型这次排少了）：把多出来的天追加回去，绝不丢已完成/已展开的进度 */
+      for (let i = catalog.length; i < detailed.length; i++) {
+        catalog.push({
+          id: detailed[i].id,
+          title: detailed[i].title,
+          knowledgePoints: detailed[i].knowledgePoints.map((kp) => kp.text),
+        });
+      }
+      useAppStore.getState().setPhaseCatalog(goalId, phaseId, boundary, catalog);
+      /* 前两天的细节先展开（用户马上要学），之后保持「当前天 + 下一天」两天就绪 */
+      st.progress = "目录已就绪，正在展开第 1 天…";
+      ensureDayDetail(goalId, catalog[0].id);
+      await runDayDetail(goalId, catalog[0].id);
+      if (catalog[1]) {
+        st.progress = "正在展开第 2 天…";
+        ensureDayDetail(goalId, catalog[1].id);
+        await runDayDetail(goalId, catalog[1].id);
+      }
+      /* 阶段目录进第二大脑（用目录本身，不依赖细节是否展开） */
+      const masterNote = `${goal.topic} 学习计划 · 学习总纲要`;
+      useAppStore.getState().addKnowledge(
+        [{
+          title: `${goal.topic} 学习计划 · ${phase.title}`,
+          body: `**阶段目标：**${phase.outcome}\n\n**边界：**${boundary || "—"}\n\n## 学习日目录\n\n${catalog
+            .map((c) => `- **${dayNo(c.title)}** — ${c.knowledgePoints.join("、")}`)
+            .join("\n")}\n\n关联：[[${masterNote}]]`,
+          domain: `${goal.topic}/计划`,
+        }],
+        "learn",
+        `${goal.topic} · 阶段目录`
+      );
+    } catch (e) {
+      console.error(e);
+      st.error = friendlyGenError(e);
+    } finally {
+      st.busy = false;
+      st.thinking = false;
+      st.progress = "";
+      st.doneAt = Date.now();
+    }
+  })();
+}
+
+/** 滚动预取：保持「当前天 + 下一天」两天是展开好的。
+ *  阶段开始只备第 1、2 天；用户学到第 2 天时，才把第 3 天展开，不会提前把整阶段跑完。 */
+function prefetchUpcoming(goalId: string, fromDayId: string, count = 1): void {
+  const goal = useAppStore.getState().goals.find((g) => g.id === goalId);
+  const day = goal?.plan?.days[fromDayId];
+  const phase = goal?.plan?.phases.find((ph) => ph.id === day?.phaseId);
+  if (!goal?.plan || !day || !phase) return;
+  const ids = (phase.catalog ?? phase.dayIds.map((id) => ({ id }))).map((c) => c.id);
+  const idx = ids.indexOf(fromDayId);
+  if (idx < 0) return;
+  // 下一天已经展开 → 缓冲够了，不再往后预取
+  if (ids[idx + 1] && !goal.plan.days[ids[idx + 1]]?.stub) return;
+  const targets = ids
+    .slice(idx + 1, idx + 1 + count)
+    .filter((id) => goal.plan!.days[id]?.stub);
+  if (!targets.length) return;
+  void (async () => {
+    for (const id of targets) {
+      try {
+        await runDayDetail(goalId, id);
+      } catch {
+        /* 预取失败：用户真正学到那天时再自动重试 */
+      }
+    }
+  })();
 }
 
 function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["plan"]>["phases"][number] }) {
-  const key = bgKey(goal.id, phase.id);
-  // 已有后台任务（切页回来/重挂）→ 接上它的实时状态
-  const existing = bgGen.get(key);
-  const [busy, setBusy] = useState(existing?.busy ?? false);
-  const [error, setError] = useState<string | null>(existing?.error ?? null);
-  const [thinking, setThinking] = useState(existing?.thinking ?? false);
-  const [progress, setProgress] = useState(existing?.progress ?? "");
-  const [, forceTick] = useState(0);
-
-  // 挂载期间轮询后台任务状态（后台完成时 busy→false 自动刷新视图，partial 落盘的天已进 store）
-  useEffect(() => {
-    if (!bgGen.has(key)) return;
-    const t = setInterval(() => {
-      const st = bgGen.get(key);
-      if (!st) return;
-      setBusy(st.busy);
-      setProgress(st.progress);
-      setThinking(st.thinking);
-      setError(st.error);
-      forceTick((n) => n + 1);
-    }, 700);
-    return () => clearInterval(t);
-  }, [key]);
-
-  const startGenerate = () => {
-    if (bgGen.get(key)?.busy) return;
-    const st = {
-      busy: true,
-      progress: "正在规划这个阶段的每一天…",
-      thinking: false,
-      error: null as string | null,
-      doneAt: null as number | null,
-      run: async () => {},
-    };
-    st.run = async () => {
-      setBusy(true);
-      setThinking(false);
-      setError(null);
-      setProgress(st.progress);
-      try {
-        await doGenerate(
-          goal,
-          phase,
-          (p) => { st.progress = p; setProgress(p); },
-          () => { st.thinking = true; setThinking(true); },
-        );
-        st.doneAt = Date.now();
-      } catch (e) {
-        console.error(e);
-        const msg = friendlyGenError(e);
-        st.error = msg;
-        setError(msg);
-      } finally {
-        st.busy = false;
-        st.thinking = false;
-        st.progress = "";
-        setBusy(false);
-        setThinking(false);
-        setProgress("");
-      }
-    };
-    bgGen.set(key, st);
-    void st.run();
-  };
-
-  const generate = startGenerate;
+  const st = useGenState(genKey("catalog", goal.id, phase.id));
+  const busy = st?.busy ?? false;
+  const error = st?.error ?? null;
+  const thinking = st?.thinking ?? false;
+  const progress = st?.progress ?? "";
+  const hasCatalog = (phase.catalog?.length ?? 0) > 0;
 
   return (
     <Card className="border-accent/25">
@@ -779,21 +920,23 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
       )}
 
       <p className="mt-4 text-xs leading-relaxed text-ink-dim/80">
-        天级计划现在才生成——因为它会结合你在前面阶段的真实表现（已掌握什么、哪里薄弱）和学习画像，
-        比一开始就排死整个计划精准得多。
+        进入阶段先一次性排出全部学习日目录（几秒到几十秒），你马上要学的第 1、2 天会立刻展开细节；
+        往后每学完一天，系统自动补好后面两天。不必等整个阶段生成完才能开始。
       </p>
 
       {error && <p className="mt-3 text-sm text-bad">{error}</p>}
       {busy && (
         <p className="mt-3 flex items-center gap-2 text-xs text-ink-dim" aria-live="polite">
           <Loader2 className="size-3.5 animate-spin text-accent" />
-          {progress || (thinking ? "模型思考中——最长约一分钟，别关页面" : "正在生成…")}
+          {progress || (thinking ? "模型思考中——通常一分钟内返回" : "正在生成…")}
         </p>
       )}
-      <Button className="mt-5 w-full" onClick={generate} loading={busy}>
-        {phase.dayIds.length > 0
-          ? `继续生成天级计划（已完成 ${phase.dayIds.length} 天）`
-          : `生成「${phase.title}」的天级计划`}
+      <Button className="mt-5 w-full" onClick={() => ensurePhaseCatalog(goal.id, phase.id)} loading={busy}>
+        {busy
+          ? "正在生成…"
+          : hasCatalog
+            ? `目录已就绪（${phase.catalog!.length} 天）· 继续`
+            : `生成「${phase.title}」的学习日目录`}
       </Button>
     </Card>
   );
@@ -870,62 +1013,88 @@ function PlanTimeline({
       <p className="mb-4 text-sm text-ink-dim">{plan.summary}</p>
 
       <div className="space-y-4">
-        {plan.phases.map((phase, pi) => (
-          <div key={phase.id}>
-            <div className="flex items-center gap-2">
-              <StatusDot status={phase.status} />
-              <p className="text-sm font-bold text-ink">
-                阶段{pi + 1} · {phase.title}
+        {plan.phases.map((phase, pi) => {
+          /* 目录优先：阶段一开始就能看到全部学习日（未展开的标「待生成」） */
+          const entries: { id: string; title: string }[] = phase.catalog?.length
+            ? phase.catalog
+            : phase.dayIds.map((id) => ({ id, title: plan.days[id]?.title ?? "" }));
+          const phaseDone = entries.filter((e) => {
+            const d = plan.days[e.id];
+            return d && (d.status === "passed" || d.status === "skipped");
+          }).length;
+          return (
+            <div key={phase.id}>
+              <div className="flex items-center gap-2">
+                <StatusDot status={phase.status} />
+                <p className="text-sm font-bold text-ink">
+                  阶段{pi + 1} · {phase.title}
+                </p>
+                {phase.status === "passed" && <Badge tone="ok">已通过</Badge>}
+                {phase.status === "locked" && <Badge tone="dim">未解锁</Badge>}
+              </div>
+              <p className="mb-1 mt-1 flex items-center gap-1.5 pl-4 text-xs text-ink-dim">
+                <Flag className="size-3 shrink-0" />
+                {phase.outcome}
               </p>
-              {phase.status === "passed" && <Badge tone="ok">已通过</Badge>}
-              {phase.status === "locked" && <Badge tone="dim">未解锁</Badge>}
+              {entries.length > 0 && (
+                <p className="mb-1.5 pl-4 text-[10px] text-ink-dim/70">
+                  目录 {entries.length} 天 · 已完成 {phaseDone} 天
+                </p>
+              )}
+              {entries.length === 0 && phase.outline && (
+                <ul className="mb-2 ml-1 space-y-1 border-l border-border pl-3">
+                  {phase.outline.slice(0, 6).map((o, i) => (
+                    <li key={i} className="flex gap-1.5 text-[11px] leading-relaxed text-ink-dim/80">
+                      <span className="text-accent/60">{i + 1}.</span>
+                      {o}
+                    </li>
+                  ))}
+                  {phase.outline.length > 6 && (
+                    <li className="pl-5 text-[11px] text-ink-dim/50">…共 {phase.outline.length} 项</li>
+                  )}
+                </ul>
+              )}
+              <div className="ml-1 space-y-1 border-l border-border pl-3">
+                {entries.map((entry) => {
+                  const day = plan.days[entry.id];
+                  const stub = !day || day.stub;
+                  const locked = !day || day.status === "locked";
+                  return (
+                    <button
+                      key={entry.id}
+                      disabled={locked}
+                      onClick={() => onSelect(entry.id)}
+                      title={stub ? "已排进目录，学到这天时自动展开讲义与资源" : undefined}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition",
+                        locked
+                          ? "cursor-not-allowed text-ink-dim/40"
+                          : "cursor-pointer hover:bg-black/[0.04]",
+                        viewDayId === entry.id && "bg-accent/[0.09] font-medium text-accent",
+                        day?.status === "passed" && "text-ink-dim",
+                        day?.status === "skipped" && "text-warn/80"
+                      )}
+                    >
+                      {stub ? (
+                        <span aria-hidden className="size-1.5 shrink-0 rounded-full border border-dashed border-ink-dim/60" />
+                      ) : (
+                        <StatusDot status={day.status} />
+                      )}
+                      <span className="truncate">{entry.title}</span>
+                      {stub ? (
+                        <span className="ml-auto shrink-0 text-[10px] text-ink-dim/60">待生成</span>
+                      ) : day.status === "passed" ? (
+                        <Check className="ml-auto size-3.5 text-ok" />
+                      ) : day.status === "skipped" ? (
+                        <ChevronRight className="ml-auto size-3.5 text-warn" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <p className="mb-2 mt-1 flex items-center gap-1.5 pl-4 text-xs text-ink-dim">
-              <Flag className="size-3 shrink-0" />
-              {phase.outcome}
-            </p>
-            {phase.planned === false && phase.dayIds.length === 0 && phase.outline && (
-              <ul className="mb-2 ml-1 space-y-1 border-l border-border pl-3">
-                {phase.outline.slice(0, 6).map((o, i) => (
-                  <li key={i} className="flex gap-1.5 text-[11px] leading-relaxed text-ink-dim/80">
-                    <span className="text-accent/60">{i + 1}.</span>
-                    {o}
-                  </li>
-                ))}
-                {phase.outline.length > 6 && (
-                  <li className="pl-5 text-[11px] text-ink-dim/50">…共 {phase.outline.length} 项</li>
-                )}
-              </ul>
-            )}
-            <div className="ml-1 space-y-1 border-l border-border pl-3">
-              {phase.dayIds.map((dayId) => {
-                const day = plan.days[dayId];
-                const locked = day.status === "locked";
-                return (
-                  <button
-                    key={dayId}
-                    disabled={locked}
-                    onClick={() => onSelect(dayId)}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition",
-                      locked
-                        ? "cursor-not-allowed text-ink-dim/40"
-                        : "cursor-pointer hover:bg-black/[0.04]",
-                      viewDayId === dayId && "bg-accent/[0.09] font-medium text-accent",
-                      day.status === "passed" && "text-ink-dim",
-                      day.status === "skipped" && "text-warn/80"
-                    )}
-                  >
-                    <StatusDot status={day.status} />
-                    <span className="truncate">{day.title}</span>
-                    {day.status === "passed" && <Check className="ml-auto size-3.5 text-ok" />}
-                    {day.status === "skipped" && <ChevronRight className="ml-auto size-3.5 text-warn" />}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {selectedDayId && selectedDayId !== activeDayId && (
@@ -940,6 +1109,56 @@ function PlanTimeline({
   );
 }
 
+/* ================= 目录占位日：还没展开细节的那一天 ================= */
+function DayStubPanel({ goal, day }: { goal: Goal; day: DayPlan }) {
+  const st = useGenState(genKey("detail", goal.id, day.id));
+  const phase = goal.plan?.phases.find((p) => p.id === day.phaseId);
+  const idx = phase?.catalog?.findIndex((c) => c.id === day.id) ?? -1;
+
+  /* 兜底自动展开：进入占位日时后台没在跑（刷新/离线回来）就补一次；失败不自动重试 */
+  useEffect(() => {
+    if (day.stub && !st?.busy && !st?.error) ensureDayDetail(goal.id, day.id);
+  }, [goal.id, day.id, day.stub, st?.busy, st?.error]);
+
+  return (
+    <Card className="border-accent/25">
+      <div className="flex items-center gap-2">
+        <Badge tone="accent">{idx >= 0 ? `目录第 ${idx + 1} 天` : "目录中的一天"}</Badge>
+        <Badge tone="dim">待生成</Badge>
+      </div>
+      <h2 className="mt-2 text-lg font-bold text-ink">{day.title}</h2>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {day.knowledgePoints.map((k) => (
+          <Badge key={k.id} tone="dim">
+            ◆ {k.text}
+          </Badge>
+        ))}
+      </div>
+
+      {st?.busy ? (
+        <p className="mt-4 flex items-center gap-2 text-xs text-ink-dim" aria-live="polite">
+          <Loader2 className="size-3.5 animate-spin text-accent" />
+          {st.progress || (st.thinking ? "模型思考中——通常一分钟内返回" : "正在生成本日的讲义、资源与验收题…")}
+        </p>
+      ) : st?.error ? (
+        <div className="mt-4">
+          <p className="text-xs text-bad">{st.error}</p>
+          <Button size="sm" className="mt-2" onClick={() => ensureDayDetail(goal.id, day.id)}>
+            重试生成
+          </Button>
+        </div>
+      ) : (
+        <p className="mt-4 text-xs text-ink-dim">这一天已排进目录，正在准备内容…</p>
+      )}
+
+      <p className="mt-4 text-[11px] leading-relaxed text-ink-dim/70">
+        目录与进度都已保存：离开、刷新、换设备回来都不用重新生成；前一天验收通过或跳过后，
+        这一天会自动展开。
+      </p>
+    </Card>
+  );
+}
+
 /* ================= 每日任务面板（含验收门） ================= */
 type PanelMode = "learn" | "quiz" | "result";
 
@@ -949,6 +1168,7 @@ function DayPanel({
   readOnly = false,
   onGoToDay,
   tone = "standard" as "standard" | "gentle",
+  openWindow = true,
 }: {
   goal: Goal;
   day: DayPlan;
@@ -957,6 +1177,8 @@ function DayPanel({
   tone?: "standard" | "gentle";
   /** 跳过成功后让父组件把视图切到新解锁的一天(传 null=回阶段视图) */
   onGoToDay?: (dayId: string | null) => void;
+  /** 是否显示「新窗口学习」入口（学习窗口自身不再显示，避免套娃） */
+  openWindow?: boolean;
 }) {
   const store = useAppStore;
   const [mode, setMode] = useState<PanelMode>("learn");
@@ -1206,18 +1428,33 @@ function DayPanel({
             <h2 className="mt-2 text-lg font-bold text-ink">{day.title}</h2>
             <p className="mt-1 text-xs text-ink-dim">{day.method}</p>
           </div>
-          {!done && !readOnly && mode === "learn" && (
-            <div className="flex items-center gap-2">
-              <Button onClick={() => setMode("quiz")} variant="ok">
-                <Swords className="size-4" /> 开始验收
-              </Button>
-              <button
-                onClick={() => setSkipConfirm(true)}
-                title="学不会也可以跳过这个阶段（会被记录）"
-                className="cursor-pointer rounded-full border border-warn/40 bg-white px-3 py-2 text-xs font-medium text-warn transition hover:bg-warn/[0.08]"
-              >
-                跳过 →
-              </button>
+          {!readOnly && mode === "learn" && (
+            <div className="flex flex-wrap items-center gap-2">
+              {!done && (
+                <>
+                  <Button onClick={() => setMode("quiz")} variant="ok">
+                    <Swords className="size-4" /> 开始验收
+                  </Button>
+                  <button
+                    onClick={() => setSkipConfirm(true)}
+                    title="学不会也可以跳过这个阶段（会被记录）"
+                    className="cursor-pointer rounded-full border border-warn/40 bg-white px-3 py-2 text-xs font-medium text-warn transition hover:bg-warn/[0.08]"
+                  >
+                    跳过 →
+                  </button>
+                </>
+              )}
+              {openWindow && (
+                <button
+                  onClick={() =>
+                    window.open(`/learn/${goal.id}?day=${day.id}&focus=1`, "_blank", "noopener,noreferrer")
+                  }
+                  title="在新标签页打开专注学习界面：计划页留在原处，退出学习窗口不会丢进度"
+                  className="flex cursor-pointer items-center gap-1 rounded-full border border-border bg-white px-3 py-2 text-xs font-medium text-ink-dim transition hover:border-accent/50 hover:text-accent"
+                >
+                  <ExternalLink className="size-3.5" /> 新窗口学习
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -123,6 +123,9 @@ export interface DayPlan {
   id: string;
   phaseId: string;
   title: string;
+  /** 目录占位（true=只有标题与清单级知识点，资源/方法/验收还没展开）。
+   *  阶段开始时全目录一次生成，用户学到哪天再展开哪天。旧数据无此字段=已展开。 */
+  stub?: boolean;
   knowledgePoints: KnowledgePoint[];
   resources: Resource[];
   method: string; // 本日教学策略（随领域变化）
@@ -140,16 +143,26 @@ export interface DayPlan {
   transferAnswer?: string; // 迁移题作答（过门时落档）
 }
 
+/** 阶段天目录条目：阶段一开始就把全部学习日排出来（标题+清单级知识点），
+ *  详情（资源/方法/示例/验收）在学到那天之前按需展开。 */
+export interface DayOutline {
+  id: string;
+  title: string;
+  knowledgePoints: string[];
+}
+
 export interface Phase {
   id: string;
   title: string;
   outcome: string; // 本阶段结束时你能做什么（目标能力）
-  dayIds: string[]; // 天级计划生成后才有值
+  dayIds: string[]; // 已展开为 DayPlan 的天（与 catalog 同 id、同顺序）
   status: NodeStatus;
   outline?: string[]; // 总计划：本阶段要学什么的详尽清单
   boundary?: string; // 总计划：范围与不学说明
   estDays?: number; // 总计划：预估天数（灵活）
-  planned?: boolean; // 天级计划是否已生成
+  planned?: boolean; // 全部天是否都已展开细节（catalog 存在但仍有 stub 时为 false）
+  /** 全阶段天目录：目录一生成就完整可见，不依赖当天细节是否展开 */
+  catalog?: DayOutline[];
 }
 
 export interface Plan {
@@ -229,7 +242,7 @@ export interface KnowledgeItem {
   masteryStatus?: MasteryStatus;
   masteredAt: string;
   reviewStage: number; // 0=未开始复习，1..4=已过第n轮
-  nextReviewAt?: string; // ISO date，间隔重复 1/3/7/15
+  nextReviewAt?: string; // ISO date，由 FSRS 按个体表现排期（旧数据可能是 1/3/7/15 固定档）
   lastReviewOk?: boolean;
   links: string[]; // 出链：指向其他笔记的 id（用户/AI 建立）
   tags?: string[]; // 标签（frontmatter/正文 #标签/手动添加）— Obsidian 式

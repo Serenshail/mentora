@@ -14,7 +14,7 @@ export function draftToPlan(draft: PlanDraft, card: GoalCard): Plan {
     createdAt: new Date().toISOString(),
   };
 
-  draft.phases.forEach((p, pi) => {
+  draft.phases.forEach((p) => {
     const phaseId = uid("ph");
     const dayIds: string[] = [];
     p.days.forEach((d) => {
@@ -58,7 +58,6 @@ export function draftToPlan(draft: PlanDraft, card: GoalCard): Plan {
       dayIds,
       status: "locked",
     });
-    void pi;
   });
 
   // 激活起点
@@ -99,40 +98,36 @@ export function masterDraftToPlan(draft: MasterPlanDraft, card: GoalCard): Plan 
   return plan;
 }
 
-/** 阶段天级草稿 → DayPlan 记录（全部 locked；由 setPhasePlan 激活首天） */
-export function phaseDraftToDays(
-  draft: PhasePlanDraft,
-  phaseId: string
-): Plan["days"] {
-  const days: Plan["days"] = {};
-  draft.days.forEach((d) => {
-    const dayId = uid("day");
-    days[dayId] = {
-      id: dayId,
-      phaseId,
-      title: d.title,
-      knowledgePoints: d.knowledgePoints.map((t) => {
-        if (typeof t === "string") return { id: uid("kp"), text: t };
-        return { id: uid("kp"), text: t.text, knowledgeType: t.knowledgeType };
-      }),
-      resources: d.resources.map((r) => ({
-        title: r.title,
-        url: r.url || undefined,
-        why: r.why,
-      })),
-      method: d.method,
-      example: d.example
-        ? { title: d.example.title, description: d.example.description, code: d.example.code || undefined }
-        : undefined,
-      acceptance: d.acceptance.map((a) => ({
-        id: uid("ac"),
-        kind: a.kind,
-        question: a.question,
-        hint: a.hint || undefined,
-      })),
-      status: "locked",
-      attempts: 0,
-    };
-  });
-  return days;
+/** 单日详情草稿 → DayPlan（目录 id 复用；状态由 setDayDetail 按占位继承） */
+export function phaseDraftToDay(
+  d: PhasePlanDraft["days"][number],
+  phaseId: string,
+  dayId: string
+): Plan["days"][string] {
+  return {
+    id: dayId,
+    phaseId,
+    title: d.title,
+    knowledgePoints: d.knowledgePoints.map((t) => {
+      if (typeof t === "string") return { id: uid("kp"), text: t };
+      return { id: uid("kp"), text: t.text, knowledgeType: t.knowledgeType };
+    }),
+    resources: d.resources.map((r) => ({
+      title: r.title,
+      url: r.url || undefined,
+      why: r.why,
+    })),
+    method: d.method,
+    example: d.example
+      ? { title: d.example.title, description: d.example.description, code: d.example.code || undefined }
+      : undefined,
+    acceptance: d.acceptance.map((a) => ({
+      id: uid("ac"),
+      kind: a.kind,
+      question: a.question,
+      hint: a.hint || undefined,
+    })),
+    status: "locked",
+    attempts: 0,
+  };
 }

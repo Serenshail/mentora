@@ -85,15 +85,17 @@ interface AppState {
   removeGoal: (id: string) => void;
   removeGoalAndNotes: (id: string, includeKnowledge?: boolean) => void;
   setPlan: (goalId: string, plan: Plan) => void;
-  setPhasePlan: (
+  /** 写入整个阶段的天目录：一次性建齐全部天（含占位 stub），目录立即完整可见 */
+  setPhaseCatalog: (
     goalId: string,
     phaseId: string,
     boundary: string,
-    days: Plan["days"],
-    /** partial=true：批次生成中途落盘（断线不丢已完成的批）。
-     *  此时不置 planned、不激活首天——面板据此显示"继续生成"。 */
-    opts?: { partial?: boolean }
+    catalog: { id: string; title: string; knowledgePoints: string[] }[]
   ) => void;
+  /** 单日详情回填：把展开后的完整 DayPlan 覆盖进目录占位，保留进度/讲义/答疑等运行态 */
+  setDayDetail: (goalId: string, phaseId: string, dayId: string, detail: DayPlan) => void;
+  /** 链接体检/替换完成后异步回写资源（不在生成主链路上阻塞） */
+  updateDayResources: (goalId: string, dayId: string, resources: DayPlan["resources"]) => void;
   setDayStatus: (
     goalId: string,
     dayId: string,
@@ -321,27 +323,82 @@ export const useAppStore = create<AppState>()(
         set((s) => ({
           goals: s.goals.map((g) => (g.id === goalId ? { ...g, plan } : g)),
         })),
-      setPhasePlan: (goalId, phaseId, boundary, days, opts) =>
+      setPhaseCatalog: (goalId, phaseId, boundary, catalog) =>
         set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
             const plan = structuredClone(g.plan);
             const phase = plan.phases.find((ph) => ph.id === phaseId);
-            if (!phase) return g;
-            // 累加：中途落盘时把本阶段已有天一并带上，避免覆盖掉前几批
-            const dayIds = Object.keys(plan.days).filter((id) => plan.days[id].phaseId === phaseId);
-            for (const d of Object.values(days)) {
-              if (!plan.days[d.id]) dayIds.push(d.id);
-              plan.days[d.id] = d;
+            if (!phase || catalog.length === 0) return g;
+            phase.catalog = catalog.map((c) => ({ id: c.id, title: c.title, knowledgePoints: c.knowledgePoints }));
+            for (const c of catalog) {
+              const old = plan.days[c.id];
+              const kps = c.knowledgePoints.map((text) => ({ id: uid("kp"), text }));
+              if (!old) {
+                // 目录占位：只有标题与清单级知识点，学到那天再展开详情
+                plan.days[c.id] = {
+                  id: c.id,
+                  phaseId,
+                  title: c.title,
+                  stub: true,
+                  knowledgePoints: kps,
+                  resources: [],
+                  method: "",
+                  acceptance: [],
+                  status: "locked",
+                  attempts: 0,
+                };
+              } else {
+                old.title = c.title;
+                // 已展开的天只改标题，绝不覆盖详情（目录只是索引）
+                if (old.stub) old.knowledgePoints = kps;
+              }
             }
-            phase.dayIds = dayIds;
+            phase.dayIds = catalog.map((c) => c.id);
             phase.boundary = boundary;
-            // partial 也激活首天：用户「先出前两天就能开始学」，不等全部批次跑完
+            phase.planned = catalog.every((c) => plan.days[c.id] && !plan.days[c.id].stub);
             if (phase.status === "locked") phase.status = "active";
-            const first = plan.days[dayIds[0]];
+            const first = plan.days[phase.dayIds[0]];
             if (first && first.status === "locked") first.status = "active";
-            if (opts?.partial) return { ...g, plan };
-            phase.planned = true;
+            return { ...g, plan };
+          }),
+        })),
+      setDayDetail: (goalId, phaseId, dayId, detail) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const plan = structuredClone(g.plan);
+            const phase = plan.phases.find((ph) => ph.id === phaseId);
+            const old = plan.days[dayId];
+            if (!phase || !old) return g;
+            plan.days[dayId] = {
+              ...detail,
+              id: dayId,
+              phaseId,
+              stub: false,
+              title: phase.catalog?.find((c) => c.id === dayId)?.title ?? detail.title,
+              // 进度与学习痕迹属于运行态，回填细节时原样保留
+              status: old.status,
+              completedAt: old.completedAt,
+              attempts: old.attempts,
+              lesson: old.lesson,
+              qa: old.qa,
+              pendingUnlock: old.pendingUnlock,
+              transferQuestion: old.transferQuestion,
+              transferAnswer: old.transferAnswer,
+            };
+            phase.planned = phase.catalog?.length
+              ? phase.catalog.every((c) => plan.days[c.id] && !plan.days[c.id].stub)
+              : phase.dayIds.every((id) => plan.days[id] && !plan.days[id].stub);
+            return { ...g, plan };
+          }),
+        })),
+      updateDayResources: (goalId, dayId, resources) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan || !g.plan.days[dayId]) return g;
+            const plan = structuredClone(g.plan);
+            plan.days[dayId].resources = resources;
             return { ...g, plan };
           }),
         })),
@@ -1076,6 +1133,58 @@ export function clearLocalStore() {
     folders: [],
     settings: DEFAULT_SETTINGS,
     _storeUserId: useAppStore.getState()._storeUserId,
+  });
+}
+
+/* 多标签页同步：学习窗口是新标签页（独立文档），两个标签各持一份内存状态。
+ * 另一个标签写入 localStorage 后，本页在重新可见时采用磁盘上的最新仓——
+ * 否则回到计划页看到的还是打开学习窗口前的进度，像"刚学的东西消失了"。 */
+let storeSyncBound = false;
+export function bindStoreSync() {
+  if (storeSyncBound || typeof window === "undefined") return;
+  storeSyncBound = true;
+  const adopt = () => {
+    const name = (useAppStore.persist.getOptions() as { name?: string }).name;
+    if (!name) return;
+    try {
+      const raw = localStorage.getItem(name);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { state?: Partial<AppState> };
+      const st = parsed?.state;
+      if (!st) return;
+      const cur = useAppStore.getState();
+      const next = {
+        goals: st.goals ?? cur.goals,
+        knowledge: st.knowledge ?? cur.knowledge,
+        books: st.books ?? cur.books,
+        sessions: st.sessions ?? cur.sessions,
+        customPersonas: st.customPersonas ?? cur.customPersonas,
+        folders: st.folders ?? cur.folders,
+        settings: st.settings ?? cur.settings,
+      };
+      const now = {
+        goals: cur.goals,
+        knowledge: cur.knowledge,
+        books: cur.books,
+        sessions: cur.sessions,
+        customPersonas: cur.customPersonas,
+        folders: cur.folders,
+        settings: cur.settings,
+      };
+      // 内容一致就不 setState：避免每次聚焦都整树重渲染
+      if (JSON.stringify(next) === JSON.stringify(now)) return;
+      useAppStore.setState(next as Partial<AppState>);
+    } catch {
+      /* 仓损坏/配额满时保留内存现状 */
+    }
+  };
+  window.addEventListener("storage", (e) => {
+    const name = (useAppStore.persist.getOptions() as { name?: string }).name;
+    if (!name || !e.key || e.key === name) adopt();
+  });
+  window.addEventListener("focus", adopt);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") adopt();
   });
 }
 

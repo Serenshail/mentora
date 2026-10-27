@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, bindStoreSync } from "@/lib/store";
 import {
   BookOpen,
   Brain,
@@ -57,6 +57,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const syncStatus = useSyncStatus((s) => s.status);
   useAutoPush(!!user);
   useFlushOnHide(!!user); // 关页/切后台前强制 flush,防数据没推上去就丢
+
+  /* 多标签页同步：学习窗口开在新标签页，计划页回到前台时采用磁盘上的最新进度 */
+  useEffect(() => {
+    bindStoreSync();
+  }, []);
 
   /* 管理员：侧栏（桌面）与底栏（移动端）都给出后台入口，登上账号就能直达 */
   /* 侧栏可收起（图标条模式），用户自己决定宽窄，选择记住 */
