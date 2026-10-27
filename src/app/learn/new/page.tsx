@@ -291,6 +291,15 @@ function IntakeInner() {
         {resumeId && stage === "chat" && messages.length > 0 && (
           <Badge tone="ok">已恢复上次对话</Badge>
         )}
+        {/* 退出入口：草稿已实时落盘，随时可走，回来从上次对话继续 */}
+        {stage !== "planning" && (
+          <button
+            onClick={() => router.push("/learn")}
+            className="ml-auto cursor-pointer rounded-lg border border-border px-3 py-1.5 text-xs text-ink-dim transition hover:border-accent/50 hover:text-accent"
+          >
+            退出引导
+          </button>
+        )}
       </div>
 
       {/* 对话区 */}

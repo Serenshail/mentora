@@ -922,7 +922,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "mentora-store-anon",
-      version: 4,
+      version: 5,
       // 跳过 persist 的自动 rehydrate：水合完全由 setStoreUser() 同步掌控。
       // 否则刷新页面时 persist 会用 anon 仓异步覆盖内存,而此刻 setOptions 已换到用户仓——
       // 空状态随后被写进用户仓,goal 凭空消失(实测:导航后 3s goals 1→0,堆栈指向 persist setState)。
@@ -959,6 +959,24 @@ export const useAppStore = create<AppState>()(
               : k
           );
           return { ...state, knowledge: linkifyBodies(fixed) } as AppState;
+        }
+        // v5:修复分批生成时代产生的重复/乱序天标题——每个阶段按 dayIds 顺序重编 "Day N：",
+        // 重复的天（旧 bug 生成的 Day1,Day2,Day1,Day2…）保留内容、顺序归位。
+        if (version < 5) {
+          const goals = (state.goals ?? []).map((g) => {
+            if (!g?.plan) return g;
+            const plan = structuredClone(g.plan);
+            for (const ph of plan.phases) {
+              ph.dayIds.forEach((id, i) => {
+                const d = plan.days[id];
+                if (!d) return;
+                const rest = d.title.replace(/^Day\s*\d+[：:]\s*/, "");
+                d.title = `Day ${i + 1}：${rest}`;
+              });
+            }
+            return { ...g, plan };
+          });
+          return { ...state, goals } as AppState;
         }
         return state as AppState;
       },
@@ -1007,7 +1025,7 @@ export function setStoreUser(userId: string | null) {
       const parsed = JSON.parse(raw) as { state?: Record<string, unknown>; version?: number };
       const st = (parsed?.state ?? {}) as Partial<AppState> & { knowledge?: unknown[] };
       const ver = parsed?.version ?? 2;
-      // 与 persist.migrate 完全同一套迁移:同步加载路径也要跑(v2 双链解析/v3 双链解析/v4 Day 前缀清洗)。
+      // 与 persist.migrate 完全同一套迁移:同步加载路径也要跑(v2/v3 双链解析/v4 Day 前缀清洗/v5 天标题重编)。
       // 此前 v<2 分支只跑 migrateKnowledge 漏了 linkifyBodies——老用户图谱/反链为空。
       let knowledge = st.knowledge ?? [];
       if (ver < 2) knowledge = linkifyBodies(migrateKnowledge(knowledge));
@@ -1020,7 +1038,23 @@ export function setStoreUser(userId: string | null) {
               : k
           )
         );
-      loaded = { ...st, knowledge };
+      let goals = st.goals ?? [];
+      if (ver < 5) {
+        goals = (goals as Goal[]).map((g) => {
+          if (!g?.plan) return g;
+          const plan = structuredClone(g.plan);
+          for (const ph of plan.phases) {
+            ph.dayIds.forEach((id, i) => {
+              const d = plan.days[id];
+              if (!d) return;
+              const rest = d.title.replace(/^Day\s*\d+[：:]\s*/, "");
+              d.title = `Day ${i + 1}：${rest}`;
+            });
+          }
+          return { ...g, plan };
+        });
+      }
+      loaded = { ...st, knowledge, goals };
     }
   } catch {
     /* 损坏的仓按空仓处理，绝不写入破坏 */
