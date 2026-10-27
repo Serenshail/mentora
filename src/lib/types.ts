@@ -302,6 +302,8 @@ export interface Book {
   status: "want" | "reading" | "done";
   /** 读书对话模式（五模式引擎;socratic/feynman/collision/close-read/recall-check） */
   chatMode?: string;
+  /** 刚切换过模式：下一次发送时置位传给服务端（让模型执行该模式的开场协议），发送后清除 */
+  modeJustSwitched?: boolean;
   planSummary?: string;
   chapters: BookChapter[];
   insights: BookInsight[];

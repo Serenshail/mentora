@@ -56,8 +56,16 @@ ${s("ragCtx")}
 4. **不要假装记过**：笔记里没有的内容，不要说"你笔记里提到过"。没检索到就说没检索到，改用通识回答并标明这是通识。
 5. **有冲突要指出**：证据之间矛盾时明确说出矛盾点，不要含糊合并。`
         : "";
-      // 五模式引擎：显式 mode 走模式硬契约；未传 mode 保留旧的按知识类型自适应
-      return s("mode") ? P.READING_MODE_CHAT(s("mode") as never, s("bookCtx")) + rag : P.READING_CHAT(s("bookCtx")) + rag;
+      // 五模式引擎：显式 mode 走模式硬契约；未传 mode 保留旧的按知识类型自适应。
+      // modeSwitch=true 表示用户刚切换到这个模式——追加一行转折指令，让该模式的开场协议立即生效
+      // （否则对话 history 还是旧模式的语境，模型会顺着旧口吻继续，用户感知就是"切了没反应"）。
+      const modeSwitchNote =
+        args.modeSwitch === true
+          ? `\n\n【模式刚切换】用户刚刚切换到「${s("mode")}」模式。现在开始严格执行该模式的**开场协议**（见模式规范第一节的"开场协议"），把这次回复当作新模式的第一轮。不要解释你切换了模式，直接按新模式的规则行动。`
+          : "";
+      return s("mode")
+        ? P.READING_MODE_CHAT(s("mode") as never, s("bookCtx")) + modeSwitchNote + rag
+        : P.READING_CHAT(s("bookCtx")) + rag;
     }
     case "verify-score": return P.VERIFY_SCORE(args as Parameters<typeof P.VERIFY_SCORE>[0]);
     case "insight": return P.INSIGHT_EXTRACT(s("text"));

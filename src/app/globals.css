@@ -384,17 +384,10 @@ h1, h2, h3 {
   animation: pageRise 0.36s var(--ease-spring) backwards;
 }
 
-/* 级联入场：区块依次浮现（Linear/Things 级精致感），仅前 5 个，避免长页拖沓 */
-/* fill 必须用 backwards 而非 both：both 会在动画结束后永久持有 transform 效果，
- * 使元素成为 fixed 后代的 containing block——Modal 的 fixed inset-0 被降级为
- * "相对内容区定位"（实测：读书页添加书籍弹窗遮罩只盖上半屏、标题顶出视口）。 */
-.page-fade > * {
-  animation: pageRise 0.45s var(--ease-spring) backwards;
-}
-.page-fade > *:nth-child(2) { animation-delay: 45ms; }
-.page-fade > *:nth-child(3) { animation-delay: 90ms; }
-.page-fade > *:nth-child(4) { animation-delay: 135ms; }
-.page-fade > *:nth-child(5) { animation-delay: 180ms; }
+/* 级联入场（已移除）：.page-fade > * 的 nth-child 级联依赖"子元素顺序稳定"，
+ * 而页面子元素几乎都是条件渲染（profile 有无、面板开关、空态切换）——
+ * 条件块每次出现都从 opacity:0 重播动画（用户看到的"页面闪好几次、每次闪的不一样"），
+ * 且子元素增删会让 nth-child 延迟重新洗牌。只保留整页单次 pageRise。 */
 
 /* 无障碍：尊重系统减弱动态设置 */
 @media (prefers-reduced-motion: reduce) {

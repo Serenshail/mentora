@@ -124,12 +124,13 @@ export default function BookPage() {
         );
       }
       void send({
-        args: { bookCtx: bookCtx(), ragCtx, mode: activeMode },
+        args: { bookCtx: bookCtx(), ragCtx, mode: activeMode, modeSwitch: book.modeJustSwitched === true },
         userText: text,
         task: "reading-chat",
         onDone: (full) => {
           addBookMsg(book.id, { id: uid("m"), role: "user", content: text, at: new Date().toISOString() });
           addBookMsg(book.id, { id: uid("m"), role: "assistant", content: full, at: new Date().toISOString() });
+          if (book.modeJustSwitched) updateBook(book.id, { modeJustSwitched: false }); // 开场协议只触发一次
         },
       });
     })();
@@ -301,7 +302,8 @@ export default function BookPage() {
               <PanelLeftClose className="size-4" />
             </button>
           </div>
-          <div className="relative ml-2 space-y-1 border-l border-border pl-5">
+          {/* 目录独立滚动：长书（几十个单元+展开导读）不再把整页拖长——路线列自己滚，右侧正文不动 */}
+          <div className="relative ml-2 max-h-[calc(100dvh-220px)] space-y-1 overflow-y-auto border-l border-border pl-5 lg:pr-1">
             {book.chapters.map((c, i) => {
               const expanded = expandedId === c.id || chapter?.id === c.id;
               return (
@@ -537,8 +539,9 @@ export default function BookPage() {
                       key={m.id}
                       title={m.hint}
                       onClick={() => {
-                        updateBook(book.id, { chatMode: book.chatMode === m.id ? undefined : m.id });
-                        toast(book.chatMode === m.id ? "已恢复自动模式" : `本书记为「${m.label}」模式`);
+                        const switching = book.chatMode !== m.id;
+                        updateBook(book.id, { chatMode: book.chatMode === m.id ? undefined : m.id, modeJustSwitched: switching });
+                        toast(switching ? `已切换「${m.label}」——下一句生效，伙伴会按新模式的流程来` : "已恢复自动模式");
                       }}
                       className={cn(
                         "cursor-pointer rounded-full border px-2.5 py-1 text-[11.5px] transition",
