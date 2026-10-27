@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractJson, masterPlanSchema, phasePlanSchema, quizGradeSchema } from "../ai/client";
+import { extractJson, masterPlanSchema, phasePlanSchema, phaseListSchema, quizGradeSchema } from "../ai/client";
 
 /* 端到端冒烟(真模型):本地 `E2E=1 npx vitest run e2e` 且 dev 服务器在跑时执行。
  * 目的:改完任何 AI 链路,先在本地把"引导→总纲要→天级计划→资源修复"整条跑一遍,
@@ -59,20 +59,30 @@ describe.skipIf(!run)("E2E 学习教练全链路(需 E2E=1 + dev server)", () =>
     expect(draft.phases.length).toBeGreaterThan(0);
   }, 180_000);
 
-  it("天级计划:真实输出能过 phasePlanSchema(资源元数据容错)", async () => {
+  it("天级计划:先出天清单再过 phasePlanSchema(分两步,单请求不再超长)", async () => {
     const ctx = JSON.stringify({
       goal: { topic: "雅思", direction: "3 个月 6.5", background: "词汇3000", domainKind: "exam", weeklyHours: 15, learnerProfile: ["晚上学"] },
       masterSummary: "三阶段:基础→题型→模考",
       phase: { title: "阶段1 · 地基", outcome: "词汇到 5000,语法补齐", outline: ["词汇", "语法"], boundary: "不练写作", estDays: 3 },
       mastered: [], weakPoints: [],
     }, null, 1);
-    const full = await chat({
+    // 第一步：天清单（boundary + 每天标题与知识点文本）
+    const listRaw = await chat({
       task: "plan",
-      args: { mode: "phase", ctx },
-      messages: [{ role: "user", content: "生成本阶段的天级计划（只要 JSON）。" }],
+      args: { mode: "phase-list", ctx },
+      messages: [{ role: "user", content: "先只输出这个阶段的天清单（只要 JSON）。" }],
     });
-    const draft = phasePlanSchema.parse(extractJson(full)); // 之前在此处炸(资源元数据过严)
-    expect(draft.days.length).toBeGreaterThan(0);
+    const list = phaseListSchema.parse(extractJson(listRaw));
+    expect(list.days.length).toBeGreaterThan(0);
+
+    // 第二步：按批展开细节（真实链路里每批 ≤2 天；这里验第一批）
+    const detailRaw = await chat({
+      task: "plan",
+      args: { mode: "phase-detail", ctx, boundary: list.boundary ?? "", days: JSON.stringify(list.days.slice(0, 2)) },
+      messages: [{ role: "user", content: "为指定的这些天写出完整细节（只要 JSON）。" }],
+    });
+    const detail = phasePlanSchema.parse(extractJson(detailRaw)); // 之前在此处炸(资源元数据过严)
+    expect(detail.days.length).toBeGreaterThan(0);
   }, 180_000);
 
   it("每日讲义:必须含≥1 条可点在线链接(防'零链接'回归)", async () => {

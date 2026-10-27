@@ -51,6 +51,7 @@ const MOBILE_MORE = NAV.slice(5);
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const provider = useAppStore((s) => s.settings.provider);
+  const apiKey = useAppStore((s) => s.settings.apiKey);
   const router = useRouter();
   const { user, logout, checking } = useAuth();
   const syncStatus = useSyncStatus((s) => s.status);
@@ -106,6 +107,27 @@ export function AppShell({ children }: { children: ReactNode }) {
     }, 600_000);
     return () => clearInterval(iv);
   }, []);
+
+  /* 本地填了自己的 Key 且选了厂商 = BYOK 真模型（判定与 client.ts 的 byokHeaders 一致）；
+   * 没填时 provider 的默认值 "demo" 语义是"跟随服务端"，得看 /api/health 的 channel.ai。
+   * 旧实现直接看本地默认值，把"跟随服务端"当成了演示模式——
+   * 于是每个用户侧栏都挂着"正在用演示数据"，而实际走的是服务端真模型。 */
+  const byok = Boolean(apiKey && provider && provider !== "demo");
+  const [serverDemo, setServerDemo] = useState(false);
+  useEffect(() => {
+    if (byok) return; // 自带 Key：服务端配没配模型都不影响
+    let alive = true;
+    fetch("/api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (alive && j?.channel?.ai) setServerDemo(j.channel.ai === "demo");
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [byok]);
+  const demoMode = !byok && serverDemo;
 
   /* 本地快照写满（知识库过大）时给一次可见提示：不崩溃、数据以云端为准 */
   useEffect(() => {
@@ -355,7 +377,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               {user ? "已登录 · 数据自动同步" : "数据只在你这台电脑上"}
             </p>
           )}
-          {provider === "demo" && !collapsed && (
+          {demoMode && !collapsed && (
             <Link
               href="/settings"
               className="mt-1 block rounded-lg border border-warn/25 bg-warn/[0.07] px-3.5 py-2.5 text-xs text-warn hover:bg-warn/[0.12] transition"

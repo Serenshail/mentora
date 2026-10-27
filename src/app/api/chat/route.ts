@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { createHash } from "node:crypto";
 import type { AIConfig } from "@/lib/ai/providers";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
+import { withBudget } from "@/lib/server/db";
 import { verifySession, type SessionUser } from "@/lib/server/auth";
 import { checkAndCountServerKey } from "@/lib/server/quota";
 import { resolveByok, serverConfig } from "@/lib/server/ai-config";
@@ -32,7 +33,12 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
   switch (task) {
     case "intake": return P.SOCRATIC_INTAKE(s("topic"), s("userName"));
     case "plan":
-      return args.mode === "master" ? P.PLANNER_MASTER(s("cardJson")) : P.PLANNER_PHASE(s("ctx"));
+      // 天级计划拆两步（见 prompts.ts 2b 的工程说明）：先出天清单，再按批展开细节
+      if (args.mode === "master") return P.PLANNER_MASTER(s("cardJson"));
+      if (args.mode === "phase-list") return P.PLANNER_PHASE_LIST(s("ctx"), Number(args.maxDays) || undefined);
+      if (args.mode === "phase-detail")
+        return P.PLANNER_PHASE_DETAIL(s("ctx"), s("boundary"), s("days"));
+      return P.PLANNER_PHASE_LIST(s("ctx"));
     case "lesson": return P.DAILY_LESSON(s("ctx")) + P.TONE_LESSON_BLOCK(s("tone"));
     case "quiz-grade": return P.QUIZ_GRADE(s("ctx"), s("tone") === "gentle" ? "gentle" : "standard");
     case "review-ask": return P.REVIEW_PROMPT(s("items"));
@@ -259,6 +265,10 @@ async function* upstreamDeltas(
           stats.completionTokens = j.usage.completion_tokens ?? stats.completionTokens;
         }
         const delta = j.choices?.[0]?.delta;
+        // 推理模型的思考期（reasoning_content）：转发为心跳事件，让客户端知道连接活着、模型在干活。
+        // 不转发的话，思考期可达 60s+ 只靠合成 ping 保活，弱网/公网隧道仍可能掐断（手机实测 network error）。
+        const think: string = delta?.reasoning_content || "";
+        if (think) yield { think: think.slice(0, 200) };
         const piece: string = delta?.content || "";
         if (piece) yield { piece };
       } catch { /* 半包，忽略 */ }
@@ -267,8 +277,19 @@ async function* upstreamDeltas(
 }
 
 export async function POST(req: NextRequest) {
-  // 防滥用/防打崩：每 IP 突发 30 次、每分钟回填 30 次（跨 isolate 一致的持久桶）
-  if (!(await rateLimitPersistent(`chat:${clientIp(req)}`, { capacity: 30, refillPerSec: 30 / 60 }))) {
+  // 防滥用/防打崩：每 IP 突发 30 次、每分钟回填 30 次（跨 isolate 一致的持久桶）。
+  // 与会话校验并行，且都设硬预算：远端 KV 变慢时降级放行，绝不让首字节等上十几秒
+  // （公网网关 15s 无数据即 503——旧实现串行查三次 KV，实测首字节 20~54s 必挂）。
+  const hasCookie = Boolean(req.headers.get("cookie")?.includes("mentora_session"));
+  const [rlOk, session] = await Promise.all([
+    withBudget(
+      rateLimitPersistent(`chat:${clientIp(req)}`, { capacity: 30, refillPerSec: 30 / 60 }),
+      true,
+      1500
+    ),
+    hasCookie ? verifySession() : Promise.resolve(null as SessionUser | null),
+  ]);
+  if (!rlOk) {
     return Response.json({ error: "请求太频繁，请稍后再试" }, { status: 429 });
   }
   // 请求体上限，防超大 payload 打爆内存
@@ -282,13 +303,13 @@ export async function POST(req: NextRequest) {
   } catch {
     body = { messages: [] };
   }
+  // 归一化：messages 必须是数组（上游拼装用展开运算符，undefined 会直接抛
+  // "t.messages is not iterable"，还会被当成可重试错误白烧三次上游调用）
+  if (!Array.isArray(body.messages)) body.messages = [];
 
   const byok = (req.headers.get("x-mentora-key") ?? "").trim();
   // 仅部署环境（production/preview）强制登录；本地开发（DEPLOY_ENV/VERCEL_ENV 未设）放行，保 e2e 冒烟链路
   const enforceLogin = isDeployed();
-  // 没带 cookie 就不必查库吊销版本（省一次读）
-  let session: SessionUser | null = null;
-  if (req.headers.get("cookie")?.includes("mentora_session")) session = await verifySession();
 
   let cfg: AIConfig;
   if (byok) {
@@ -310,7 +331,11 @@ export async function POST(req: NextRequest) {
     // 服务端 Key 配额（商业化前置）：烧部署者的钱按用户(未登录按 IP)限每日次数;BYOK 不受此限。
     // 超限文案给解法(等明天/自带 Key),不报"系统错误"。
     if (cfg.provider !== "demo" && cfg.apiKey) {
-      const q = await checkAndCountServerKey(session?.email || clientIp(req));
+      const q = await withBudget(
+        checkAndCountServerKey(session?.email || clientIp(req)),
+        { ok: true, used: 0, limit: Math.max(1, Number(process.env.AI_DAILY_CALL_LIMIT || 60)) },
+        1500
+      );
       if (!q.ok) {
         return Response.json(
           {
@@ -344,6 +369,14 @@ export async function POST(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       const push = (obj: object) => ndjson(controller, JSON.stringify(obj));
+      /* 心跳：公网网关对"长时间无字节"的连接会直接 503（实测 UUMit 约 15s）。
+       * 上游首字节慢、或长任务中途卡顿时用 ping 占位保活；客户端只认 t=d/e，其余忽略。 */
+      let closed = false;
+      const hb = setInterval(() => {
+        if (closed) return;
+        try { push({ t: "p" }); } catch { closed = true; }
+      }, 5000);
+      try { push({ t: "p" }); } catch { closed = true; } // 首字节立刻落地，网关不再等首包
       try {
         if (cfg.provider === "demo") {
           for await (const piece of demoTask(body.task, body.system || "", body.messages, body.args ?? {})) {
@@ -354,6 +387,7 @@ export async function POST(req: NextRequest) {
         } else {
           for await (const piece of upstreamDeltas(cfg, body, stats, outer.signal)) {
             if ("error" in piece) push({ t: "e", v: piece.error });
+            else if ("think" in piece) push({ t: "h", v: piece.think });
             else push({ t: "d", v: piece.piece });
           }
         }
@@ -363,6 +397,8 @@ export async function POST(req: NextRequest) {
           try { push({ t: "e", v: e instanceof Error ? e.message : "未知错误" }); } catch { /* 流已取消 */ }
         }
       } finally {
+        closed = true;
+        clearInterval(hb);
         // token 计量落日志（成本可见性）：每次真实上游调用一条
         if (cfg.provider !== "demo") {
           logEvent({

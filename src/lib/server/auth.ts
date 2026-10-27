@@ -97,9 +97,15 @@ export async function verifySession(): Promise<SessionUser | null> {
   const u = await getSessionUser();
   if (!u) return null;
   try {
-    const rec = await dbGet<{ sv?: number }>(`users/${emailHash(u.email)}.json`, {
-      encrypted: true,
-    });
+    // 吊销校验是 best-effort：远端 KV 慢/不可用时放行（与 catch 分支同一哲学）。
+    // 关键：超时必须和"账号确实不存在"区分开——超时判成未登录会把已登录用户误弹 401。
+    const rec = await Promise.race([
+      dbGet<{ sv?: number }>(`users/${emailHash(u.email)}.json`, { encrypted: true })
+        .then((r) => r ?? null)
+        .catch(() => "timeout" as const),
+      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 1200)),
+    ]);
+    if (rec === "timeout") return u;
     if (!rec) return null; // 账号已注销
     if ((rec.sv ?? 0) !== (u.sv ?? 0)) return null; // 密码已改/已重置：旧会话作废
     return u;

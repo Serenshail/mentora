@@ -24,9 +24,11 @@ export async function checkAndCountServerKey(id: string): Promise<{
   const key = dayKey(id);
   let n = 0;
   let firstToday = false;
+  let sha: string | null = null;
   try {
     const rec = await dbGet<{ n: number }>(key, { encrypted: true });
     n = rec?.n ?? 0;
+    sha = rec?._sha ?? null;
     firstToday = n === 0;
   } catch {
     /* 存储故障时放行(不阻断学习),但不写入 */
@@ -34,20 +36,23 @@ export async function checkAndCountServerKey(id: string): Promise<{
   }
   if (n >= limit) return { ok: false, used: n, limit };
   try {
-    const rec = await dbGet<{ n: number; _sha?: string }>(key, { encrypted: true });
-    await dbPut(key, { n: (rec?.n ?? 0) + 1 }, { encrypted: true, sha: rec?._sha ?? null, overwriteOnConflict: true });
+    // 复用上面读到的 sha（旧实现又 dbGet 一次同一键：多一次跨洋往返，白白拖慢首字节）
+    await dbPut(key, { n: n + 1 }, { encrypted: true, sha, overwriteOnConflict: true });
   } catch {
     /* 写入失败不阻断 */
   }
   if (firstToday) {
-    // 顺手清理该 id 的历史日键（保留今天），best-effort 不阻断
-    try {
-      const files = await dbList(quotaDir(id));
-      for (const f of files) {
-        if (f.name === `${today()}.json`) continue;
-        await dbDelete(`${quotaDir(id)}/${f.name}`, null).catch(() => {});
-      }
-    } catch { /* 忽略 */ }
+    // 顺手清理该 id 的历史日键（保留今天）——**不 await**：清理是一次额外往返，
+    // 绝不能让它挡在用户首字节前面；失败也无所谓。
+    void (async () => {
+      try {
+        const files = await dbList(quotaDir(id));
+        for (const f of files) {
+          if (f.name === `${today()}.json`) continue;
+          await dbDelete(`${quotaDir(id)}/${f.name}`, null).catch(() => {});
+        }
+      } catch { /* 忽略 */ }
+    })();
   }
   return { ok: true, used: n + 1, limit };
 }

@@ -38,7 +38,7 @@ function LinkStatus({ url }: { url?: string }) {
 import { toast } from "sonner";
 import {
   ArrowLeft, BookMarked, BookOpen, Check, ChevronRight, CircleX, ExternalLink, Flag, Globe,
-  ListOrdered, NotebookPen, Puzzle, Swords, Trophy,
+  ListOrdered, Loader2, NotebookPen, Puzzle, Swords, Trophy,
 } from "lucide-react";
 
 /* ================= 即时答疑：学习中随时问教练 ================= */
@@ -336,7 +336,8 @@ export default function GoalDetailPage() {
           tone={settings.coachTone ?? "standard"}
         />
       )}
-      {goal.plan && !viewDay && activePhase && !activePhase.planned && activePhase.dayIds.length === 0 && (
+      {/* partial（分批生成中）：Day 1 已激活可学——主体给学习视图，面板收进下方继续显示生成进度 */}
+      {goal.plan && !viewDay && activePhase && !activePhase.planned && (
         <PhasePlanPanel goal={goal} phase={activePhase} />
       )}
       {goal.plan && !viewDay && !activePhase && (
@@ -507,93 +508,241 @@ function GraduationPanel({ goal }: { goal: Goal }) {
 }
 
 /* ================= 阶段天级计划面板（两级计划的第二级） ================= */
-function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["plan"]>["phases"][number] }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+/* 长任务的小步重试：每批请求本身很短，偶发断连重发一次即可，不必让用户重走完整流程 */
+async function chatWithRetry(tries: number, run: () => Promise<string>): Promise<string> {
+  try {
+    return await run();
+  } catch (e) {
+    if (tries <= 1) throw e;
+    await new Promise((r) => setTimeout(r, 1500));
+    return chatWithRetry(tries - 1, run);
+  }
+}
 
-  const generate = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const { streamChat, phasePlanSchema } = await import("@/lib/ai/client");
-      const { phaseDraftToDays } = await import("@/lib/plan");
-      const plan = goal.plan!;
-      // 已掌握：所有已通过/跳过天的知识点
-      const mastered = Object.values(plan.days)
-        .filter((d) => d.status === "passed" || d.status === "skipped")
-        .flatMap((d) => d.knowledgePoints.map((k) => k.text));
-      // 薄弱点：最近未通过的验收
-      const weakPoints = goal.quizLog
-        .filter((q) => !q.passed)
-        .slice(0, 5)
-        .flatMap((q) => {
-          const day = plan.days[q.dayId];
-          return day ? [`${day.title}（${q.items.filter((i) => i.verdict === "incorrect").length} 题未过）`] : [];
-        });
-      const ctx = JSON.stringify(
-        {
-          goal: {
-            topic: goal.topic,
-            direction: goal.direction,
-            background: goal.background,
-            domainKind: goal.domainKind,
-            weeklyHours: goal.weeklyHours,
-            learnerProfile: goal.learnerProfile ?? [],
-          },
-          masterSummary: plan.summary,
-          phase: {
-            title: phase.title,
-            outcome: phase.outcome,
-            outline: phase.outline ?? [],
-            boundary: phase.boundary ?? "",
-            estDays: phase.estDays ?? null,
-          },
-          mastered,
-          weakPoints,
-        },
-        null,
-        1
-      );
-      const full = await streamChat({
-        task: "plan",
-        args: { mode: "phase", ctx },
-        messages: [{ role: "user", content: "生成本阶段的天级计划（只要 JSON）。" }],
-        onDelta: () => {},
-      });
-      const draft = phasePlanSchema.parse(extractJson(full));
-      const rawDays = phaseDraftToDays(draft, phase.id);
-      // 资源体检闭环:失效/广告的链接重新找替代,仍坏则丢弃——绝不把坏链推给用户
-      const refinedEntries = await Promise.all(
-        Object.entries(rawDays).map(async ([id, d]) => {
-          const resources = await refineResources(d.resources, `${goal.topic}：${phase.title} — ${d.title}`);
-          return [id, { ...d, resources }] as const;
-        })
-      );
-      const days = Object.fromEntries(refinedEntries) as typeof rawDays;
-      useAppStore.getState().setPhasePlan(goal.id, phase.id, draft.boundary ?? "", days);
-      // 阶段计划入第二大脑关系链
-      const masterNote = `${goal.topic} 学习计划 · 学习总纲要`;
-      // d.title 本身已含 "Day N：",不再重复前缀;用项目符号列表,Markdown 才换行成结构化清单
-      const daysOverview = Object.values(days)
-        .map((d) => `- **${d.title.replace(/^Day\s*\d+[：:]\s*/, "")}** — ${d.knowledgePoints.map((k) => k.text).join("、")}`)
-        .join("\n");
-      useAppStore.getState().addKnowledge(
-        [{
-          title: `${goal.topic} 学习计划 · ${phase.title}`,
-          body: `**阶段目标：**${phase.outcome}\n\n**边界：**${draft.boundary ?? phase.boundary ?? "—"}\n\n## 每日安排\n\n${daysOverview}\n\n关联：[[${masterNote}]]`,
-          domain: `${goal.topic}/计划`,
-        }],
-        "learn",
-        `${goal.topic} · 阶段计划`
-      );
-      toast.success("本阶段的天级计划已生成，从 Day 1 开始！");
-    } catch (e) {
-      console.error(e);
-      setError(e instanceof Error ? e.message : "生成失败，请重试");
-    } finally {
-      setBusy(false);
-    }
+/** 弱网/隧道掐断长连接时浏览器抛 TypeError("Failed to fetch"/"network error")，直译给用户是懵的 */
+function friendlyGenError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : "";
+  if (e instanceof TypeError || /failed to fetch|network error|load failed/i.test(msg)) {
+    return "网络中断了，这次没生成完。天级计划已按「天」拆成小批生成——再点一次按钮重试即可，不会再卡在单个长请求上。";
+  }
+  return msg || "生成失败，请重试";
+}
+
+/** 生成流程（模块级，不碰 React 状态——进度经 onProgress/onThink 回调上报给后台任务注册表）。
+ *  流程：①天清单（快） → ②每批 2 天展开细节，每批落盘可续跑 → ③编号归一化后激活。
+ *  天数硬约束：清单阶段就钉死 ≤ min(estDays||6, 8)——用户等待时长 ∝ 天数，预估 8 天就出 8 天，
+ *  不许模型自由发挥到 10 天（历史上出过 8 天阶段生成 10 天的事故）。 */
+async function doGenerate(
+  goal: Goal,
+  phase: NonNullable<Goal["plan"]>["phases"][number],
+  onProgress: (s: string) => void,
+  onThink: () => void
+): Promise<void> {
+  const { streamChat, phasePlanSchema, phaseListSchema } = await import("@/lib/ai/client");
+  const { phaseDraftToDays } = await import("@/lib/plan");
+  const plan = goal.plan!;
+  // 已掌握：所有已通过/跳过天的知识点
+  const mastered = Object.values(plan.days)
+    .filter((d) => d.status === "passed" || d.status === "skipped")
+    .flatMap((d) => d.knowledgePoints.map((k) => k.text));
+  // 薄弱点：最近未通过的验收
+  const weakPoints = goal.quizLog
+    .filter((q) => !q.passed)
+    .slice(0, 5)
+    .flatMap((q) => {
+      const day = plan.days[q.dayId];
+      return day ? [`${day.title}（${q.items.filter((i) => i.verdict === "incorrect").length} 题未过）`] : [];
+    });
+  const maxDays = Math.min(Math.max(phase.estDays ?? 6, 2), 8);
+  const ctx = JSON.stringify(
+    {
+      goal: {
+        topic: goal.topic,
+        direction: goal.direction,
+        background: goal.background,
+        domainKind: goal.domainKind,
+        weeklyHours: goal.weeklyHours,
+        learnerProfile: goal.learnerProfile ?? [],
+      },
+      masterSummary: plan.summary,
+      phase: {
+        title: phase.title,
+        outcome: phase.outcome,
+        outline: phase.outline ?? [],
+        boundary: phase.boundary ?? "",
+        estDays: phase.estDays ?? null,
+        maxDays,
+      },
+      mastered,
+      weakPoints,
+    },
+    null,
+    1
+  );
+  const call = (mode: "phase-list" | "phase-detail", extra: Record<string, unknown>, userText: string) => () =>
+    streamChat({
+      task: "plan",
+      args: { mode, ctx, ...extra },
+      messages: [{ role: "user", content: userText }],
+      onDelta: () => {},
+      onThink,
+    });
+
+  /* ① 天清单：只出 boundary + 每天的标题与知识点文本，请求小、几十秒内返回。 */
+  const listRaw = await chatWithRetry(
+    2,
+    call("phase-list", { maxDays }, `先只输出这个阶段的天清单（最多 ${maxDays} 天，只要 JSON）。`)
+  );
+  const list = phaseListSchema.parse(extractJson(listRaw));
+  const boundary = list.boundary?.trim() || phase.boundary || "";
+  // 天数硬约束在代码层兜底：模型多给了就砍到 maxDays，绝不出现"8 天阶段生成 10 天"
+  const planned = list.days.slice(0, maxDays);
+
+  /* ② 分批展开细节（每批 ≤2 天）：每个请求都短，断了只重发这一批。
+   * 每批完成立刻落盘（partial），后续批次再失败也不会丢掉已生成的天。 */
+  const BATCH = 2;
+  // 上次中断留下的进度：已落盘的天数与清单顺序一致，跳过即可续跑
+  const already = phase.dayIds.length;
+  const batches: typeof planned[] = [];
+  for (let i = already; i < planned.length; i += BATCH) batches.push(planned.slice(i, i + BATCH));
+  const days: NonNullable<Goal["plan"]>["days"] = {};
+  const label = (t: string) => t.match(/Day\s*\d+/i)?.[0] ?? t.slice(0, 10);
+  for (let bi = 0; bi < batches.length; bi++) {
+    const batch = batches[bi];
+    onProgress(
+      `正在展开 ${label(batch[0].title)}\u2013${label(batch[batch.length - 1].title)}` +
+        `（第 ${bi + 1}/${batches.length} 批 · 全阶段共 ${planned.length} 天）…`
+    );
+    const detailRaw = await chatWithRetry(
+      2,
+      call(
+        "phase-detail",
+        { boundary, days: JSON.stringify(batch) },
+        "为指定的这些天写出完整细节（只要 JSON）。"
+      )
+    );
+    const parsedDays = phasePlanSchema.parse(extractJson(detailRaw)).days;
+    // 编号归一化（bug 根修）：detail 模型偶尔无视"不得重新编号"，按本批清单顺序重写 Day N，
+    // 绝不让"Day 2"出现在两个天身上。全局序号 = 已落盘天数 + 批内偏移。
+    const normalized = parsedDays.map((d, i) => ({
+      ...d,
+      title: d.title.replace(/^Day\s*\d+[：:]\s*/, `Day ${already + bi * BATCH + i + 1}：`),
+    }));
+    const batchDays = phaseDraftToDays({ boundary, days: normalized }, phase.id);
+    // 资源体检闭环：失效/广告的链接重新找替代，仍坏则丢弃——绝不把坏链推给用户
+    await Promise.all(
+      Object.entries(batchDays).map(async ([id, d]) => {
+        batchDays[id] = {
+          ...d,
+          resources: await refineResources(d.resources, `${goal.topic}：${phase.title} — ${d.title}`),
+        };
+      })
+    );
+    Object.assign(days, batchDays);
+    useAppStore.getState().setPhasePlan(goal.id, phase.id, boundary, days, { partial: true });
+  }
+
+  useAppStore.getState().setPhasePlan(goal.id, phase.id, boundary, days);
+  // 阶段计划入第二大脑关系链
+  const masterNote = `${goal.topic} 学习计划 · 学习总纲要`;
+  // 用全阶段的天（含上次中断前已完成的），不只本轮新生成的
+  const saved = useAppStore.getState().goals.find((g) => g.id === goal.id)?.plan;
+  const savedPhase = saved?.phases.find((p) => p.id === phase.id);
+  // d.title 本身已含 "Day N：",不再重复前缀;用项目符号列表,Markdown 才换行成结构化清单
+  const daysOverview = (savedPhase?.dayIds ?? [])
+    .map((id) => saved?.days[id])
+    .filter((d): d is NonNullable<typeof d> => Boolean(d))
+    .map((d) => `- **${d.title.replace(/^Day\s*\d+[：:]\s*/, "")}** — ${d.knowledgePoints.map((k) => k.text).join("、")}`)
+    .join("\n");
+  useAppStore.getState().addKnowledge(
+    [{
+      title: `${goal.topic} 学习计划 · ${phase.title}`,
+      body: `**阶段目标：**${phase.outcome}\n\n**边界：**${boundary || "—"}\n\n## 每日安排\n\n${daysOverview}\n\n关联：[[${masterNote}]]`,
+      domain: `${goal.topic}/计划`,
+    }],
+    "learn",
+    `${goal.topic} · 阶段计划`
+  );
+}
+
+/* 后台生成注册表（模块级，不随组件卸载丢失）：
+ * 用户切去别的页面时生成继续跑（不 abort），回来自动接上显示实时进度/结果。
+ * key=goalId:phaseId；每批完成即落盘（partial），即使整页刷新也只丢在途的那一批。 */
+const bgGen = new Map<
+  string,
+  { busy: boolean; progress: string; thinking: boolean; error: string | null; doneAt: number | null; run: () => Promise<void> }
+>();
+function bgKey(goalId: string, phaseId: string) {
+  return `${goalId}:${phaseId}`;
+}
+
+function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["plan"]>["phases"][number] }) {
+  const key = bgKey(goal.id, phase.id);
+  // 已有后台任务（切页回来/重挂）→ 接上它的实时状态
+  const existing = bgGen.get(key);
+  const [busy, setBusy] = useState(existing?.busy ?? false);
+  const [error, setError] = useState<string | null>(existing?.error ?? null);
+  const [thinking, setThinking] = useState(existing?.thinking ?? false);
+  const [progress, setProgress] = useState(existing?.progress ?? "");
+  const [, forceTick] = useState(0);
+
+  // 挂载期间轮询后台任务状态（后台完成时 busy→false 自动刷新视图，partial 落盘的天已进 store）
+  useEffect(() => {
+    if (!bgGen.has(key)) return;
+    const t = setInterval(() => {
+      const st = bgGen.get(key);
+      if (!st) return;
+      setBusy(st.busy);
+      setProgress(st.progress);
+      setThinking(st.thinking);
+      setError(st.error);
+      forceTick((n) => n + 1);
+    }, 700);
+    return () => clearInterval(t);
+  }, [key]);
+
+  const startGenerate = () => {
+    if (bgGen.get(key)?.busy) return;
+    const st = {
+      busy: true,
+      progress: "正在规划这个阶段的每一天…",
+      thinking: false,
+      error: null as string | null,
+      doneAt: null as number | null,
+      run: async () => {},
+    };
+    st.run = async () => {
+      setBusy(true);
+      setThinking(false);
+      setError(null);
+      setProgress(st.progress);
+      try {
+        await doGenerate(
+          goal,
+          phase,
+          (p) => { st.progress = p; setProgress(p); },
+          () => { st.thinking = true; setThinking(true); },
+        );
+        st.doneAt = Date.now();
+      } catch (e) {
+        console.error(e);
+        const msg = friendlyGenError(e);
+        st.error = msg;
+        setError(msg);
+      } finally {
+        st.busy = false;
+        st.thinking = false;
+        st.progress = "";
+        setBusy(false);
+        setThinking(false);
+        setProgress("");
+      }
+    };
+    bgGen.set(key, st);
+    void st.run();
   };
+
+  const generate = startGenerate;
 
   return (
     <Card className="border-accent/25">
@@ -635,8 +784,16 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
       </p>
 
       {error && <p className="mt-3 text-sm text-bad">{error}</p>}
+      {busy && (
+        <p className="mt-3 flex items-center gap-2 text-xs text-ink-dim" aria-live="polite">
+          <Loader2 className="size-3.5 animate-spin text-accent" />
+          {progress || (thinking ? "模型思考中——最长约一分钟，别关页面" : "正在生成…")}
+        </p>
+      )}
       <Button className="mt-5 w-full" onClick={generate} loading={busy}>
-        生成「{phase.title}」的天级计划
+        {phase.dayIds.length > 0
+          ? `继续生成天级计划（已完成 ${phase.dayIds.length} 天）`
+          : `生成「${phase.title}」的天级计划`}
       </Button>
     </Card>
   );

@@ -85,7 +85,15 @@ interface AppState {
   removeGoal: (id: string) => void;
   removeGoalAndNotes: (id: string, includeKnowledge?: boolean) => void;
   setPlan: (goalId: string, plan: Plan) => void;
-  setPhasePlan: (goalId: string, phaseId: string, boundary: string, days: Plan["days"]) => void;
+  setPhasePlan: (
+    goalId: string,
+    phaseId: string,
+    boundary: string,
+    days: Plan["days"],
+    /** partial=true：批次生成中途落盘（断线不丢已完成的批）。
+     *  此时不置 planned、不激活首天——面板据此显示"继续生成"。 */
+    opts?: { partial?: boolean }
+  ) => void;
   setDayStatus: (
     goalId: string,
     dayId: string,
@@ -313,24 +321,27 @@ export const useAppStore = create<AppState>()(
         set((s) => ({
           goals: s.goals.map((g) => (g.id === goalId ? { ...g, plan } : g)),
         })),
-      setPhasePlan: (goalId, phaseId, boundary, days) =>
+      setPhasePlan: (goalId, phaseId, boundary, days, opts) =>
         set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
             const plan = structuredClone(g.plan);
             const phase = plan.phases.find((ph) => ph.id === phaseId);
             if (!phase) return g;
-            const dayIds: string[] = [];
+            // 累加：中途落盘时把本阶段已有天一并带上，避免覆盖掉前几批
+            const dayIds = Object.keys(plan.days).filter((id) => plan.days[id].phaseId === phaseId);
             for (const d of Object.values(days)) {
+              if (!plan.days[d.id]) dayIds.push(d.id);
               plan.days[d.id] = d;
-              dayIds.push(d.id);
             }
             phase.dayIds = dayIds;
             phase.boundary = boundary;
-            phase.planned = true;
+            // partial 也激活首天：用户「先出前两天就能开始学」，不等全部批次跑完
             if (phase.status === "locked") phase.status = "active";
             const first = plan.days[dayIds[0]];
             if (first && first.status === "locked") first.status = "active";
+            if (opts?.partial) return { ...g, plan };
+            phase.planned = true;
             return { ...g, plan };
           }),
         })),

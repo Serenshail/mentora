@@ -4,14 +4,19 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Badge, Button, Card, Input, Textarea } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
-import { useChat } from "@/lib/use-chat";
-import { extractJson, goalCardSchema, planSchema, type GoalCard } from "@/lib/ai/client";
+import { useChat, useHydrated } from "@/lib/use-chat";
+import { extractJson, splitGoalReply, type GoalCard } from "@/lib/ai/client";
 import { useAppStore } from "@/lib/store";
 import { masterDraftToPlan } from "@/lib/plan";
 import { track } from "@/lib/track";
 
 function planTitle(topic: string) {
   return `${topic} 学习计划`;
+}
+
+/** 流式期间只显示正文：碰到目标卡标记或 json 围栏就截断，避免把 JSON 边生成边刷给用户 */
+function proseOnly(text: string) {
+  return text.split(/<!--\s*GOAL_READY\s*-->|```json/i)[0];
 }
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
@@ -28,85 +33,150 @@ function IntakeInner() {
   const [input, setInput] = useState("");
   const [card, setCard] = useState<GoalCard | null>(null);
   const [stage, setStage] = useState<"chat" | "confirm" | "planning">("chat");
-  const [planStream, setPlanStream] = useState("");
   const [topic, setTopic] = useState(topicParam || "");
+  const hydrated = useHydrated();
   const kicked = useRef(false);
 
-  // 挂载：恢复草稿 或 新建草稿后开场
-  useEffect(() => {
-    if (kicked.current) return;
-    kicked.current = true;
-    // v17：初始化挪出 effect 同步体（effect 里直接 setState 会级联渲染，lint 红线）；一帧后执行，无感知
-    const raf = requestAnimationFrame(() => {
-    const store = useAppStore.getState();
+  const handleDone = (full: string, expectCard = false) => {
+    // 兼容模型漏掉 <!--GOAL_READY--> 标记的情况：只要回复里有一段合法目标卡 json 就进确认。
+    // 教练的普通追问（没带卡）是正常对话流——静默返回，只有明确要求出卡的路径（skip 按钮）才提示。
+    const { card: parsed } = splitGoalReply(full);
+    if (!parsed) {
+      if (expectCard)
+        toast.error("这次没拿到完整目标卡——再点一次「不想再答了」让教练重新总结。");
+      return;
+    }
+    setCard({ ...parsed, deadline: parsed.deadline || undefined });
+    setStage("confirm");
+  };
 
-    if (resumeId) {
-      const draft = store.goals.find((g) => g.id === resumeId && g.status === "draft");
-      if (draft) {
-        setTopic(draft.topic);
-        track("intake_start", { topic: draft.topic, resumed: true });
-        setMessages(
-          draft.intakeTranscript.map((t) => ({
-            id: uid("m"),
-            role: t.role,
-            content: t.content,
-            at: new Date().toISOString(),
-          }))
-        );
+  const handleSkip = (full: string) => handleDone(full, true);
+
+  // 挂载：恢复草稿 或 新建草稿后开场。
+  // 必须等 store 水合（useHydrated）：persist 是 skipHydration、由 setStoreUser 同步装载，
+  // 若在水合前就读 store.goals（空的）会误判"没有草稿"→ 新建并盖掉用户数据，
+  // 这正是"刷新后之前的对话全没了"的根因之一。
+  useEffect(() => {
+    if (!hydrated || kicked.current) return;
+    kicked.current = true;
+    // 状态初始化挪出 effect 同步体（effect 里直接 setState 会级联渲染，lint 红线）
+    const raf = requestAnimationFrame(() => {
+      const store = useAppStore.getState();
+
+      if (resumeId) {
+        // 只按 id 查，不按 status 过滤：确认目标卡后 status 已置 active（可能已生成计划），
+        // 旧实现写死 status==="draft" → 刷新必然匹配不到 → 对话"消失"。
+        const goal = store.goals.find((g) => g.id === resumeId);
+        if (!goal) {
+          toast.error("找不到这次引导的草稿（可能已被删除），请回目标列表重新开始。");
+          return;
+        }
+        setTopic(goal.topic);
+        track("intake_start", { topic: goal.topic, resumed: true });
+        const transcript = goal.intakeTranscript ?? [];
+        const restored = transcript.map((t) => ({
+          id: uid("m"),
+          role: t.role,
+          content: t.content,
+          at: new Date().toISOString(),
+        }));
+        setMessages(restored);
+        // 总纲要已在：直接回目标页，别让用户对着确认卡再点一次
+        if (goal.plan) {
+          router.replace(`/learn/${resumeId}`);
+          return;
+        }
+        // 自愈：本页新建草稿后会 replaceState 写上 ?goal=，Next 的 useSearchParams
+        // 随即更新 → 组件重挂 → 这里会以"恢复"路径再进来一次。
+        // 此时 transcript 是空的（首轮还没落库），必须重新开场，绝不能留白。
+        if (transcript.length === 0) {
+          void send({
+            args: { topic: goal.topic, userName },
+            userText: `我想学${goal.topic}`,
+            task: "intake",
+            onDone: handleDone,
+          });
+          return;
+        }
+        // 上一轮是用户发言、回复还没到（重挂/刷新打断了在途请求）：原样重试这一轮
+        const lastIdx = transcript.length - 1;
+        if (transcript[lastIdx].role === "user") {
+          void send({
+            args: { topic: goal.topic, userName },
+            history: restored.slice(0, lastIdx),
+            userText: transcript[lastIdx].content,
+            task: "intake",
+            onDone: handleDone,
+          });
+          return;
+        }
+        // 优先从上一轮回复里还原目标卡（此前因漏标记卡住的草稿）；
+        // 还原不到但有已确认的目标字段（说明是在"生成纲要"阶段刷新），用已确认字段重建确认卡
+        const last = transcript[transcript.length - 1];
+        const recovered = last?.role === "assistant" ? splitGoalReply(last.content).card : null;
+        let rebuilt: GoalCard | null = recovered;
+        if (!rebuilt && goal.status !== "draft" && goal.successCriteria?.length) {
+          rebuilt = {
+            topic: goal.topic,
+            direction: goal.direction,
+            domainKind: goal.domainKind,
+            motivation: goal.motivation,
+            background: goal.background,
+            deadline: undefined,
+            weeklyHours: goal.weeklyHours,
+            learnerProfile: goal.learnerProfile ?? [],
+            successCriteria: goal.successCriteria,
+            assumptions: goal.assumptions ?? [],
+          };
+        }
+        if (rebuilt) {
+          setCard({ ...rebuilt, deadline: rebuilt.deadline || undefined });
+          setStage("confirm");
+        }
         return;
       }
-    }
 
-    const t = topicParam || "Python";
-    const goalId = uid("goal");
-    store.addGoal({
-      id: goalId,
-      topic: t,
-      direction: "",
-      domainKind: "other",
-      motivation: "",
-      background: "",
-      weeklyHours: 8,
-      successCriteria: [],
-      status: "draft",
-      createdAt: new Date().toISOString(),
-      quizLog: [],
-      intakeTranscript: [],
-    });
-    track("intake_start", { topic: t, resumed: false });
-    history.replaceState(null, "", `/learn/new?goal=${goalId}`);
-    void send({
-      args: { topic: t, userName },
-      userText: `我想学${t}`,
-      task: "intake",
-    });
+      const t = topicParam || "Python";
+      const goalId = uid("goal");
+      store.addGoal({
+        id: goalId,
+        topic: t,
+        direction: "",
+        domainKind: "other",
+        motivation: "",
+        background: "",
+        weeklyHours: 8,
+        successCriteria: [],
+        status: "draft",
+        createdAt: new Date().toISOString(),
+        quizLog: [],
+        intakeTranscript: [],
+      });
+      track("intake_start", { topic: t, resumed: false });
+      setTopic(t);
+      history.replaceState(null, "", `/learn/new?goal=${goalId}`);
+      void send({
+        args: { topic: t, userName },
+        userText: `我想学${t}`,
+        task: "intake",
+        onDone: handleDone,
+      });
     });
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hydrated, resumeId]);
 
-  // 每轮对话后持久化到草稿
+  // 每轮对话后持久化到草稿。planning 阶段要跳过——那时 messages 里混进了
+  // "请生成总学习纲要"的请求与整段总纲要 JSON，写进 intakeTranscript 会污染对话记录。
   useEffect(() => {
+    if (stage === "planning") return;
     const goalId =
       resumeId || new URLSearchParams(window.location.search).get("goal");
     if (!goalId || messages.length === 0) return;
     useAppStore.getState().updateGoal(goalId, {
       intakeTranscript: messages.map((m) => ({ role: m.role, content: m.content })),
     });
-  }, [messages, resumeId]);
-
-  const handleDone = (full: string) => {
-    if (stage !== "chat") return;
-    if (!full.includes("<!--GOAL_READY-->")) return;
-    try {
-      const jsonText = full.split("<!--GOAL_READY-->")[1] ?? "";
-      const parsed = goalCardSchema.parse(extractJson(jsonText));
-      setCard({ ...parsed, deadline: parsed.deadline || undefined });
-      setStage("confirm");
-    } catch {
-      toast.error("目标卡解析失败，请再补充一句，让教练重新总结。");
-    }
-  };
+  }, [messages, resumeId, stage]);
 
   const doSend = () => {
     const text = input.trim();
@@ -131,6 +201,9 @@ function IntakeInner() {
     }
     setStage("planning");
     const finalCard = card;
+    // 生成纲要会往对话里追加"请求 + 整段 JSON"。失败回滚到这一步之前，
+    // 否则持久化会把请求和裸 JSON 写进 intakeTranscript，刷新后对话就脏了。
+    const beforeMessages = messages;
 
     useAppStore.getState().updateGoal(goalId, {
       topic: finalCard.topic,
@@ -154,45 +227,56 @@ function IntakeInner() {
       args: { mode: "master", cardJson: JSON.stringify(finalCard, null, 2) },
       userText: "目标卡已确认，请生成总学习纲要（只要 JSON）。",
       task: "plan",
-      onDone: async (full) => {
-        setPlanStream(full);
-        try {
-          const { masterPlanSchema } = await import("@/lib/ai/client");
-          const draft = masterPlanSchema.parse(extractJson(full));
-          const plan = masterDraftToPlan(draft, finalCard);
-          useAppStore.getState().setPlan(goalId, plan);
-          track("plan_generated", { phases: plan.phases.length });
-          // 总计划入第二大脑关系链
-          const store = useAppStore.getState();
-          // 链接标题必须与阶段笔记实际标题完全一致(${planTitle} · ${phase.title}),否则点开是空占位
-          const outlineMd = plan.phases
-            .map((p) => {
-              const noteTitle = `${planTitle(finalCard.topic)} · ${p.title}`;
-              return `- **[[${noteTitle}]]**\n  ${p.outcome}`;
-            })
-            .join("\n");
-          store.addKnowledge(
-            [{
-              title: `${planTitle(finalCard.topic)} · 学习总纲要`,
-              body: `**方向：**${finalCard.direction}\n\n${plan.summary}\n\n${outlineMd}`,
-              domain: `${finalCard.topic}/计划`,
-            }],
-            "learn",
-            `${finalCard.topic} · 总纲要`
-          );
-          toast.success("总纲要已生成。第一阶段的天级计划在目标页一键生成。");
-          router.replace(`/learn/${goalId}`);
-        } catch (e) {
-          console.error(e);
-          toast.error("纲要生成失败——目标已保存，可从列表进入该目标重试。");
-          setStage("confirm");
-        }
-      },
+    }).then(async (full) => {
+      // send 失败时内部已吞掉异常并返回 ""：必须在这里收口，
+      // 否则界面永远停在"计划生成中…"（旧实现依赖 onDone，失败就再也不触发）。
+      if (!full) {
+        setMessages(beforeMessages);
+        toast.error("总纲要生成失败——目标已保存，可从目标列表进入该目标重试。");
+        setStage("confirm");
+        return;
+      }
+      try {
+        const { masterPlanSchema } = await import("@/lib/ai/client");
+        const draft = masterPlanSchema.parse(extractJson(full));
+        const plan = masterDraftToPlan(draft, finalCard);
+        useAppStore.getState().setPlan(goalId, plan);
+        track("plan_generated", { phases: plan.phases.length });
+        // 总计划入第二大脑关系链
+        const store = useAppStore.getState();
+        // 链接标题必须与阶段笔记实际标题完全一致(${planTitle} · ${phase.title}),否则点开是空占位
+        const outlineMd = plan.phases
+          .map((p) => {
+            const noteTitle = `${planTitle(finalCard.topic)} · ${p.title}`;
+            return `- **[[${noteTitle}]]**\n  ${p.outcome}`;
+          })
+          .join("\n");
+        store.addKnowledge(
+          [{
+            title: `${planTitle(finalCard.topic)} · 学习总纲要`,
+            body: `**方向：**${finalCard.direction}\n\n${plan.summary}\n\n${outlineMd}`,
+            domain: `${finalCard.topic}/计划`,
+          }],
+          "learn",
+          `${finalCard.topic} · 总纲要`
+        );
+        toast.success("总纲要已生成。第一阶段的天级计划在目标页一键生成。");
+        router.replace(`/learn/${goalId}`);
+      } catch (e) {
+        console.error(e);
+        setMessages(beforeMessages);
+        toast.error("纲要格式解析失败——目标已保存，可从目标列表进入该目标重试。");
+        setStage("confirm");
+      }
     });
   };
 
   return (
     <div className="mx-auto max-w-3xl">
+      {!hydrated ? (
+        <div className="py-20 text-center text-sm text-ink-dim">正在载入你的学习数据…</div>
+      ) : (
+      <>
       <div className="mb-5 flex items-center gap-3">
         <div className="flex size-10 items-center justify-center rounded-xl bg-accent/[0.08] text-accent border border-accent/20">
           <Compass className="size-5" />
@@ -211,22 +295,30 @@ function IntakeInner() {
 
       {/* 对话区 */}
       <div className="space-y-4">
-        {messages.map((m) => (
-          <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
-            {m.role === "user" ? (
-              <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-4 py-2.5 text-sm text-white">
-                {m.content}
+        {messages.map((m) => {
+          if (m.role === "user") {
+            return (
+              <div key={m.id} className="flex justify-end">
+                <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-4 py-2.5 text-sm text-white">
+                  {m.content}
+                </div>
               </div>
-            ) : (
+            );
+          }
+          // 目标卡 json 不展示给用户：只渲染正文，正文为空则整条气泡不显示
+          const prose = splitGoalReply(m.content).prose;
+          if (!prose) return null;
+          return (
+            <div key={m.id}>
               <Card className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
-                <Markdown text={m.content.split("<!--GOAL_READY-->")[0]} />
+                <Markdown text={prose} />
               </Card>
-            )}
-          </div>
-        ))}
-        {pending && (
+            </div>
+          );
+        })}
+        {pending && stage !== "planning" && (
           <Card aria-live="polite" className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
-            <Markdown text={pending.split("<!--GOAL_READY-->")[0]} />
+            <Markdown text={proseOnly(pending)} />
             <span className="stream-cursor" />
           </Card>
         )}
@@ -322,7 +414,7 @@ function IntakeInner() {
             正在设计「{card?.topic}」的总学习纲要…
           </p>
           <pre className="max-h-40 overflow-hidden whitespace-pre-wrap text-xs text-ink-dim">
-            {planStream.slice(0, 400) || "…"}
+            {pending.slice(0, 400) || "…"}
           </pre>
         </Card>
       )}
@@ -349,7 +441,7 @@ function IntakeInner() {
                 args: { topic, userName },
                 userText: "（不想再答了，按已有信息直接给目标卡，缺的写进 assumptions。）",
                 task: "intake",
-                onDone: handleDone,
+                onDone: handleSkip,
               });
             }}
             disabled={streaming}
@@ -358,6 +450,8 @@ function IntakeInner() {
             ⏭️ 不想再答了 —— 让教练按现有信息直接生成目标与计划
           </button>
         </div>
+      )}
+      </>
       )}
     </div>
   );

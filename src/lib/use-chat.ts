@@ -68,7 +68,20 @@ export function useChat(initial: ChatMsg[] = []) {
         return full;
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return "";
-        setError(e instanceof Error ? e.message : "出错了，请重试");
+        // 弱网/隧道掐断长连接时浏览器抛 TypeError("Failed to fetch"/"network error")——
+        // 直译给用户看是懵的，翻译成可行动的话（内容不会丢：长任务重试即可）。
+        const isNet =
+          e instanceof TypeError ||
+          /failed to fetch|networkerror|network error|load failed/i.test(
+            e instanceof Error ? e.message : String(e)
+          );
+        setError(
+          isNet
+            ? "网络不稳定，连接中断了——内容没丢，点重试即可"
+            : e instanceof Error
+              ? e.message
+              : "出错了，请重试"
+        );
         setPending("");
         return "";
       } finally {
@@ -79,6 +92,10 @@ export function useChat(initial: ChatMsg[] = []) {
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
+
+  // 组件卸载（含路由切换、Suspense 重挂）时中止在途请求：
+  // 否则旧组件的请求继续跑到上游，token 白烧，且新组件会再发一次 → 同一轮重复计费。
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   return { messages, setMessages, pending, streaming, error, setError, send, stop };
 }
@@ -100,8 +117,11 @@ export function useHydrated() {
         if (!s.checking) setH(true);
       });
       if (!useAuthStore.getState().checking) setH(true);
-      // 兜底:匿名模式 800ms 后放行(极端时序下不阻塞 UI)
-      t = setTimeout(() => setH(true), 800);
+      /* 兜底只防"/api/auth/me 挂起把页面永久锁死"。
+       * 不能取 800ms：那时认证还没回来，store 仍停在匿名仓，
+       * 放行后写入的新数据会被随后的 setStoreUser(用户仓) 整体覆盖——
+       * 这正是"刚建的目标/对话刷新就没了"的根因。6s 覆盖慢网，且 auth 请求本身有 5s 超时。 */
+      t = setTimeout(() => setH(true), 6000);
     });
     return () => {
       disposed = true;

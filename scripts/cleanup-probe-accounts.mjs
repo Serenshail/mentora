@@ -8,6 +8,7 @@ const PROBE = [
   /^probe923@mentora\.dev$/, /^probeav@mentora\.dev$/, /^@?e2e-acct@163\.com$/,
   /^vc-test@163\.com$/, /^ui-\d+@163\.com$/, /^dbg-\d+@163\.com$/,
   /^e2e-\d+@163\.com$/, /^adminprobe@mentora\.dev$/, /.+@mentora\.dev$/,
+  /^probe-resume-\d+@163\.com$/, /^probe-curl-\d+@163\.com$/, /^probe-curltest-.+@163\.com$/,
 ];
 const H = { "x-admin-password": PW, "Content-Type": "application/json" };
 async function main() {

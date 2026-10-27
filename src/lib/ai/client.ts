@@ -17,7 +17,8 @@ export type ChatTask =
 
 /**
  * 调用 /api/chat 的 NDJSON 流：
- *   {"t":"d","v":"文本增量"} | {"t":"e","v":"错误"} | {"t":"end"}
+ *   {"t":"d","v":"文本增量"} | {"t":"h","v":"思考心跳（推理模型 reasoning 摘要，不进正文）"}
+ *   | {"t":"e","v":"错误"} | {"t":"p"}（保活 ping） | {"t":"end"}
  * BYOK：provider/key/model 由请求头携带（客户端设置存储，服务端不落盘）。
  * task：显式任务类型，服务端 demo 模式按此分流（不嗅探提示词内容）。
  */
@@ -50,6 +51,9 @@ export async function streamChat(
     signal?: AbortSignal;
     task?: ChatTask;
     onDelta: (text: string) => void;
+    /** 推理模型思考心跳：正文产出前的 reasoning 摘要。用于长任务等待反馈（"模型思考中…"），
+     *  不拼进返回正文。缺省时静默忽略（老调用点零改动）。 */
+    onThink?: (text: string) => void;
   }
 ): Promise<string> {
   const res = await fetch("/api/chat", {
@@ -92,6 +96,8 @@ export async function streamChat(
         if (ev.t === "d") {
           full += ev.v;
           opts.onDelta(ev.v);
+        } else if (ev.t === "h") {
+          opts.onThink?.(ev.v ?? "");
         } else if (ev.t === "e") {
           throw new Error(ev.v || "模型返回错误");
         }
@@ -159,6 +165,37 @@ export const goalCardSchema = z.object({
 });
 export type GoalCard = z.infer<typeof goalCardSchema>;
 
+/** 解析教练的目标卡回复，兼容两种模型输出：带 <!--GOAL_READY--> 标记、或漏掉标记直接给 json。
+ *  返回给用户看的前文（已剔除目标卡 json）与解析结果；都不成立时 card 为 null、prose 原样返回。 */
+export function splitGoalReply(text: string): { prose: string; card: GoalCard | null } {
+  const marker = /<!--\s*GOAL_READY\s*-->/i.exec(text);
+  const head = marker ? text.slice(0, marker.index) : text;
+  const tail = marker ? text.slice(marker.index + marker[0].length) : text;
+
+  // 候选按优先级从低到高入栈（最后入栈的最先试）：目标卡通常在回复末尾，
+  // 且围栏候选的区间覆盖整段代码块，能连着 ``` 一起从正文剔除。
+  const candidates: { raw: string; start: number; end: number }[] = [];
+  const braceStart = tail.indexOf("{");
+  const braceEnd = tail.lastIndexOf("}");
+  if (braceStart >= 0 && braceEnd > braceStart) {
+    candidates.push({ raw: tail.slice(braceStart, braceEnd + 1), start: braceStart, end: braceEnd + 1 });
+  }
+  for (const m of tail.matchAll(/```[a-zA-Z]*\s*([\s\S]*?)```/g)) {
+    candidates.push({ raw: m[1], start: m.index ?? 0, end: (m.index ?? 0) + m[0].length });
+  }
+
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const c = candidates[i];
+    try {
+      const card = goalCardSchema.parse(extractJson(c.raw));
+      // 有标记时只保留标记前正文；无标记时把这段 json 从原文里剔除，别把原始 JSON 展示给用户
+      const prose = (marker ? head : text.slice(0, c.start) + text.slice(c.end)).trim();
+      return { prose, card };
+    } catch { /* 不是目标卡，试下一个候选 */ }
+  }
+  return { prose: head.trim(), card: null };
+}
+
 export const masterPlanSchema = z.object({
   summary: z.string(),
   totalDaysEstimate: z.number().optional().nullable(),
@@ -175,6 +212,25 @@ export const masterPlanSchema = z.object({
     .min(1),
 });
 export type MasterPlanDraft = z.infer<typeof masterPlanSchema>;
+
+/** 天级计划第一步：只出「天清单」（boundary + 每天标题与知识点文本）。
+ *  把单次请求压小，避免整阶段全量细节一次生成导致的超长请求中断（见 prompts.ts 2b）。 */
+export const phaseListSchema = z.object({
+  boundary: z.string().optional().nullable(),
+  days: z
+    .array(
+      z.object({
+        title: z.string(),
+        knowledgePoints: z
+          .array(
+            z.union([z.string(), z.object({ text: z.string(), knowledgeType: z.string().optional() })])
+          )
+          .min(1),
+      })
+    )
+    .min(1),
+});
+export type PhaseListDraft = z.infer<typeof phaseListSchema>;
 
 export const phasePlanSchema = z.object({
   boundary: z.string().optional().nullable(),

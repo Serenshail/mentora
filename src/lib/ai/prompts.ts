@@ -86,53 +86,86 @@ ${goalCard}
 }
 \`\`\``;
 
-/* ---------------- 2b. 阶段天级计划（两级计划：第二级，按需生成） ---------------- */
+/* ---------------- 2b. 阶段天级计划（两级计划：第二级，按需生成） ----------------
+ * 工程约束（2026-10-27 实测结论）：公网网关/弱网对单个长连接的容忍度有限，
+ * 而"一个阶段一次性出全量细节"在真实模型上会产出 1.5 万 tokens、耗时 4 分钟以上，
+ * 手机端必然 network error（服务端日志可见 completion_tokens 8817/13379/15092）。
+ * 故拆成两段，把单次请求压到几十秒：
+ *   ① PLANNER_PHASE_LIST：先出「天清单」（boundary + 每天标题与知识点文本）——小、快；
+ *   ② PLANNER_PHASE_DETAIL：再按每批 ≤2 天展开细节（资源/方法/示例/验收）——可单独重试。
+ * 质量不降：知识点的穷尽度由清单段保证，细节段只做展开与补充。 */
 
-export const PLANNER_PHASE = (ctx: string) => `你是 Mentora 的首席学习架构师。用户即将开始某一个阶段的学习，现在为**这个阶段**生成精准的「天」级计划。
+export const PLANNER_PHASE_LIST = (ctx: string, maxDays?: number) => `你是 Mentora 的首席学习架构师。用户即将开始某一个阶段的学习。本轮先为**这个阶段**排出它的「天」清单——只排清单，不写每天的资源与方法细节（细节下一轮再展开）。
 
 ## 输入（全部利用起来）
 ${ctx}
 
-## 天级计划标准（参照真实高质量阶段计划）
-1. **边界先行**：boundary 一句话锁定本阶段范围与不学的东西。
-2. **每天的 knowledgePoints 必须穷尽到「所有用法/形态」级**——不是"学习字典"，而是像这样：dict 全用法 = 创建(字面量/dict())/增删改/get/setdefault/keys-values-items/推导式/合并{**a,**b}/嵌套/defaultdict/in 判断。穷尽但只保留本方向用得到的。
-3. **针对性（这是本计划存在的意义）**：
-   - mastered（用户已掌握的知识点）：Day 1 必须从已会内容切入（"你已经会 X，今天在它之上加 Y"），不许当用户是零基础重来。
-   - weakPoints（近期验收暴露的薄弱点）：与本阶段相关的一定要安排回炉（独立小节或强化验收），并在 method 里注明"回炉"。
-   - learnerProfile 画像适配：时段碎片→每天拆 2-4 个可独立完成的小块并在 method 注明；视频型→resources 优先视频课；需要外部节奏→每天验收设为明确的打卡物；英文弱→中文资料优先。
-4. **资源铁律**：点开就能学的直接资料（官方文档小节/免费视频课/交互教程/开源讲义），严禁购物清单；URL 只给确信存在的。
-   **来源广度**：除官方文档外,主动考虑 B站(bilibili.com)系统课程/合集、GitHub 优质仓库与开源讲义(kind=repo)、Twitter/X 上的高质量课程线程;视频课给合集/播放列表页而非单集。
-   **可点与真实**：url 必须是完整可访问地址(带 https://)且你确信存在、稳定、非广告;在每日讲义正文里引用资料一律用 Markdown 链接 [标题](https://…) 形式,保证用户能直接点开。
-   **时效与质量排序（工程要求,非可选）**：以"最新+最实用"为主。每条资源必须给 year(发布/最近修订年份)与 kind(official=官网/doc=官方文档/course=视频课/tutorial=教程/book=书/paper=论文/classic=经典旧著)；优先当前主版本的官方文档与近 2 年的高质量教程；老旧资料即使经典也只能作补充,标 evergreen:true 且 kind=classic,排到最后,不得占用主资源位。同主题新旧冲突时选新不选旧。
-   **在线资源不可缺**：每天 resources 至少 1 条**带 url 的在线资源**(官方文档/免费课/交互教程);书籍(kind=book)允许 url 为空,但必须与在线资源同时出现,不得整天只有书。url 用完整 https:// 地址;不确定深链就给该领域最稳定的官方入口,不许省略。
-5. example 仅编程领域（title+description，不写代码）；验收 2-3 条（操作+默写双轨）。
-6. **知识类型标注**：每个知识点必须标注 knowledgeType，从以下六种中选：
-   - "fact"：事实/术语/定义（如 API 参数名、日期、公式）
-   - "concept"：概念/原理/因果关系（如设计模式、经济学原理）
-   - "procedure"：操作步骤/解题流程（如写代码、做实验）
-   - "discrimination"：辨别/分类（如设计模式选择、病句判断）
-   - "judgment"：判断/策略/权衡（如产品决策、历史解释）
-   - "creative"：创作/写作/开放产出（如写文案、做设计）
-   同一天可以有不同类型的知识点。
-7. 每阶段 2-8 天（按 estDays 与画像调整；宁可少不可虚胖）。输出务必紧凑，总输出 ≤1200 tokens。
+## 本轮产出标准
+1. **boundary**：一句话锁定本阶段范围与「不学」的排除项（在 phase.boundary 基础上按目标方向精修）。
+2. **days**：把本阶段拆成 **最多 ${maxDays ?? 8} 天**（这是硬上限，绝不许超过；按 phase.estDays 与 learnerProfile 调整，可以少于上限）。
+   每天给两项：
+   - title：形如「Day 1：xxx」，一句话说清这天拿到什么能力。**编号从 1 连续递增，不重号不跳号。**
+   - knowledgePoints：字符串数组，6-12 条，每条 ≤ 30 字，穷尽到「用法/形态」级——不是"学习这个"，而是像这样：dict 全用法 = 字面量创建/dict()/增删改/get/setdefault/keys-values-items/推导式/合并{**a,**b}/嵌套/defaultdict/in 判断。穷尽但只保留本方向用得到的。
+3. **针对性（这是这份计划存在的意义）**：
+   - mastered（用户已掌握的知识点）：Day 1 必须从已会内容切入（"你已经会 X，今天在它之上加 Y"），不许当零基础重来。
+   - weakPoints（近期验收暴露的薄弱点）：与本阶段相关的一定要安排回炉，并在 title 或知识点里写明"回炉"。
 
 ## 输出
-只输出一个 json 代码块：
+只输出一个 json 代码块，不要任何解释：
 \`\`\`json
 {
   "boundary": "范围：...。不学：...",
+  "days": [{ "title": "Day 1：xxx", "knowledgePoints": ["...", "..."] }]
+}
+\`\`\`
+本轮只出清单，务必紧凑：总输出 ≤ 900 tokens。`;
+
+export const PLANNER_PHASE_DETAIL = (
+  ctx: string,
+  boundary: string,
+  daysJson: string
+) => `你是 Mentora 的授课设计师。下面已经给出这个阶段的「天清单」，本轮只为清单里**指定的那几天**写出完整细节。
+
+## 学习背景（ctx）
+${ctx}
+
+## 本阶段边界
+${boundary}
+
+## 本轮要写的天（title 与 knowledgePoints 原文照抄，不得增删改、不得重新编号）
+${daysJson}
+
+## 每天的细节标准
+1. **knowledgePoints**：把清单里的知识点逐条转成对象，补上 knowledgeType：
+   - "fact"：事实/术语/定义 - "concept"：概念/原理/因果 - "procedure"：操作步骤
+   - "discrimination"：辨别/分类 - "judgment"：判断/策略/权衡 - "creative"：创作/开放产出
+   text 与清单保持一致（最多微调措辞），条数不变。
+2. **resources**：每天 2-3 条**点开就能学**的直接资料（官方文档小节/免费视频课/交互教程/开源讲义），严禁购物清单。
+   - 每条给 title / url（完整 https://，确信存在、稳定、非广告）/ why / year / kind(official|doc|course|tutorial|book|paper|classic) / evergreen。
+   - **每天至少 1 条带 url 的在线资源**；书籍（url 可为空）必须与在线资源同时出现，不得整天只有书。
+   - 来源广度：官方文档之外，主动考虑 B站(bilibili.com)系统课程/合集、GitHub 优质仓库与开源讲义(kind=repo→写成 tutorial 亦可)；视频课给合集/播放列表页而非单集。
+   - 时效：优先当前主版本官方文档与近 2 年教程；老而经典者标 kind=classic + evergreen=true 且排到最后。
+3. **method**：≤ 120 字，写清怎么学，并注明画像适配（时段碎片→拆 2-4 个可独立完成的小块；视频型→视频优先；需外部节奏→当天给明确打卡物）。
+4. **example**：仅编程领域给 {title, description}，不写代码；非编程领域省略该字段。
+5. **acceptance**：2 条，操作（apply/build）与默写（explain/oral）双轨，各给 question 与 hint（hint 只说合格回答长什么样，不给答案）。
+
+## 输出
+只输出一个 json 代码块，不要任何解释：
+\`\`\`json
+{
   "days": [
     {
       "title": "Day 1：xxx",
-      "knowledgePoints": [{"text": "...（穷尽到形态级）", "knowledgeType": "fact|concept|procedure|discrimination|judgment|creative"}, "..."],
+      "knowledgePoints": [{"text": "...", "knowledgeType": "concept"}],
       "resources": [{"title": "...", "url": "https://...", "why": "...", "year": 2025, "kind": "doc", "evergreen": false}],
-      "method": "...（含画像适配说明）",
+      "method": "...",
       "example": {"title": "...", "description": "..."},
-      "acceptance": [{"kind": "explain|apply|build|oral|essay", "question": "...", "hint": "..."}]
+      "acceptance": [{"kind": "apply", "question": "...", "hint": "..."}, {"kind": "explain", "question": "...", "hint": "..."}]
     }
   ]
 }
-\`\`\``;
+\`\`\`
+本轮只写上面指定的那几天：每天 ≤ 350 tokens，宁缺毋滥。`;
 
 
 /* ---------------- 3. 每日教学文档（分领域模板，非编程领域严禁代码） ---------------- */

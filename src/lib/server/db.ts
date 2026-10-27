@@ -77,6 +77,16 @@ export function hasHealthyRemoteDb(): boolean {
   return !(lastNetFailAt && Date.now() - lastNetFailAt < 60_000);
 }
 
+/** 给 best-effort 的远端调用设硬预算：超时/失败立刻取降级值，不拖死请求。
+ *  远端 KV 偶发变慢时（实测单次 D1 可撞满 5s×3 重试），限流/配额/吊销校验这类
+ *  "失效也不该阻断功能"的检查绝不能让首字节等上十几秒——公网网关 15s 就会掐断长请求。 */
+export function withBudget<T>(p: Promise<T>, fallback: T, ms = 1200): Promise<T> {
+  return Promise.race([
+    p.catch(() => fallback),
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 async function withRetry<T>(fn: () => Promise<Response>): Promise<Response> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {

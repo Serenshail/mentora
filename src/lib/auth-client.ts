@@ -92,7 +92,11 @@ export function useAuth() {
     initialized = true;
     void (async () => {
       try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        // 5s 超时：认证探测挂起时不能把 checking 永远卡在 true（页面会被永久锁在加载态）
+        const res = await fetch("/api/auth/me", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(5000),
+        });
         const j = await res.json();
         const user = j.user ?? null;
         useAuthStore.setState({ user });
