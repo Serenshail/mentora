@@ -27,6 +27,10 @@ export interface Resource {
   kind?: string;
   /** 经典旧著(evergreen):排序降权,作"经典补充" */
   evergreen?: boolean;
+  /** 单集视频已通过平台接口实测存在（YouTube oEmbed / B站 view API） */
+  verified?: boolean;
+  /** 平台返回的真实作者/UP主 */
+  author?: string;
 }
 
 export interface KnowledgePoint {

@@ -189,6 +189,14 @@ function migrateKnowledge(items: unknown[]): KnowledgeItem[] {
  * 大知识库（如整库导入的数百篇笔记）可能撑爆 ~5MB 配额；此前 setItem 抛
  * QuotaExceededError 且未被捕获 → 整页崩溃（"This page couldn't load"）。
  * 现在写满时优雅跳过本次快照并通知 UI，绝不崩溃、绝不丢内存数据。 */
+
+/* 磁盘是否已落后于内存（最近一次持久化失败）。跨标签页回采据此跳过，
+ * 否则配额满时磁盘的旧快照会把刚生成的今日讲义覆盖掉。 */
+let diskStale = false;
+export function isStoreDiskStale() {
+  return diskStale;
+}
+
 const safeStorage: StateStorage = {
   getItem: (name) => {
     try {
@@ -200,11 +208,14 @@ const safeStorage: StateStorage = {
   setItem: (name, value) => {
     try {
       localStorage.setItem(name, value);
+      diskStale = false;
     } catch (e) {
       const quota =
         e instanceof DOMException &&
         (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED");
       if (!quota) throw e;
+      // 这次快照没写进磁盘：磁盘从此落后于内存，焦点回采不能再拿它覆盖内存
+      diskStale = true;
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("mentora:quota"));
       }
@@ -1144,6 +1155,8 @@ export function bindStoreSync() {
   if (storeSyncBound || typeof window === "undefined") return;
   storeSyncBound = true;
   const adopt = () => {
+    // 磁盘快照已落后于内存（配额写失败）：保留内存，否则旧快照会盖掉新生成的讲义
+    if (isStoreDiskStale()) return;
     const name = (useAppStore.persist.getOptions() as { name?: string }).name;
     if (!name) return;
     try {

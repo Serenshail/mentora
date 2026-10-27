@@ -15,6 +15,11 @@ export interface LinkCheck {
   dead: boolean;
   ad: boolean;
   reason: string;
+  /** 单集视频且已被平台接口证实存在 */
+  video?: boolean;
+  /** 平台返回的真实标题/作者（用于覆盖模型编造的标题） */
+  title?: string;
+  author?: string;
 }
 
 const linkCache = new Map<string, LinkCheck>();
@@ -141,14 +146,30 @@ export async function refineResources(resources: Resource[], ctx: string): Promi
 
   const out: Resource[] = [];
   let ri = 0;
+  // 视频实证结果：用平台真实标题/作者覆盖模型编造的标题，并打上"已验证"标记
+  const verifiedByUrl = new Map(
+    [...checks.values()].filter((c) => c.ok && c.video).map((c) => [c.url, c])
+  );
+  const enrich = (r: Resource, url: string, check?: LinkCheck): Resource => {
+    const v = check ?? verifiedByUrl.get(url);
+    if (!v) return { ...r, url };
+    return {
+      ...r,
+      url,
+      title: v.title || r.title,
+      author: v.author,
+      verified: true,
+      kind: r.kind ?? "video",
+    };
+  };
   for (const r of norm) {
     if (r.url && badByUrl.has(r.url)) {
       const rep = reps[ri++];
       const repUrl = normalizeUrl(rep?.url);
-      if (rep && repUrl && repOk.has(repUrl)) out.push({ ...rep, url: repUrl });
+      if (rep && repUrl && repOk.has(repUrl)) out.push(enrich(rep, repUrl, repChecks.get(repUrl)));
       // 否则丢弃这条坏资源(不给用户看坏链)
     } else {
-      out.push(r);
+      out.push(r.url ? enrich(r, r.url) : r);
     }
   }
   return out;

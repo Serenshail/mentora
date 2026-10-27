@@ -67,10 +67,32 @@ export function AssistantWidget() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const drag = useRef<{ px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, pending, open]);
+
+  /* 三种关闭方式：右上 ✕、Esc、点面板外部（面板曾盖住悬浮球，只靠再点一次关不掉） */
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (panelRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown);
+    };
+  }, [open]);
 
   useEffect(() => {
     try {
@@ -141,6 +163,7 @@ export function AssistantWidget() {
     <>
       {/* 悬浮按钮：可拖到任意位置 */}
       <button
+        ref={btnRef}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -157,14 +180,23 @@ export function AssistantWidget() {
       {/* 对话面板 */}
       {open && (
         <div
+          ref={panelRef}
           style={{ left: panelLeft, top: panelTop, width: `min(${PANEL_W}px, calc(100vw - 1rem))`, maxHeight: PANEL_H }}
           className="fixed z-40 flex flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
         >
-          <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+          <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
             <div>
               <p className="text-[13px] font-bold text-ink">Mentora 助手</p>
               <p className="text-[10.5px] text-ink-dim">功能在哪、怎么用，直接问</p>
             </div>
+            <button
+              onClick={() => setOpen(false)}
+              title="关闭（Esc）"
+              aria-label="关闭助手"
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full text-ink-dim transition hover:bg-black/[0.06] hover:text-ink"
+            >
+              <X className="size-4" />
+            </button>
           </div>
           <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-3" style={{ minHeight: 200 }}>
             {messages.length === 0 && !pending && (

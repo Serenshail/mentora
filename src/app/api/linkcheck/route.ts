@@ -23,9 +23,124 @@ interface CheckResult {
   title: string;
   finalUrl: string;
   reason: string;
+  /** 是否是**单集视频**且已通过平台接口证实存在 */
+  video?: boolean;
+  /** 真实作者/UP主（视频已证实时回填，UI 可展示） */
+  author?: string;
+}
+
+/* ---------------- 视频直链校验 ----------------
+ * 通用 HTTP 探测对视频平台不够用：YouTube 删除/私享视频仍返回 200，
+ * 而 results?search_query、/playlist、频道页也都能 200 —— 用户点进去只是搜索页/合集，
+ * 不是"确定的某个视频"。这里改用平台自己的元数据接口实证：
+ *   YouTube → oEmbed（404 = 删除/私享/不存在）
+ *   Bilibili → x/web-interface/view（code!==0 = 不存在/已删除/私享）
+ * 成功时回填**真实标题/作者**，替代模型编造的标题。 */
+
+const UA = "Mozilla/5.0 (compatible; MentoraLinkCheck/1.0)";
+
+function baseOf(raw: string): CheckResult {
+  return { url: raw, ok: false, dead: false, ad: false, status: 0, title: "", finalUrl: raw, reason: "" };
+}
+
+async function verifyYouTube(raw: string, id: string): Promise<CheckResult | null> {
+  const base = baseOf(raw);
+  if (!/^[\w-]{11}$/.test(id)) return { ...base, dead: true, reason: "视频 ID 格式不合法（疑似编造）" };
+  const canonical = `https://www.youtube.com/watch?v=${id}`;
+  try {
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(canonical)}&format=json`,
+      { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(6000) }
+    );
+    if (!res.ok) {
+      // 404 = 确实不存在/已删除；401/403 = 作者禁止站外嵌入（视频本身存在），
+      // 交给通用探测确认可访问，不误杀
+      if (res.status !== 404) return null;
+      return {
+        ...base,
+        status: res.status,
+        finalUrl: canonical,
+        dead: true,
+        reason: "视频不存在/私享/已删除",
+      };
+    }
+    const j = (await res.json().catch(() => ({}))) as { title?: string; author_name?: string };
+    return {
+      ...base,
+      ok: true,
+      video: true,
+      status: res.status,
+      title: (j.title ?? "").replace(/\s+/g, " ").trim().slice(0, 120),
+      author: (j.author_name ?? "").slice(0, 60),
+      finalUrl: canonical,
+      reason: "视频已验证",
+    };
+  } catch {
+    return null; // 网络不可达 → 交给通用探测，不误杀
+  }
+}
+
+async function verifyBilibili(raw: string, id: string): Promise<CheckResult | null> {
+  const base = baseOf(raw);
+  const q = /^BV/i.test(id) ? `bvid=${id}` : `aid=${id.replace(/^av/i, "")}`;
+  try {
+    const res = await fetch(`https://api.bilibili.com/x/web-interface/view?${q}`, {
+      headers: { "User-Agent": UA, Referer: "https://www.bilibili.com/" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json().catch(() => ({}))) as {
+      code?: number;
+      data?: { title?: string; owner?: { name?: string } };
+    };
+    if (j.code !== 0) return { ...base, dead: true, reason: "视频不存在/已删除/私享" };
+    return {
+      ...base,
+      ok: true,
+      video: true,
+      title: (j.data?.title ?? "").replace(/\s+/g, " ").trim().slice(0, 120),
+      author: (j.data?.owner?.name ?? "").slice(0, 60),
+      finalUrl: `https://www.bilibili.com/video/${id}`,
+      reason: "视频已验证",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 命中视频平台返回判定；非视频平台/短链返回 null（交给通用探测） */
+async function checkVideo(raw: string): Promise<CheckResult | null> {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase().replace(/^(www|m)\./, "");
+  const base = baseOf(raw);
+
+  if (host === "youtu.be") return verifyYouTube(raw, u.pathname.split("/").filter(Boolean)[0] ?? "");
+  if (host === "youtube.com") {
+    if (u.pathname === "/watch") return verifyYouTube(raw, u.searchParams.get("v") ?? "");
+    const shorts = u.pathname.match(/^\/shorts\/([\w-]{11})/);
+    if (shorts) return verifyYouTube(raw, shorts[1]);
+    return { ...base, dead: true, reason: "合集/频道/搜索页，不是具体视频" };
+  }
+  if (host === "b23.tv") return null; // 短链先走通用跟随
+  if (host === "bilibili.com") {
+    const m = u.pathname.match(/^\/video\/(BV[0-9A-Za-z]{10}|av\d+)/i);
+    if (m) return verifyBilibili(raw, m[1]);
+    return { ...base, dead: true, reason: "合集/频道/搜索页，不是具体视频" };
+  }
+  if (host.endsWith(".bilibili.com")) {
+    return { ...base, dead: true, reason: "合集/频道/搜索页，不是具体视频" };
+  }
+  return null;
 }
 
 async function checkOne(raw: string): Promise<CheckResult> {
+  const v = await checkVideo(raw);
+  if (v) return v;
   const base: CheckResult = { url: raw, ok: false, dead: false, ad: false, status: 0, title: "", finalUrl: raw, reason: "" };
   const entry = await assertSafePublicUrl(raw, { allowHttp: true });
   if (!entry.ok) return { ...base, dead: true, reason: "链接格式不受支持" };

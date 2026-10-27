@@ -1201,10 +1201,32 @@ function DayPanel({
   const [transferDone, setTransferDone] = useState(false);
 
   const done = day.status === "passed" || day.status === "skipped";
+  /* store 里的讲义晚到时（云端/另一标签页同步回来）直接用，不必让用户重新生成；
+   * 组件内 state 只承载"本次流式生成"的增量，避免在 effect 里同步 setState。 */
+  const lessonText = lesson || (day.lesson ?? "");
 
   /* 生成今日学习文档 */
   const genLesson = async () => {
     setLessonLoading(true);
+    // 流式增量也留一份：长生成中途被刷新/断网打断时，至少把已生成的部分保住
+    let buf = "";
+    const saveLesson = async (text: string) => {
+      // 以**当前** plan 为基线（生成耗时较长，期间目录/细节可能已更新，
+      // 用渲染时闭包里的旧 plan 克隆会把那些更新冲掉）
+      const cur = store.getState().goals.find((g) => g.id === goal.id)?.plan ?? goal.plan;
+      if (cur) {
+        store.getState().updateGoal(goal.id, {
+          plan: (() => {
+            const plan = structuredClone(cur);
+            if (plan.days[day.id]) plan.days[day.id].lesson = text;
+            return plan;
+          })(),
+        });
+      }
+      // 讲义是最贵的一次生成：立刻上云，不等 2.5s 防抖（刷新/关页就不会再丢）
+      const { useAuthStore, pushCloud } = await import("@/lib/auth-client");
+      if (useAuthStore.getState().user) void pushCloud();
+    };
     try {
       const { streamChat } = await import("@/lib/ai/client");
       const mastered = Object.values(goal.plan?.days ?? {})
@@ -1237,20 +1259,19 @@ function DayPanel({
         messages: [{ role: "user", content: "生成今天的学习文档。" }],
         temperature: 0.6,
         task: "lesson",
-        onDelta: (d) => setLesson((p) => p + d),
+        onDelta: (d) => {
+          buf += d;
+          setLesson((p) => p + d);
+        },
       });
-      if (full) {
-        // 缓存进 store
-        store.getState().updateGoal(goal.id, {
-          plan: (() => {
-            const plan = structuredClone(goal.plan!);
-            plan.days[day.id].lesson = full;
-            return plan;
-          })(),
-        });
-      }
+      if (full) await saveLesson(full);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "生成失败");
+      if (buf.trim().length > 200) {
+        await saveLesson(buf);
+        toast.error("生成中断，已保留已生成的内容（可点「重新生成」继续）。");
+      } else {
+        toast.error(e instanceof Error ? e.message : "生成失败");
+      }
     } finally {
       setLessonLoading(false);
     }
@@ -1499,6 +1520,14 @@ function DayPanel({
                 )}
                 <LinkStatus url={r.url} />
                 <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                  {r.verified && (
+                    <span
+                      className="rounded bg-ok/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-ok"
+                      title={r.author ? `已用平台接口实测存在 · ${r.author}` : "已用平台接口实测存在"}
+                    >
+                      视频已验证
+                    </span>
+                  )}
                   {(r.kind || r.year || r.evergreen) && (
                     <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-dim">
                       {r.evergreen ? "经典补充" : (KIND_LABEL[r.kind ?? ""] ?? r.kind)}
@@ -1542,34 +1571,38 @@ function DayPanel({
               <p className="flex items-center gap-2 text-sm font-bold text-ink">
                 <BookMarked className="size-4 text-accent" /> 学习文档
               </p>
-              {!lesson && (
+              {!lessonText && (
                 <Button size="sm" onClick={genLesson} loading={lessonLoading}>
                   生成今日讲解
                 </Button>
               )}
             </div>
-            {lesson ? (
+            {lessonText ? (
               <div className="mt-3">
-                <Markdown text={lesson} />
-                {done && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="mt-2"
-                    onClick={() => {
-                      setLesson("");
+                <Markdown text={lessonText} />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="mt-2"
+                  onClick={() => {
+                    setLesson("");
+                    const cur = store.getState().goals.find((g) => g.id === goal.id)?.plan ?? goal.plan;
+                    if (cur) {
                       store.getState().updateGoal(goal.id, {
                         plan: (() => {
-                          const plan = structuredClone(goal.plan!);
-                          delete plan.days[day.id].lesson;
+                          const plan = structuredClone(cur);
+                          if (plan.days[day.id]) delete plan.days[day.id].lesson;
                           return plan;
                         })(),
                       });
-                    }}
-                  >
-                    重新生成
-                  </Button>
-                )}
+                    }
+                    void import("@/lib/auth-client").then(({ useAuthStore, pushCloud }) => {
+                      if (useAuthStore.getState().user) void pushCloud();
+                    });
+                  }}
+                >
+                  重新生成
+                </Button>
               </div>
             ) : (
               <p className="mt-3 text-xs text-ink-dim">
@@ -1577,7 +1610,7 @@ function DayPanel({
                 {goal.domainKind === "coding" ? "+ 完整项目例子拆解" : ""} + 常见的坑 + 验收前练习。
               </p>
             )}
-            {lessonLoading && lesson && <span className="stream-cursor mt-2" />}
+            {lessonLoading && lessonText && <span className="stream-cursor mt-2" />}
           </Card>
 
           {/* 项目例子 */}

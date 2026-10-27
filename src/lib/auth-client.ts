@@ -198,10 +198,17 @@ export async function pushCloud(opts: { keepalive?: boolean; retries?: number } 
   };
 
   let ok = false;
+  let serverTs = "";
   for (let attempt = 0; attempt <= retries && !ok; attempt++) {
     try {
       const res = await doFetch();
       ok = res.ok;
+      if (ok) {
+        /* 用**服务端** updatedAt 记本地同步水位：客户端时钟快/慢都会让 bootSync 误判，
+         * 刷新时就会把“还没带今日讲义”的云快照拉回来覆盖本地。 */
+        const j = (await res.json().catch(() => null)) as { updatedAt?: string } | null;
+        if (j && typeof j.updatedAt === "string") serverTs = j.updatedAt;
+      }
     } catch {
       ok = false;
     }
@@ -209,7 +216,7 @@ export async function pushCloud(opts: { keepalive?: boolean; retries?: number } 
   }
   if (ok) {
     try {
-      localStorage.setItem(CHOICE_KEY, new Date().toISOString());
+      localStorage.setItem(CHOICE_KEY, serverTs || new Date().toISOString());
     } catch { /* 配额满忽略 */ }
     setSyncStatus("saved");
     return true;
@@ -254,7 +261,7 @@ export async function syncAfterLogin(): Promise<"pushed" | "pulled" | "none"> {
   }
   // 云端为准：直接采用，不弹窗打断
   useAppStore.getState().importData(cloud.data);
-  localStorage.setItem(CHOICE_KEY, new Date().toISOString());
+  localStorage.setItem(CHOICE_KEY, cloud.updatedAt || new Date().toISOString());
   return "pulled";
 }
 
@@ -272,11 +279,18 @@ function cloudHasData(data: Record<string, unknown> | null | undefined): boolean
   );
 }
 
+/** 客户端/服务端时钟允许的漂移：云快照必须比本地水位新出这个量才值得覆盖本地 */
+const SYNC_TOLERANCE_MS = 3000;
+
 /** 开机/刷新即与云端对齐：本地快照可能因配额装不下大知识库而为空，
  * 不能只靠"登录那一刻"拉云。云端比本地新就拉取,否则保留本地(含未推送编辑)。
  * 红线:云端是"空快照"而本地有数据时,绝不拉取——否则一条历史空备份会抹掉本地新数据。 */
 export async function bootSync(): Promise<void> {
   try {
+    const uid = useAuthStore.getState().user?.userId ?? null;
+    if (!uid) return;
+    // 仓还没切到当前账号时绝不 importData：否则数据先写进旧仓、再被整体替换
+    if (useAppStore.getState()._storeUserId !== uid) return;
     const cloud = await pullCloud();
     if (!cloud) return;
     const localHas = hasLocalData();
@@ -291,8 +305,8 @@ export async function bootSync(): Promise<void> {
     const localTs = Date.parse(localStorage.getItem(CHOICE_KEY) ?? "") || 0;
     const cloudTs = Date.parse(cloud.updatedAt) || 0;
     // 本地为空(大知识库装不下 localStorage,刷新后本地快照是空的)时,只要云端有数据就恢复;
-    // 否则仅在云端比本地新时拉取,避免覆盖本地未推送的编辑。
-    if (!localHas || cloudTs > localTs) {
+    // 否则仅在云端**明显**比本地新时拉取(容忍几秒时钟漂移),避免覆盖本地未推送的编辑。
+    if (!localHas || cloudTs > localTs + SYNC_TOLERANCE_MS) {
       useAppStore.getState().importData(cloud.data);
       localStorage.setItem(CHOICE_KEY, cloud.updatedAt);
       setSyncStatus("saved");

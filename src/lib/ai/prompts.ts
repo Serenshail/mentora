@@ -143,8 +143,11 @@ ${daysJson}
 2. **resources**：每天 2-3 条**点开就能学**的直接资料（官方文档小节/免费视频课/交互教程/开源讲义），严禁购物清单。
    - 每条给 title / url（完整 https://，确信存在、稳定、非广告）/ why / year / kind(official|doc|course|tutorial|book|paper|classic) / evergreen。
    - **每天至少 1 条带 url 的在线资源**；书籍（url 可为空）必须与在线资源同时出现，不得整天只有书。
-   - 来源广度：官方文档之外，主动考虑 B站(bilibili.com)系统课程/合集、GitHub 优质仓库与开源讲义(kind=repo→写成 tutorial 亦可)；视频课给合集/播放列表页而非单集。
-   - **用户偏好是硬规则，不是参考**：ctx.learnerProfile 里写了「视频」（如"偏好看视频""中文视频教程"）→ 每天至少 2 条 B站/中国大学MOOC 等视频课资源（kind=course），官方文档最多留 1 条且排其后；写了「中文」→ 中文资源优先，英文文档仅在无中文替代时出现。用户明确说过的偏好，绝不能生成一堆文档链接应付。
+   - 来源广度：官方文档之外，主动考虑 B站(bilibili.com)中文系统课（单集直链）、GitHub 优质仓库与开源讲义(kind=repo→写成 tutorial 亦可)。
+   - **视频必须是单集直链（硬规则）**：只允许 https://www.youtube.com/watch?v=<11位真实ID> 或 https://www.bilibili.com/video/BV<真实BV号>；
+     禁止搜索结果页（results?search_query、search.bilibili.com）、频道/UP主主页、合集/播放列表（/playlist?list=）、专栏/动态页。
+     ID 必须是你确信真实存在的；不确定就换一条确信的，或改用官方文档小节——宁可不给视频，也不许臆造。
+   - **用户偏好是硬规则，不是参考**：ctx.learnerProfile 里写了「视频」（如"偏好看视频""中文视频教程"）→ 每天至少 2 条 B站/中国大学MOOC 等视频课资源（kind=course，同样必须是上一条规则的单集直链），官方文档最多留 1 条且排其后；写了「中文」→ 中文资源优先，英文文档仅在无中文替代时出现。用户明确说过的偏好，绝不能生成一堆文档链接应付。
    - 时效：优先当前主版本官方文档与近 2 年教程；老而经典者标 kind=classic + evergreen=true 且排到最后。
 3. **method**：≤ 120 字，写清怎么学，并注明画像适配（时段碎片→拆 2-4 个可独立完成的小块；视频型→视频优先；需外部节奏→当天给明确打卡物）。
 4. **example**：仅编程领域给 {title, description}，不写代码；非编程领域省略该字段。
@@ -366,7 +369,8 @@ const LESSON_RESOURCE_RULE = `
 
 ## 资料铁律（最高优先,违反即不合格）
 - ①「直接可学的资料」必须包含 **至少 2 条可点开的在线资源**,一律写成 Markdown 链接 [标题](https://…);只给书名/机构名而不给链接 = 不合格。
-- 在线资源优先级:官方文档具体小节 > 免费视频课/合集 > 交互教程/开源讲义。不确定具体深链时,给该领域**最稳定的官方入口**(如 docs.python.org/3/tutorial/、developer.mozilla.org、ielts.org、剑桥官方样题页、对应官方频道合集页),**绝不允许省略链接**。
+- 在线资源优先级:官方文档具体小节 > 免费视频课(单集) > 交互教程/开源讲义。不确定具体深链时,给该领域**最稳定的官方入口**(如 docs.python.org/3/tutorial/、developer.mozilla.org、ielts.org、剑桥官方样题页),**绝不允许省略链接**——但入口必须是具体页面,不允许搜索页。
+- **视频必须是单集直链**:只给 https://www.youtube.com/watch?v=<11位真实ID> 或 https://www.bilibili.com/video/BV<真实BV号>;禁止搜索结果页、频道/UP主主页、合集/播放列表(/playlist?list=)、专栏页。ID 不确定就别放视频,改给官方文档小节。
 - 书籍/纸质/付费资料只能作为「补充(线下)」另起一行列出,不计入在线资源;注明获取提示(图书馆/官方出版社/正版渠道),不贴购买链接。
 - 每条链接后用一句话说明"看哪一段/哪几个视频/做什么",让资料可执行。`;
 
@@ -1252,7 +1256,8 @@ export const RESOURCE_FIX = (bad: string, ctx: string) => `你是 Mentora 的资
 学习上下文:${ctx}
 待替换资源(JSON,含失效原因):
 ${bad}
-只输出 JSON 数组本身(以 [ 开头、] 结尾),禁止包成对象、禁止任何解释文字。每项 {"title","url","why","kind","year"},数量与输入一致、按顺序对应。URL 必须是你确信存在的官方/权威地址;禁止广告页、课程销售页、购物清单。若确实找不到可靠替代,该项 url 填 null。`;
+只输出 JSON 数组本身(以 [ 开头、] 结尾),禁止包成对象、禁止任何解释文字。每项 {"title","url","why","kind","year"},数量与输入一致、按顺序对应。URL 必须是你确信存在的官方/权威地址;禁止广告页、课程销售页、购物清单。
+视频只能给**单集直链**(youtube watch?v=<11位ID> / bilibili /video/BV…),禁止搜索页、频道页、合集/播放列表页;我们会对每条链接做 oEmbed / B站 API 实测,臆造或失效的 ID 会被直接丢弃。若确实找不到可靠替代,该项 url 填 null。`;
 
 export const GRADUATION = (ctx: string) => `你是 Mentora 的学习教练。用户刚走完一个完整学习目标（所有阶段的验收门与迁移题都过了）。现在做一次结业总结，并给下一步建议。
 
