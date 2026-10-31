@@ -86,7 +86,10 @@ export async function GET(req: NextRequest) {
     if (!file) return Response.json({ data: null });
     const { _sha, ...rest } = file;
     const body = JSON.stringify({ data: rest.data ?? rest, updatedAt: rest.updatedAt });
-    if (body.length > 1024 * 1024) {
+    // plain=1：客户端（微信小程序等）无法解压 x-gzip，显式要明文 JSON；
+    // 快照上限受 Vercel 4.5MB 响应约束，与 gzip 通道同一闸门。
+    const plain = searchParams.has("plain");
+    if (!plain && body.length > 1024 * 1024) {
       const gz = zlib.gzipSync(Buffer.from(body, "utf8"), { level: 9 });
       return new Response(gz, {
         headers: { "Content-Type": "application/x-gzip", "Cache-Control": "no-store" },
