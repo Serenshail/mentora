@@ -1,0 +1,9 @@
+.progress-track {
+  margin-top: 20rpx;
+  height: 10rpx;
+  border-radius: 999rpx;
+  background: var(--track);
+  overflow: hidden;
+}
+.progress-fill { height: 100%; border-radius: 999rpx; background: var(--accent); }
+.empty-card { border-style: dashed; }

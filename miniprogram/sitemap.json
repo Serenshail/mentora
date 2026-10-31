@@ -1,0 +1,9 @@
+{
+  "desc": "Mentora 学习教练：全站页面不允许被微信搜索索引（学习数据是隐私）",
+  "rules": [
+    {
+      "action": "disallow",
+      "page": "*"
+    }
+  ]
+}

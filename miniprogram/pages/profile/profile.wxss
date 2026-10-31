@@ -1,0 +1,22 @@
+.avatar {
+  width: 96rpx;
+  height: 96rpx;
+  border-radius: 50%;
+  background: #1a1a1a;
+  color: #fff;
+  font-size: 40rpx;
+  font-weight: 700;
+  text-align: center;
+  line-height: 96rpx;
+}
+.stat { flex: 1; text-align: center; }
+.stat-num { font-size: 38rpx; font-weight: 700; color: var(--ink); }
+.sync-line { margin-top: 14rpx; text-align: right; }
+.backend-note {
+  margin-top: 12rpx;
+  line-height: 1.6;
+  background: var(--surface-2);
+  border-radius: 14rpx;
+  padding: 14rpx 18rpx;
+}
+.about-line { margin-top: 8rpx; line-height: 1.6; }

@@ -1,0 +1,169 @@
+<import src="../../wxml/md.wxml" />
+
+<view class="page-pad safe-bottom" wx:if="{{day}}">
+  <!-- 迁移题门（判分已过、待过门） -->
+  <view wx:if="{{day.pendingUnlock}}" class="card section-gap gate-card">
+    <view class="h3">过关前，还差一道迁移题</view>
+    <view class="dim small" style="margin-top: 6rpx">本日判分已保存。作答下方迁移题，下一天才解锁。</view>
+    <view class="gate-q">{{gateQuestion || "用你自己的话，把本日核心概念讲给一个没学过的人听，并说明它在什么情况下不适用。"}}</view>
+    <textarea
+      class="textarea"
+      placeholder="凭记忆作答（这不是评分，是帮你把知识焊牢）"
+      value="{{gateAnswer}}"
+      bindinput="onGateInput"
+      maxlength="2000"
+    ></textarea>
+    <button
+      class="btn btn-accent btn-block gate-btn {{gateAnswer ? '' : 'disabled'}}"
+      bindtap="{{gateAnswer ? 'commitTransfer' : ''}}"
+    >提交，完成过关</button>
+  </view>
+
+  <!-- 今日头部 -->
+  <view class="card section-gap">
+    <view class="row wrap" style="gap: 10rpx">
+      <view class="badge {{day.status === 'passed' ? 'badge-ok' : day.status === 'skipped' ? 'badge-warn' : 'badge-accent'}}">
+        {{day.status === 'passed' ? '已通过' : day.status === 'skipped' ? '已跳过' : '今日任务'}}
+      </view>
+      <view wx:if="{{day.attempts > 0}}" class="badge badge-dim num">验收 {{day.attempts}} 次</view>
+    </view>
+    <view class="h2" style="margin-top: 14rpx">{{day.title}}</view>
+    <view class="dim small" style="margin-top: 6rpx">{{day.method}}</view>
+    <view class="kps wrap">
+      <view wx:for="{{day.kps}}" wx:key="*this" class="badge badge-dim">◆ {{item}}</view>
+    </view>
+  </view>
+
+  <!-- 目录占位 -->
+  <view wx:if="{{day.stub}}" class="card section-gap">
+    <view class="h3">这一天的详情还没展开</view>
+    <view class="dim small" style="margin-top: 8rpx">阶段目录已就位，详情（资料/方法/验收）在网页端学到那天会自动展开，之后这里同步可学。</view>
+  </view>
+
+  <!-- 讲义 -->
+  <view wx:if="{{!day.stub}}" class="card section-gap">
+    <view class="row-between">
+      <view class="h3">今日讲义</view>
+      <view wx:if="{{lessonBlocks.length && !readOnly}}" class="btn btn-ghost btn-sm" bindtap="genLesson">重新生成</view>
+    </view>
+
+    <block wx:if="{{lessonBlocks.length}}">
+      <view class="lesson-body">
+        <template is="md-blocks" data="{{blocks: lessonBlocks}}" />
+      </view>
+      <view wx:if="{{links.length}}" class="lesson-links" bindtap="copyAllLinks" hover-class="btn-tap">
+        <text class="tiny accent-text">本讲义含 {{links.length}} 条链接，点此复制全部（去浏览器打开）</text>
+      </view>
+    </block>
+
+    <view wx:else class="lesson-gen">
+      <view class="dim small" style="margin-top: 10rpx">讲义按 6 段教学模板生成：资料 → 知识点 → 完整示例 → 逐行讲解 → 变体 → 验收。</view>
+      <button
+        class="btn btn-primary btn-block {{lessonBusy || readOnly ? 'disabled' : ''}}"
+        style="margin-top: 20rpx"
+        bindtap="{{lessonBusy || readOnly ? '' : 'genLesson'}}"
+      >{{lessonBusy ? "正在生成…" : "生成今日讲义"}}</button>
+      <view wx:if="{{lessonBusy}}" class="row" style="margin-top: 16rpx; gap: 10rpx">
+        <view class="cursor-blink"></view>
+        <text class="thinking">模型正在写，长文约 40-90 秒，别关页面</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 资料 -->
+  <view wx:if="{{resources.length}}" class="card section-gap">
+    <view class="h3" style="margin-bottom: 8rpx">资料</view>
+    <view wx:for="{{resources}}" wx:key="_i" class="res-row">
+      <view class="flex-1">
+        <view class="row" style="gap: 10rpx">
+          <view class="badge badge-dim">{{item.kindLabel}}</view>
+          <view class="res-title">{{item.title}}</view>
+        </view>
+        <view class="tiny dim3" style="margin-top: 4rpx">{{item.why}}</view>
+      </view>
+      <view wx:if="{{item.url}}" class="btn btn-outline btn-sm" data-url="{{item.url}}" catchtap="copyLink">复制链接</view>
+    </view>
+  </view>
+
+  <!-- 答疑 -->
+  <view class="card section-gap">
+    <view class="h3" style="margin-bottom: 8rpx">看不懂？问教练</view>
+    <view wx:if="{{qaView.length === 0 && !qaBusy}}" class="dim small" style="margin: 6rpx 0">卡在哪个概念就直接问，教练带着讲义答。</view>
+    <view class="qa-list">
+      <view wx:for="{{qaView}}" wx:key="index" class="qa-row {{item.role === 'user' ? 'qa-right' : ''}}">
+        <view class="bubble {{item.role === 'user' ? 'bubble-user' : 'bubble-ai'}}">{{item.content}}</view>
+      </view>
+      <view wx:if="{{qaBusy}}" class="qa-row">
+        <view class="bubble bubble-ai">
+          <text>{{qaStream}}</text>
+          <view class="cursor-blink"></view>
+        </view>
+      </view>
+    </view>
+    <view class="qa-composer">
+      <input
+        class="input qa-input"
+        placeholder="问一个具体的问题…"
+        value="{{qaInput}}"
+        confirm-hold
+        bindinput="onQaInput"
+        bindconfirm="sendQa"
+        disabled="{{qaBusy}}"
+      />
+      <button class="btn btn-primary btn-sm {{qaBusy || !qaInput ? 'disabled' : ''}}" bindtap="{{qaBusy || !qaInput ? '' : 'sendQa'}}">发送</button>
+    </view>
+  </view>
+
+  <!-- 验收 -->
+  <view wx:if="{{!day.stub && !readOnly && quizMode === 'learn'}}" class="card section-gap">
+    <view class="h3">验收</view>
+    <view class="dim small" style="margin-top: 8rpx">讲义读完、示例跑通，就来过验收。判分以讲义为参照物。</view>
+    <button class="btn btn-accent btn-block" style="margin-top: 20rpx" bindtap="startQuiz">开始验收</button>
+    <view class="skip-zone">
+      <input class="input skip-input" placeholder="学不会也可以跳过：输入「跳过」确认" value="{{skipText}}" bindinput="onSkipInput" />
+      <button class="btn btn-ghost btn-sm {{skipText === '跳过' ? '' : 'disabled'}}" bindtap="forceSkip">跳过这一天</button>
+    </view>
+  </view>
+
+  <view wx:if="{{quizMode === 'quiz'}}" class="card section-gap">
+    <view class="h3">验收 · {{acceptance.length}} 题</view>
+    <view class="dim small" style="margin-top: 6rpx">每一条都要回答，写「不知道」也比空着诚实。</view>
+    <view wx:for="{{acceptance}}" wx:key="id" class="acc-item">
+      <view class="row" style="gap: 10rpx">
+        <view class="badge badge-ink">{{item.kind === 'explain' ? '讲解' : item.kind === 'apply' ? '实操' : item.kind === 'oral' ? '口述' : item.kind === 'essay' ? '短文' : '实战'}}</view>
+      </view>
+      <view class="acc-q">{{item.question}}</view>
+      <textarea
+        class="textarea"
+        placeholder="凭记忆作答，别翻讲义"
+        value="{{answers[item.id] || ''}}"
+        data-id="{{item.id}}"
+        bindinput="onAnswer"
+        maxlength="4000"
+      ></textarea>
+    </view>
+    <button
+      class="btn btn-accent btn-block {{canSubmitQuiz && !grading ? '' : 'disabled'}}"
+      style="margin-top: 24rpx"
+      bindtap="{{canSubmitQuiz && !grading ? 'submitQuiz' : ''}}"
+    >{{grading ? "判分中…" : "提交评分"}}</button>
+  </view>
+
+  <view wx:if="{{quizMode === 'result' && grade}}" class="card section-gap">
+    <view class="row" style="gap: 12rpx">
+      <view class="h3">判分结果</view>
+      <view class="badge {{grade.overall === 'pass' ? 'badge-ok' : 'badge-bad'}}">{{grade.overall === 'pass' ? '通过' : '未通过'}}</view>
+    </view>
+    <view wx:if="{{grade.summary}}" class="dim small result-summary">{{grade.summary}}</view>
+    <view wx:for="{{grade.items}}" wx:key="itemId" class="grade-item">
+      <view class="row-between">
+        <view class="badge badge-{{item.verdictTone}}">{{item.verdictLabel}}</view>
+      </view>
+      <view class="acc-q">{{item.question}}</view>
+      <view class="grade-fb">{{item.feedback}}</view>
+      <view wx:if="{{item.evidence}}" class="grade-ev dim3 tiny">依据：{{item.evidence}}</view>
+    </view>
+    <view wx:if="{{grade.reviewAdvice}}" class="dim small" style="margin-top: 16rpx">复习建议：{{grade.reviewAdvice}}</view>
+    <button class="btn btn-outline btn-block" style="margin-top: 24rpx" bindtap="backToLearn">返回</button>
+  </view>
+</view>

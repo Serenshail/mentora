@@ -1,0 +1,92 @@
+<import src="../../wxml/md.wxml" />
+
+<view class="page-pad safe-bottom" wx:if="{{book}}">
+  <!-- 书籍头 + 章节路线 -->
+  <view class="card">
+    <view class="row-between" bindtap="toggleChapters" hover-class="btn-tap">
+      <view class="flex-1">
+        <view class="h2">{{book.title}}</view>
+        <view class="dim small" wx:if="{{book.author}}">{{book.author}}</view>
+      </view>
+      <view class="badge badge-accent" wx:if="{{chapter}}">第 {{chapter.title}}</view>
+      <view class="cell-arrow">{{showChapters ? '▴' : '▾'}}</view>
+    </view>
+    <view wx:if="{{showChapters}}" class="chapter-list">
+      <view
+        wx:for="{{chapters}}"
+        wx:key="id"
+        class="chapter-row {{item.status === 'done' ? 'chapter-done' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="pickChapter"
+        hover-class="btn-tap"
+      >
+        <text class="num dim3">{{item.index}}.</text>
+        <text class="chapter-title">{{item.title}}</text>
+        <view class="badge {{item.status === 'done' ? 'badge-ok' : 'badge-dim'}}">
+          {{item.status === 'done' ? '读完' : '待读'}}
+        </view>
+      </view>
+    </view>
+    <view wx:if="{{chapter}}" class="chapter-focus">
+      <view class="tiny dim3">带读问题</view>
+      <view class="small" style="font-weight: 600">{{chapter.focusQuestion}}</view>
+      <view wx:if="{{chapter.coreIdea}}" class="tiny dim3" style="margin-top: 6rpx">核心论点：{{chapter.coreIdea}}</view>
+    </view>
+  </view>
+
+  <!-- 对话 -->
+  <view class="chat-zone">
+    <view wx:for="{{chatView}}" wx:key="index" class="chat-row {{item.role === 'user' ? 'chat-right' : ''}}">
+      <view wx:if="{{item.role === 'user'}}" class="bubble bubble-user">{{item.content}}</view>
+      <view wx:else class="card-flat ai-card">
+        <template is="md-blocks" data="{{blocks: item.blocks}}" />
+      </view>
+    </view>
+    <view wx:if="{{busy}}" class="chat-row">
+      <view class="card-flat ai-card">
+        <template is="md-blocks" data="{{blocks: streamBlocks}}" />
+        <view class="row" style="gap: 10rpx; margin-top: 8rpx">
+          <view class="cursor-blink"></view>
+          <text class="thinking">{{mode.label}}模式正在{{mode.id === 'socratic' ? '提问' : mode.id === 'feynman' ? '听你讲' : mode.id === 'collision' ? '抬杠' : mode.id === 'close-read' ? '带读' : '检验'}}…</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 模式选择（输入框上方，与 Web 交互一致） -->
+  <view class="composer-zone">
+    <view wx:if="{{showModes}}" class="mode-menu">
+      <view
+        wx:for="{{modes}}"
+        wx:key="id"
+        class="mode-item"
+        data-id="{{item.id}}"
+        bindtap="pickMode"
+        hover-class="btn-tap"
+      >
+        <view class="row-between">
+          <view class="mode-name {{mode.id === item.id ? 'accent-text' : ''}}">{{item.label}}</view>
+          <view wx:if="{{mode.id === item.id}}" class="accent-text">✓</view>
+        </view>
+        <view class="tiny dim3" style="margin-top: 4rpx">{{item.hint}}</view>
+      </view>
+    </view>
+    <view class="composer">
+      <button class="btn btn-outline btn-sm mode-btn" bindtap="toggleModes">{{mode.label}} ▾</button>
+      <input
+        class="input composer-input"
+        placeholder="说点什么…"
+        value="{{input}}"
+        confirm-hold
+        bindinput="onInput"
+        bindconfirm="send"
+        disabled="{{busy}}"
+      />
+      <button class="btn btn-primary btn-sm {{input && !busy ? '' : 'disabled'}}" bindtap="{{input && !busy ? 'send' : ''}}">发送</button>
+    </view>
+  </view>
+</view>
+
+<view wx:else class="empty">
+  <view class="empty-title">书不存在</view>
+</view>

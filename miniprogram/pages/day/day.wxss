@@ -1,0 +1,57 @@
+.gate-card { border-color: rgba(4, 120, 87, 0.3); background: rgba(4, 120, 87, 0.03); }
+.gate-q {
+  margin: 18rpx 0;
+  font-size: 28rpx;
+  line-height: 1.7;
+  color: var(--ink);
+  font-weight: 600;
+}
+.gate-btn { margin-top: 20rpx; }
+.kps { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 18rpx; }
+.lesson-body { margin-top: 6rpx; }
+.lesson-links {
+  margin-top: 18rpx;
+  padding: 16rpx 20rpx;
+  background: var(--accent-soft);
+  border-radius: 16rpx;
+}
+.lesson-gen { padding-bottom: 6rpx; }
+.res-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid var(--border);
+}
+.res-row:last-child { border-bottom: none; }
+.res-title {
+  font-size: 27rpx;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1;
+  min-width: 0;
+}
+.qa-list { margin: 12rpx 0; }
+.qa-row { display: flex; margin: 14rpx 0; }
+.qa-right { justify-content: flex-end; }
+.qa-composer { display: flex; gap: 14rpx; margin-top: 16rpx; align-items: center; }
+.qa-input { flex: 1; }
+.skip-zone { margin-top: 22rpx; padding-top: 20rpx; border-top: 1rpx solid var(--border); }
+.skip-input { margin-bottom: 14rpx; font-size: 24rpx; }
+.acc-item { margin-top: 26rpx; }
+.acc-q {
+  margin: 12rpx 0;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.65;
+}
+.result-summary { margin-top: 10rpx; line-height: 1.7; }
+.grade-item {
+  margin-top: 22rpx;
+  padding: 20rpx;
+  background: var(--surface-2);
+  border-radius: 18rpx;
+}
+.grade-fb { font-size: 26rpx; line-height: 1.65; color: var(--ink); margin-top: 8rpx; }
+.grade-ev { margin-top: 8rpx; line-height: 1.5; }

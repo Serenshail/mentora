@@ -1,0 +1,42 @@
+<view class="page-pad safe-bottom" wx:if="{{goal}}">
+  <view class="card">
+    <view class="h2">{{goal.topic}}</view>
+    <view class="dim small" style="margin-top: 8rpx">{{goal.direction}}</view>
+    <view wx:if="{{goal.summary}}" class="goal-summary dim">{{goal.summary}}</view>
+    <view wx:if="{{goal.graduated}}" class="badge badge-ok" style="margin-top: 16rpx">已结业</view>
+  </view>
+
+  <view wx:for="{{phases}}" wx:for-item="ph" wx:key="id" wx:for-index="pIdx" class="card section-gap">
+    <view class="row-between" data-idx="{{pIdx}}" bindtap="togglePhase" hover-class="btn-tap">
+      <view class="flex-1">
+        <view class="row" style="gap: 12rpx">
+          <view class="h3">{{ph.title}}</view>
+          <view class="badge badge-{{ph.tone}}">{{ph.statusLabel}}</view>
+        </view>
+        <view class="dim small phase-outcome">{{ph.outcome}}</view>
+      </view>
+      <view class="cell-arrow">{{ph.open ? '▴' : '▾'}}</view>
+    </view>
+
+    <view wx:if="{{ph.open}}">
+      <view
+        wx:for="{{ph.days}}"
+        wx:for-item="d"
+        wx:key="id"
+        class="day-row {{d.status === 'locked' ? 'day-locked' : ''}}"
+        data-id="{{d.id}}"
+        data-status="{{d.status}}"
+        bindtap="openDay"
+        hover-class="{{d.status === 'locked' ? '' : 'btn-tap'}}"
+      >
+        <view class="day-dot dot dot-{{d.tone}}"></view>
+        <view class="flex-1">
+          <view class="day-title">{{d.title}}</view>
+          <view class="tiny dim3" wx:if="{{d.stub}}">目录占位 · 学到那天自动展开</view>
+          <view class="tiny" wx:elif="{{d.gated}}" style="color: var(--warn)">待迁移题过关解锁下一天</view>
+        </view>
+        <view class="badge badge-{{d.tone}}">{{d.statusLabel}}</view>
+      </view>
+    </view>
+  </view>
+</view>

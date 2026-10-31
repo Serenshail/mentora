@@ -1,0 +1,18 @@
+.goal-summary {
+  margin-top: 18rpx;
+  padding-top: 18rpx;
+  border-top: 1rpx solid var(--border);
+  font-size: 26rpx;
+  line-height: 1.7;
+}
+.phase-outcome { margin-top: 6rpx; }
+.day-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 22rpx 0;
+  border-bottom: 1rpx solid var(--border);
+}
+.day-row:last-child { border-bottom: none; }
+.day-locked { opacity: 0.45; }
+.day-title { font-size: 28rpx; font-weight: 600; color: var(--ink); }

@@ -1,0 +1,53 @@
+<import src="../../wxml/md.wxml" />
+
+<view class="page-pad safe-bottom" wx:if="{{note}}">
+  <view class="h2 note-h">{{note.title}}</view>
+  <view class="row wrap" style="gap: 10rpx; margin-top: 12rpx">
+    <view class="badge badge-dim">{{note.domain}}</view>
+    <view wx:if="{{masteryLabel !== '未测'}}" class="badge badge-accent">{{masteryLabel}}</view>
+    <view wx:if="{{note.nextReviewAt}}" class="badge badge-dim">复习 {{note.nextReviewAt}}</view>
+    <view wx:for="{{note.tags}}" wx:key="*this" class="badge badge-dim">#{{item}}</view>
+  </view>
+
+  <view class="card section-gap note-body">
+    <view wx:if="{{!blocks.length}}" class="dim small">这篇笔记还没有正文。</view>
+    <template is="md-blocks" data="{{blocks}}" />
+    <view wx:if="{{links.length}}" class="note-links" bindtap="noop">
+      <text class="tiny dim3">本篇含 {{links.length}} 条外链，长按链接文字可全选复制</text>
+    </view>
+  </view>
+
+  <view wx:if="{{outLinks.length}}" class="card section-gap">
+    <view class="h3" style="margin-bottom: 6rpx">出链 · {{outLinks.length}}</view>
+    <view
+      wx:for="{{outLinks}}"
+      wx:key="id"
+      class="cell"
+      data-id="{{item.id}}"
+      bindtap="openLinked"
+      hover-class="btn-tap"
+    >
+      <view class="flex-1 accent-text">{{item.title}}</view>
+      <view class="cell-arrow">›</view>
+    </view>
+  </view>
+
+  <view wx:if="{{backLinks.length}}" class="card section-gap">
+    <view class="h3" style="margin-bottom: 6rpx">反向链接 · {{backLinks.length}}</view>
+    <view
+      wx:for="{{backLinks}}"
+      wx:key="id"
+      class="cell"
+      data-id="{{item.id}}"
+      bindtap="openLinked"
+      hover-class="btn-tap"
+    >
+      <view class="flex-1 accent-text">{{item.title}}</view>
+      <view class="cell-arrow">›</view>
+    </view>
+  </view>
+</view>
+
+<view wx:else class="empty">
+  <view class="empty-title">笔记不存在</view>
+</view>

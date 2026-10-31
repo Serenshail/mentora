@@ -1,0 +1,40 @@
+<!-- 共享 Markdown 渲染模板：import 后 <template is="md-blocks" data="{{blocks}}"/> 使用。
+     代码块复制依赖页面上的 copyCode 处理函数。 -->
+<template name="md-blocks">
+  <block wx:for="{{blocks}}" wx:key="_i">
+    <view wx:if="{{item.t === 'h'}}" class="md-h md-h{{item.level}}">
+      <rich-text nodes="{{item.nodes}}"></rich-text>
+    </view>
+    <view wx:elif="{{item.t === 'p'}}" class="md-p">
+      <rich-text nodes="{{item.nodes}}"></rich-text>
+    </view>
+    <view wx:elif="{{item.t === 'quote'}}" class="md-quote">
+      <rich-text nodes="{{item.nodes}}"></rich-text>
+    </view>
+    <view wx:elif="{{item.t === 'hr'}}" class="md-hr"></view>
+    <view wx:elif="{{item.t === 'list'}}" class="md-list">
+      <view wx:for="{{item.items}}" wx:for-item="li" wx:key="_i" class="md-li">
+        <text class="md-li-mark">{{item.ordered ? (li._i + 1) + '.' : '·'}}</text>
+        <view class="md-li-body">
+          <rich-text nodes="{{li.nodes}}"></rich-text>
+        </view>
+      </view>
+    </view>
+    <view wx:elif="{{item.t === 'table'}}" class="md-table">
+      <view wx:for="{{item.rows}}" wx:for-item="row" wx:key="_i" class="md-tr">
+        <view wx:for="{{row.cells}}" wx:for-item="cell" wx:key="_i" class="md-td">
+          <rich-text nodes="{{cell.nodes}}"></rich-text>
+        </view>
+      </view>
+    </view>
+    <view wx:elif="{{item.t === 'code'}}" class="md-code">
+      <view class="md-code-head">
+        <text class="md-code-lang">{{item.lang || '代码'}}</text>
+        <text class="md-code-copy" catchtap="copyCode" data-code="{{item.text}}">复制</text>
+      </view>
+      <scroll-view scroll-x class="md-code-scroll">
+        <text class="md-code-text" user-select>{{item.text}}</text>
+      </scroll-view>
+    </view>
+  </block>
+</template>

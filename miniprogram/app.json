@@ -1,0 +1,64 @@
+{
+  "pages": [
+    "pages/overview/overview",
+    "pages/login/login",
+    "pages/learn/learn",
+    "pages/goal/goal",
+    "pages/day/day",
+    "pages/brain/brain",
+    "pages/note/note",
+    "pages/review/review",
+    "pages/read/read",
+    "pages/book/book",
+    "pages/council/council",
+    "pages/profile/profile"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#f5f5f7",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "Mentora",
+    "backgroundColor": "#f5f5f7",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#86868b",
+    "selectedColor": "#5b54e6",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/overview/overview",
+        "text": "总览",
+        "iconPath": "images/tab/home.png",
+        "selectedIconPath": "images/tab/home-on.png"
+      },
+      {
+        "pagePath": "pages/learn/learn",
+        "text": "学习",
+        "iconPath": "images/tab/learn.png",
+        "selectedIconPath": "images/tab/learn-on.png"
+      },
+      {
+        "pagePath": "pages/brain/brain",
+        "text": "大脑",
+        "iconPath": "images/tab/brain.png",
+        "selectedIconPath": "images/tab/brain-on.png"
+      },
+      {
+        "pagePath": "pages/read/read",
+        "text": "读书",
+        "iconPath": "images/tab/read.png",
+        "selectedIconPath": "images/tab/read-on.png"
+      },
+      {
+        "pagePath": "pages/profile/profile",
+        "text": "我的",
+        "iconPath": "images/tab/me.png",
+        "selectedIconPath": "images/tab/me-on.png"
+      }
+    ]
+  },
+  "lazyCodeLoading": "requiredComponents",
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,33 @@
+.login-wrap {
+  min-height: 100vh;
+  padding: 0 48rpx calc(60rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.brand {
+  font-size: 76rpx;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  text-align: center;
+}
+.brand-sub {
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 24rpx;
+  margin: 8rpx 0 56rpx;
+}
+.login-card { padding: 44rpx 36rpx; }
+.login-error {
+  margin-top: 26rpx;
+  color: var(--bad);
+  font-size: 25rpx;
+  line-height: 1.5;
+}
+.login-btn { margin-top: 40rpx; }
+.login-foot {
+  text-align: center;
+  margin-top: 44rpx;
+}

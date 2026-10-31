@@ -1,0 +1,92 @@
+<view class="page-pad safe-bottom">
+  <!-- 账号 -->
+  <view class="card">
+    <view class="row" style="gap: 20rpx">
+      <view class="avatar">{{user ? user.name[0] : "?"}}</view>
+      <view class="flex-1">
+        <view class="h3">{{user ? user.name : "未登录"}}</view>
+        <view class="dim small">{{user ? user.email : ""}}</view>
+      </view>
+    </view>
+    <view class="row-between" style="margin-top: 22rpx">
+      <view class="stat">
+        <view class="stat-num num">{{counts.goals}}</view>
+        <view class="tiny dim3">目标</view>
+      </view>
+      <view class="stat">
+        <view class="stat-num num">{{counts.notes}}</view>
+        <view class="tiny dim3">笔记</view>
+      </view>
+      <view class="stat">
+        <view class="stat-num num">{{counts.books}}</view>
+        <view class="tiny dim3">书</view>
+      </view>
+      <view class="stat">
+        <view class="stat-num num">{{counts.sessions}}</view>
+        <view class="tiny dim3">会话</view>
+      </view>
+    </view>
+    <view class="sync-line tiny dim3" wx:if="{{sync}}">{{sync}}</view>
+  </view>
+
+  <!-- 数据 -->
+  <view class="card section-gap">
+    <view class="h3" style="margin-bottom: 6rpx">数据</view>
+    <view class="cell" bindtap="pullNow" hover-class="btn-tap">
+      <view class="flex-1">
+        <view class="cell-title">从云端恢复</view>
+        <view class="cell-sub">以云端快照为准（改动未推送时会先保护本机）</view>
+      </view>
+      <view class="cell-arrow">›</view>
+    </view>
+    <view class="cell" bindtap="pushNow" hover-class="btn-tap">
+      <view class="flex-1">
+        <view class="cell-title">推送到云端</view>
+        <view class="cell-sub">改动后 2.5 秒自动推送，这是手动兜底</view>
+      </view>
+      <view class="cell-arrow">›</view>
+    </view>
+    <view class="cell" bindtap="copyWebUrl" hover-class="btn-tap">
+      <view class="flex-1">
+        <view class="cell-title">网页版</view>
+        <view class="cell-sub">完整功能：新建目标引导 / 第二大脑编辑 / Obsidian 导入</view>
+      </view>
+      <view class="cell-arrow">复制网址 ›</view>
+    </view>
+  </view>
+
+  <!-- 后端 -->
+  <view class="card section-gap">
+    <view class="h3">后端</view>
+    <view class="dim small" style="margin: 6rpx 0 10rpx">当前：{{baseLabel}}。切换后需要重新登录。</view>
+    <view class="cell" data-id="prod" bindtap="switchBase" hover-class="btn-tap">
+      <view class="flex-1">
+        <view class="cell-title">{{baseId === 'prod' ? '✓ ' : ''}}官方部署（Vercel）</view>
+        <view class="cell-sub">开发者工具里走代理可达</view>
+      </view>
+    </view>
+    <view class="cell" data-id="tunnel" bindtap="switchBase" hover-class="btn-tap">
+      <view class="flex-1">
+        <view class="cell-title">{{baseId === 'tunnel' ? '✓ ' : ''}}本机隧道（UUMit）</view>
+        <view class="cell-sub">真机预览用；需电脑上服务在跑</view>
+      </view>
+    </view>
+    <view class="cell" data-id="local" bindtap="switchBase" hover-class="btn-tap">
+      <view class="flex-1">
+        <view class="cell-title">{{baseId === 'local' ? '✓ ' : ''}}本机开发（localhost:3000）</view>
+        <view class="cell-sub">仅开发者工具；需勾选「不校验合法域名」</view>
+      </view>
+    </view>
+    <view class="backend-note tiny dim3">
+      大陆真机直连 Vercel 不通：真机预览请切「本机隧道」。正式发布需要一个 HTTPS + 备案的域名。
+    </view>
+  </view>
+
+  <!-- 关于 -->
+  <view class="card section-gap">
+    <view class="h3" style="margin-bottom: 6rpx">关于</view>
+    <view class="dim small about-line">Mentora 小程序 · 第一版</view>
+    <view class="dim small about-line">与网页版同一账号、同一份云端数据；学习 → 验收 → 复习的完整闭环已就位。</view>
+    <button class="btn btn-danger btn-block" style="margin-top: 24rpx" bindtap="logout">退出登录</button>
+  </view>
+</view>

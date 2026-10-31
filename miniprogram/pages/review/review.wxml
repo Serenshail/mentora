@@ -1,0 +1,85 @@
+<view class="page-pad safe-bottom">
+  <!-- 开始 -->
+  <view wx:if="{{phase === 'idle'}}" class="card">
+    <view class="h2">复习</view>
+    <view class="dim small" style="margin-top: 10rpx">
+      到期 <text class="num accent-text" style="font-weight: 700">{{queueCount}}</text> 条。
+      复习官只从笔记原文出题、判卷必须引用原文——「感觉记住了」不算。
+    </view>
+    <button
+      class="btn btn-accent btn-block {{queueCount ? '' : 'disabled'}}"
+      style="margin-top: 28rpx"
+      bindtap="{{queueCount ? 'start' : ''}}"
+    >开始这轮复习</button>
+  </view>
+
+  <!-- 出题中 -->
+  <view wx:if="{{phase === 'ask'}}" class="card">
+    <view class="row" style="gap: 10rpx">
+      <view class="badge badge-accent">{{noteTitle}}</view>
+    </view>
+    <view class="dim tiny" style="margin-top: 8rpx">{{noteDomain}}</view>
+    <view class="review-q">{{question}}</view>
+    <view wx:if="{{questionBusy}}" class="row" style="gap: 10rpx">
+      <view class="cursor-blink"></view>
+      <text class="thinking">复习官在翻你的笔记出题…</text>
+    </view>
+  </view>
+
+  <!-- 作答 -->
+  <view wx:if="{{phase === 'answer'}}" class="card">
+    <view class="row" style="gap: 10rpx">
+      <view class="badge badge-accent">{{noteTitle}}</view>
+      <view class="badge badge-dim num">剩余 {{queueCount}}</view>
+    </view>
+    <view class="review-q">{{question}}</view>
+    <textarea
+      class="textarea review-answer"
+      placeholder="合上笔记，凭记忆写。写不出来就是没记住——这正是复习的价值"
+      value="{{answer}}"
+      bindinput="onAnswer"
+      maxlength="4000"
+    ></textarea>
+    <button
+      class="btn btn-accent btn-block {{answer && !gradeBusy ? '' : 'disabled'}}"
+      style="margin-top: 20rpx"
+      bindtap="{{answer && !gradeBusy ? 'submit' : ''}}"
+    >{{gradeBusy ? "判卷中…" : "提交，判卷"}}</button>
+  </view>
+
+  <!-- 判卷结果 -->
+  <view wx:if="{{phase === 'graded' && verdict}}" class="card">
+    <view class="row" style="gap: 12rpx">
+      <view class="h3">{{noteTitle}}</view>
+      <view class="badge {{verdict.verdict === 'pass' ? 'badge-ok' : 'badge-bad'}}">
+        {{verdict.verdict === 'pass' ? '通过' : '没过'}}
+      </view>
+    </view>
+    <view class="grade-fb">{{verdict.feedback}}</view>
+    <view wx:if="{{verdict.evidence}}" class="grade-ev dim3 tiny">依据：{{verdict.evidence}}</view>
+    <button class="btn btn-primary btn-block" style="margin-top: 24rpx" bindtap="next">下一条</button>
+  </view>
+
+  <!-- 收尾 -->
+  <view wx:if="{{phase === 'done'}}" class="card">
+    <view class="h2">这轮复习完成</view>
+    <view class="review-stats row" style="gap: 28rpx">
+      <view>
+        <view class="review-num num">{{total}}</view>
+        <view class="tiny dim3">共 {{total}} 条</view>
+      </view>
+      <view>
+        <view class="review-num num" style="color: var(--ok)">{{correct}}</view>
+        <view class="tiny dim3">通过</view>
+      </view>
+      <view>
+        <view class="review-num num">{{minutes}}</view>
+        <view class="tiny dim3">分钟</view>
+      </view>
+    </view>
+    <view class="dim small" style="margin-top: 16rpx">
+      {{nextDate ? "下次复习：" + nextDate : "队列清空了。过几天再来。"}}
+    </view>
+    <button class="btn btn-outline btn-block" style="margin-top: 24rpx" bindtap="back">返回</button>
+  </view>
+</view>

@@ -1,0 +1,63 @@
+<view class="page-pad safe-bottom">
+  <view class="row-between" style="margin-bottom: 16rpx">
+    <view class="h1">第二大脑</view>
+    <view class="dim3 small num">{{total}} 篇 · 连接 {{linkCount}}</view>
+  </view>
+
+  <view wx:if="{{dueCount > 0}}" class="review-strip" bindtap="goReview" hover-class="btn-tap">
+    <text>待复习 <text class="num accent-text">{{dueCount}}</text> 条</text>
+    <text class="review-go">去复习 ›</text>
+  </view>
+
+  <input
+    class="input brain-search"
+    placeholder="搜标题 / 正文 / 标签"
+    value="{{query}}"
+    bindinput="onQuery"
+    confirm-type="search"
+  />
+
+  <scroll-view scroll-x class="folder-bar" wx:if="{{folders.length}}">
+    <view class="folder-row">
+      <view
+        class="badge {{activeFolder === '' ? 'badge-ink' : 'badge-dim'}}"
+        bindtap="pickFolder"
+        data-f=""
+      >全部</view>
+      <view
+        wx:for="{{folders}}"
+        wx:key="*this"
+        class="badge {{activeFolder === item ? 'badge-ink' : 'badge-dim'}}"
+        data-f="{{item}}"
+        bindtap="pickFolder"
+      >{{item}}</view>
+    </view>
+  </scroll-view>
+
+  <view wx:if="{{notes.length === 0 && !loading}}" class="empty">
+    <view class="empty-title">{{query ? "没有匹配的笔记" : "第二大脑还是空的"}}</view>
+    <view class="dim small">在网页端学习/读书时，知识点会自动沉淀到这里</view>
+  </view>
+
+  <view class="card section-gap">
+    <view
+      wx:for="{{notes}}"
+      wx:key="id"
+      class="cell"
+      data-id="{{item.id}}"
+      bindtap="openNote"
+      hover-class="btn-tap"
+    >
+      <view class="flex-1">
+        <view class="row" style="gap: 10rpx">
+          <view class="cell-title note-title">{{item.title}}</view>
+          <view wx:if="{{item.due}}" class="badge badge-warn">待复习</view>
+          <view wx:if="{{item.unresolved}}" class="badge badge-dim">未解析</view>
+        </view>
+        <view class="cell-sub note-excerpt" wx:if="{{item.excerpt}}">{{item.excerpt}}</view>
+        <view class="tiny dim3" style="margin-top: 4rpx">{{item.domain}}</view>
+      </view>
+      <view class="cell-arrow">›</view>
+    </view>
+  </view>
+</view>

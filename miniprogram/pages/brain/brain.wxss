@@ -1,0 +1,24 @@
+.review-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 26rpx;
+  font-weight: 600;
+  border-radius: 20rpx;
+  padding: 20rpx 28rpx;
+  margin-bottom: 18rpx;
+}
+.review-go { font-weight: 700; }
+.brain-search { margin-bottom: 16rpx; }
+.folder-bar { white-space: nowrap; margin-bottom: 8rpx; }
+.folder-row { display: inline-flex; gap: 12rpx; padding: 4rpx 0 12rpx; }
+.note-title { flex-shrink: 0; max-width: 420rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}

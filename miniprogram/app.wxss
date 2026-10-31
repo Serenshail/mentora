@@ -1,0 +1,261 @@
+/* ============================================================
+ * Mentora 小程序设计令牌 —— 与 Web 端同一套（globals.css 镜像）
+ * 纸面灰白、发丝边框、墨色主按钮、靛蓝强调；系统字体即品牌字体。
+ * ============================================================ */
+page {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface-2: #f4f4f5;
+  --border: rgba(0, 0, 0, 0.07);
+  --ink: #1d1d1f;
+  --ink-dim: #6e6e73;
+  --ink-3: #86868b;
+  --faint: #d2d2d7;
+  --track: #e8e8ed;
+  --accent: #5b54e6;
+  --accent-soft: rgba(91, 84, 230, 0.08);
+  --ok: #047857;
+  --ok-soft: rgba(4, 120, 87, 0.08);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.08);
+  --bad: #dc2626;
+  --bad-soft: rgba(220, 38, 38, 0.08);
+
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  font-size: 28rpx;
+  line-height: 1.6;
+  -webkit-font-optical-sizing: auto;
+}
+
+/* ---- 版式 ---- */
+.h1 { font-size: 40rpx; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
+.h2 { font-size: 34rpx; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
+.h3 { font-size: 30rpx; font-weight: 600; color: var(--ink); }
+.dim { color: var(--ink-dim); }
+.dim3 { color: var(--ink-3); }
+.small { font-size: 24rpx; }
+.tiny { font-size: 21rpx; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.num { font-variant-numeric: tabular-nums; }
+.accent-text { color: var(--accent); }
+
+/* ---- 卡片 ---- */
+.card {
+  background: var(--surface);
+  border: 1rpx solid var(--border);
+  border-radius: 36rpx;
+  padding: 32rpx;
+  box-shadow: 0 2rpx 4rpx rgba(0, 0, 0, 0.04), 0 16rpx 48rpx rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
+}
+.card-flat {
+  background: var(--surface);
+  border: 1rpx solid var(--border);
+  border-radius: 24rpx;
+  padding: 28rpx;
+  box-sizing: border-box;
+}
+.section-gap { margin-top: 24rpx; }
+.row { display: flex; align-items: center; }
+.row-between { display: flex; align-items: center; justify-content: space-between; }
+.flex-1 { flex: 1; min-width: 0; }
+.wrap { flex-wrap: wrap; }
+
+/* ---- 按钮 ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 24rpx;
+  padding: 20rpx 36rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  line-height: 1.4;
+  border: none;
+  box-sizing: border-box;
+}
+.btn::after { border: none; }
+.btn-primary { background: #1a1a1a; color: #ffffff; }
+.btn-primary.disabled { opacity: 0.4; }
+.btn-accent { background: var(--accent); color: #ffffff; }
+.btn-accent.disabled { opacity: 0.4; }
+.btn-outline {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1rpx solid var(--border);
+}
+.btn-ghost { background: transparent; color: var(--ink-dim); }
+.btn-danger { background: var(--bad-soft); color: var(--bad); }
+.btn-sm { padding: 12rpx 24rpx; font-size: 24rpx; border-radius: 18rpx; }
+.btn-block { display: flex; width: 100%; }
+.btn-tap { opacity: 0.75; }
+
+/* ---- 徽章 ---- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4rpx 16rpx;
+  border-radius: 999rpx;
+  font-size: 21rpx;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.badge-dim { background: var(--surface-2); color: var(--ink-dim); }
+.badge-accent { background: var(--accent-soft); color: var(--accent); }
+.badge-ok { background: var(--ok-soft); color: var(--ok); }
+.badge-warn { background: var(--warn-soft); color: var(--warn); }
+.badge-bad { background: var(--bad-soft); color: var(--bad); }
+.badge-ink { background: #1a1a1a; color: #ffffff; }
+
+/* ---- 表单 ---- */
+.input {
+  width: 100%;
+  background: var(--surface);
+  border: 1rpx solid var(--border);
+  border-radius: 20rpx;
+  padding: 22rpx 26rpx;
+  font-size: 28rpx;
+  color: var(--ink);
+  box-sizing: border-box;
+}
+.input-focus { border-color: rgba(91, 84, 230, 0.5); }
+.textarea {
+  width: 100%;
+  min-height: 140rpx;
+  background: var(--surface);
+  border: 1rpx solid var(--border);
+  border-radius: 20rpx;
+  padding: 22rpx 26rpx;
+  font-size: 28rpx;
+  color: var(--ink);
+  box-sizing: border-box;
+}
+.field-label { font-size: 24rpx; font-weight: 600; color: var(--ink-dim); margin-bottom: 10rpx; }
+.field-gap { margin-top: 28rpx; }
+
+/* ---- 列表 cell ---- */
+.cell {
+  display: flex;
+  align-items: center;
+  padding: 26rpx 0;
+  border-bottom: 1rpx solid var(--border);
+}
+.cell:last-child { border-bottom: none; }
+.cell-title { font-size: 29rpx; font-weight: 600; color: var(--ink); }
+.cell-sub { font-size: 23rpx; color: var(--ink-dim); margin-top: 4rpx; }
+.cell-arrow { color: var(--faint); margin-left: 12rpx; font-size: 26rpx; }
+
+/* ---- 聊天气泡（用户深色，与 Web 一致） ---- */
+.bubble {
+  max-width: 86%;
+  border-radius: 28rpx;
+  padding: 22rpx 28rpx;
+  font-size: 28rpx;
+  line-height: 1.65;
+  box-sizing: border-box;
+  word-break: break-all;
+}
+.bubble-user {
+  background: #1a1a1a;
+  color: #ffffff;
+  border-bottom-right-radius: 8rpx;
+}
+.bubble-ai {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1rpx solid var(--border);
+  border-bottom-left-radius: 8rpx;
+  box-shadow: 0 1rpx 2rpx rgba(0, 0, 0, 0.04);
+}
+
+/* ---- 状态点 ---- */
+.dot { width: 14rpx; height: 14rpx; border-radius: 50%; display: inline-block; }
+.dot-ok { background: var(--ok); }
+.dot-warn { background: var(--warn); }
+.dot-bad { background: var(--bad); }
+.dot-dim { background: var(--faint); }
+.dot-accent { background: var(--accent); }
+
+/* ---- 空态 ---- */
+.empty { padding: 120rpx 60rpx; text-align: center; color: var(--ink-3); }
+.empty-title { font-size: 30rpx; font-weight: 600; color: var(--ink-dim); margin-bottom: 12rpx; }
+
+/* ---- 思考中指示 ---- */
+.thinking { color: var(--ink-3); font-size: 24rpx; font-style: normal; }
+.cursor-blink {
+  display: inline-block;
+  width: 3rpx;
+  height: 30rpx;
+  background: var(--ink);
+  margin-left: 4rpx;
+  vertical-align: middle;
+  animation: blink-step 1s step-end infinite;
+}
+@keyframes blink-step {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ---- 页面容器 ---- */
+.page-pad { padding: 24rpx 32rpx 60rpx; }
+.safe-bottom { padding-bottom: calc(40rpx + env(safe-area-inset-bottom)); }
+
+/* ============================================================
+ * Markdown 块级样式（wxml/md.wxml 模板使用；行内样式由 md.js 内联）
+ * ============================================================ */
+.md-h { margin: 28rpx 0 14rpx; }
+.md-h1 { font-size: 36rpx; }
+.md-h2 { font-size: 33rpx; }
+.md-h3 { font-size: 30rpx; }
+.md-h4 { font-size: 29rpx; }
+.md-p { margin: 14rpx 0; font-size: 29rpx; line-height: 1.75; color: var(--ink); }
+.md-quote {
+  margin: 16rpx 0;
+  padding: 14rpx 22rpx;
+  border-left: 6rpx solid var(--faint);
+  color: var(--ink-dim);
+  font-size: 27rpx;
+  line-height: 1.7;
+  background: var(--surface-2);
+  border-radius: 0 16rpx 16rpx 0;
+}
+.md-list { margin: 12rpx 0; }
+.md-li { display: flex; margin: 8rpx 0; }
+.md-li-mark { color: var(--accent); font-weight: 700; margin-right: 14rpx; flex-shrink: 0; }
+.md-li-body { flex: 1; min-width: 0; font-size: 29rpx; line-height: 1.7; color: var(--ink); }
+.md-hr { margin: 26rpx 0; height: 1rpx; background: var(--border); }
+.md-table { margin: 16rpx 0; border: 1rpx solid var(--border); border-radius: 16rpx; overflow: hidden; }
+.md-tr { display: flex; border-bottom: 1rpx solid var(--border); }
+.md-tr:last-child { border-bottom: none; }
+.md-td { flex: 1; padding: 14rpx 18rpx; font-size: 26rpx; line-height: 1.6; min-width: 0; }
+.md-code {
+  margin: 18rpx 0;
+  background: #1a1a1a;
+  border-radius: 20rpx;
+  overflow: hidden;
+}
+.md-code-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14rpx 24rpx 0;
+}
+.md-code-lang { color: #86868b; font-size: 21rpx; }
+.md-code-copy {
+  color: #aeaeb2;
+  font-size: 22rpx;
+  padding: 6rpx 18rpx;
+  border: 1rpx solid rgba(255, 255, 255, 0.18);
+  border-radius: 999rpx;
+}
+.md-code-scroll { padding: 14rpx 24rpx 22rpx; }
+.md-code-text {
+  color: #e8e8ed;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 24rpx;
+  line-height: 1.6;
+  white-space: pre;
+}
