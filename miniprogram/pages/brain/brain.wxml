@@ -1,42 +1,47 @@
 <view class="page">
-  <view class="brain-head">
-    <view class="title">大脑</view>
-    <view class="micro num">{{total}} 篇 · {{linkCount}} 连接</view>
+  <view class="page-head">
+    <view class="between">
+      <view class="page-head-title">第二大脑</view>
+      <text class="meta num">{{total}} 篇 · 连接 {{linkCount}}</text>
+    </view>
   </view>
 
-  <view wx:if="{{dueCount > 0}}" class="due" bindtap="goReview" hover-class="tap-dim">
-    <view class="dot dot-warn"></view>
-    <text class="flex-1">{{dueCount}} 条到期</text>
-    <text class="link-action">复习</text>
+  <view wx:if="{{dueCount > 0}}" class="card review" bindtap="goReview" hover-class="tap-dim">
+    <view class="flex-1">
+      <view class="h3">待复习 <text class="accent-text num">{{dueCount}}</text> 条</view>
+      <view class="sub" style="margin-top: 6rpx">复习官从原文出题，必须引原文才算过</view>
+    </view>
+    <view class="btn btn-accent btn-sm">复习</view>
   </view>
 
-  <view class="search">
-    <input class="input-pill" placeholder="搜标题、正文、标签" placeholder-class="ph" value="{{query}}" bindinput="onQuery" confirm-type="search" />
+  <view style="margin-top: 24rpx">
+    <input class="input" placeholder="搜标题、正文、标签" placeholder-class="ph" value="{{query}}" bindinput="onQuery" confirm-type="search" />
   </view>
 
   <scroll-view scroll-x class="folders" wx:if="{{folders.length}}">
     <view class="folder-row">
-      <view class="folder {{activeFolder === '' ? 'folder-on' : ''}}" bindtap="pickFolder" data-f="">全部</view>
-      <view wx:for="{{folders}}" wx:key="*this" class="folder {{activeFolder === item ? 'folder-on' : ''}}" data-f="{{item}}" bindtap="pickFolder">{{item}}</view>
+      <view class="badge {{activeFolder === '' ? 'badge-ink' : 'badge-dim'}}" bindtap="pickFolder" data-f="">全部</view>
+      <view wx:for="{{folders}}" wx:key="*this" class="badge {{activeFolder === item ? 'badge-ink' : 'badge-dim'}}" data-f="{{item}}" bindtap="pickFolder">{{item}}</view>
     </view>
   </scroll-view>
 
-  <view wx:if="{{notes.length === 0 && !loading}}" class="blank">
-    <view class="blank-title">{{query ? "没有匹配" : "还是空的"}}</view>
-    <view class="blank-sub">{{query ? "换个词试试" : "学习与读书时，知识点会自动落在这里"}}</view>
+  <view wx:if="{{notes.length === 0 && !loading}}" class="card empty">
+    <view class="empty-title">{{query ? "没有匹配的笔记" : "第二大脑还是空的"}}</view>
+    <view class="empty-sub">{{query ? "换个词试试" : "学习与读书时，知识点会自动沉淀到这里"}}</view>
   </view>
 
-  <view wx:if="{{notes.length}}" style="margin-top: 12rpx">
-    <view wx:for="{{notes}}" wx:key="id" class="note-line" data-id="{{item.id}}" bindtap="openNote" hover-class="tap-dim">
+  <view wx:if="{{notes.length}}" class="card card-tight notes">
+    <view wx:for="{{notes}}" wx:key="id" class="note" data-id="{{item.id}}" bindtap="openNote" hover-class="tap-dim">
       <view class="flex-1">
-        <view class="note-title-row">
+        <view class="row gap-12">
           <text class="note-title">{{item.title}}</text>
-          <view wx:if="{{item.due}}" class="note-due"></view>
+          <view wx:if="{{item.due}}" class="badge badge-warn">待复习</view>
+          <view wx:if="{{item.unresolved}}" class="badge badge-dim">未解析</view>
         </view>
         <view wx:if="{{item.excerpt}}" class="note-excerpt">{{item.excerpt}}</view>
-        <view class="note-meta">{{item.domain}}</view>
+        <view class="meta" style="margin-top: 6rpx">{{item.domain}}</view>
       </view>
-      <text class="chev">›</text>
+      <view class="chev">›</view>
     </view>
   </view>
 </view>

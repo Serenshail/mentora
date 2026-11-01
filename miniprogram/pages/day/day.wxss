@@ -1,141 +1,57 @@
-.day-head { padding: 8rpx 36rpx 30rpx; }
-.day-title-main {
-  margin-top: 20rpx;
-  font-size: 44rpx;
-  font-weight: 700;
-  letter-spacing: -1.4rpx;
-  line-height: 1.3;
-  color: var(--ink);
-}
-.day-method {
-  margin-top: 14rpx;
-  font-size: 26rpx;
-  line-height: 1.65;
-  color: var(--ink-3);
-}
-.kps { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 24rpx; }
-.kp {
-  font-size: 22rpx;
-  line-height: 1.4;
-  color: var(--ink-2);
-  background: var(--wash);
-  border-radius: 999rpx;
-  padding: 10rpx 20rpx;
-}
-
-/* 迁移门 */
-.gate {
-  margin: 0 36rpx 36rpx;
-  padding: 32rpx;
-  border-radius: 28rpx;
-  background: var(--ok-wash);
-}
-.gate-title { font-size: 32rpx; font-weight: 700; letter-spacing: -0.6rpx; color: var(--ink); }
-.gate-sub { margin-top: 8rpx; font-size: 25rpx; line-height: 1.6; color: var(--ink-2); }
+.gate-card { border-color: rgba(4, 120, 87, 0.3); background: rgba(4, 120, 87, 0.03); }
 .gate-q {
-  margin: 26rpx 0;
-  font-size: 30rpx;
-  font-weight: 600;
+  margin: 18rpx 0;
+  font-size: 28rpx;
   line-height: 1.7;
   color: var(--ink);
+  font-weight: 600;
 }
-
-.tabbar { padding: 0 36rpx 28rpx; }
-.pane { padding: 0 36rpx calc(60rpx + env(safe-area-inset-bottom)); }
-
-/* 讲义 */
-.lesson { padding-top: 8rpx; }
-.links-line {
+.gate-btn { margin-top: 20rpx; }
+.kps { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 18rpx; }
+.lesson-body { margin-top: 6rpx; }
+.lesson-links {
+  margin-top: 18rpx;
+  padding: 16rpx 20rpx;
+  background: var(--accent-wash);
+  border-radius: 16rpx;
+}
+.lesson-gen { padding-bottom: 6rpx; }
+.res-row {
   display: flex;
   align-items: center;
-  margin-top: 30rpx;
-  padding-top: 24rpx;
-  border-top: 1rpx solid var(--hairline);
-  font-size: 26rpx;
-  color: var(--ink-2);
+  gap: 16rpx;
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid var(--border);
 }
-.regen { margin-top: 28rpx; text-align: center; }
-.ph { color: #b8bcc4; }
-
-/* 资料 */
-.res {
-  display: flex;
-  align-items: center;
-  gap: 18rpx;
-  padding: 26rpx 0;
-  border-bottom: 1rpx solid var(--hairline);
+.res-row:last-child { border-bottom: none; }
+.res-title {
+  font-size: 27rpx;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1;
+  min-width: 0;
 }
-.res:last-child { border-bottom: none; }
-.res-title { font-size: 29rpx; font-weight: 600; line-height: 1.45; color: var(--ink); }
-.res-why { margin-top: 8rpx; font-size: 24rpx; line-height: 1.55; color: var(--ink-3); }
-
-/* 答疑输入条 */
-.composer-bar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--paper);
-  border-top: 1rpx solid var(--hairline);
-  z-index: 50;
-}
-.composer-inner {
-  display: flex;
-  align-items: flex-end;
-  gap: 14rpx;
-  padding: 16rpx 36rpx calc(16rpx + env(safe-area-inset-bottom));
-}
-
-/* 验收 */
-.result-head { padding: 8rpx 0 20rpx; }
-.result-summary { font-size: 28rpx; line-height: 1.75; color: var(--ink-2); margin-bottom: 12rpx; }
-.grade-item {
-  padding: 28rpx 0;
-  border-top: 1rpx solid var(--hairline);
-}
-.grade-q {
-  margin-top: 14rpx;
+.qa-list { margin: 12rpx 0; }
+.qa-row { display: flex; margin: 14rpx 0; }
+.qa-right { justify-content: flex-end; }
+.qa-composer { display: flex; gap: 14rpx; margin-top: 16rpx; align-items: center; }
+.qa-input { flex: 1; }
+.skip-zone { margin-top: 22rpx; padding-top: 20rpx; border-top: 1rpx solid var(--border); }
+.skip-input { margin-bottom: 14rpx; font-size: 24rpx; }
+.acc-item { margin-top: 26rpx; }
+.acc-q {
+  margin: 12rpx 0;
   font-size: 28rpx;
   font-weight: 600;
-  line-height: 1.6;
   color: var(--ink);
-}
-.grade-fb { margin-top: 12rpx; font-size: 27rpx; line-height: 1.7; color: var(--ink-2); }
-.grade-ev {
-  margin-top: 12rpx;
-  padding: 16rpx 20rpx;
-  border-radius: 16rpx;
-  background: var(--wash);
-  font-size: 23rpx;
-  line-height: 1.6;
-  color: var(--ink-3);
-}
-.advice { margin-top: 34rpx; padding-top: 26rpx; border-top: 1rpx solid var(--hairline); }
-.advice-text { margin-top: 10rpx; font-size: 27rpx; line-height: 1.7; color: var(--ink-2); }
-
-.acc { margin-top: 40rpx; }
-.acc-head { margin-bottom: 12rpx; }
-.acc-q {
-  font-size: 30rpx;
-  font-weight: 600;
   line-height: 1.65;
-  color: var(--ink);
-  margin-bottom: 18rpx;
 }
-.quiz-intro { padding: 20rpx 0; }
-
-.skip {
-  margin-top: 76rpx;
-  padding-top: 30rpx;
-  border-top: 1rpx solid var(--hairline);
+.result-summary { margin-top: 10rpx; line-height: 1.7; }
+.grade-item {
+  margin-top: 22rpx;
+  padding: 20rpx;
+  background: var(--surface-2);
+  border-radius: 18rpx;
 }
-.skip-input {
-  margin: 18rpx 0 16rpx;
-  height: 76rpx;
-  padding: 0 26rpx;
-  border-radius: 999rpx;
-  background: var(--wash);
-  font-size: 25rpx;
-  box-sizing: border-box;
-  color: var(--ink);
-}
+.grade-fb { font-size: 26rpx; line-height: 1.65; color: var(--ink); margin-top: 8rpx; }
+.grade-ev { margin-top: 8rpx; line-height: 1.5; }

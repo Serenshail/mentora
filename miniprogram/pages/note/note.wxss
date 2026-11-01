@@ -1,3 +1,2 @@
-.note-head { padding: 8rpx 0 34rpx; border-bottom: 1rpx solid var(--hairline); }
-.note-tags { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 24rpx; }
-.note-body { padding-top: 30rpx; }
+.card-tight .card-row { padding-left: 32rpx; padding-right: 32rpx; }
+.chev { color: var(--faint); font-size: 30rpx; }

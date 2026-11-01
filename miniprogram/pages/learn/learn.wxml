@@ -1,31 +1,35 @@
 <view class="page">
   <view class="page-head">
-    <view class="title">学习</view>
-    <text wx:if="{{syncHint}}" class="micro">{{syncHint}}</text>
+    <view class="between">
+      <view class="page-head-title">学习教练</view>
+      <text wx:if="{{syncHint}}" class="meta">{{syncHint}}</text>
+    </view>
   </view>
 
-  <view wx:if="{{goals.length === 0 && !loading}}" class="blank">
-    <view class="blank-title">还没有目标</view>
-    <view class="blank-sub">在网页端做完苏格拉底引导，这里就会出现。\n想先看看长什么样，用示例目标。</view>
-    <button class="btn btn-outline btn-sm" style="margin-top: 40rpx; display: inline-flex" bindtap="seedSample">
-      用示例目标试一试
-    </button>
+  <view wx:if="{{goals.length === 0 && !loading}}" class="card empty">
+    <view class="empty-title">还没有学习目标</view>
+    <view class="empty-sub">网页端完成苏格拉底引导后会同步到这里；也可以先用示例目标体验闭环</view>
+    <button class="btn btn-outline btn-sm" style="margin-top: 32rpx; display: inline-flex" bindtap="seedSample">用示例目标试一试</button>
   </view>
 
-  <view wx:for="{{goals}}" wx:key="id">
-    <view class="goal" data-id="{{item.id}}" bindtap="openGoal" hover-class="tap-dim">
-      <view class="goal-top">
-        <view class="row gap-12">
-          <view class="dot dot-{{item.statusTone}}"></view>
-          <text class="goal-status">{{item.statusLabel}}</text>
-        </view>
-        <text class="micro num">{{item.passed}}/{{item.total}} 天</text>
+  <view
+    wx:for="{{goals}}"
+    wx:key="id"
+    class="card goal {{item.active ? 'goal-on' : ''}}"
+    data-id="{{item.id}}"
+    bindtap="openGoal"
+    hover-class="tap-dim"
+  >
+    <view class="between">
+      <view class="badge badge-{{item.tone}} row gap-8">
+        <view class="dot dot-{{item.tone}}"></view>{{item.statusLabel}}
       </view>
-      <view class="goal-topic">{{item.topic}}</view>
-      <view wx:if="{{item.direction}}" class="goal-dir">{{item.direction}}</view>
-      <view class="bar" style="margin-top: 26rpx">
-        <view class="bar-fill {{item.active ? 'bar-fill-accent' : ''}}" style="width: {{item.progress}}%"></view>
-      </view>
+      <text class="meta num">通过 {{item.passed}}/{{item.total}} 天</text>
+    </view>
+    <view class="h2 goal-topic">{{item.topic}}</view>
+    <view wx:if="{{item.direction}}" class="goal-dir">{{item.direction}}</view>
+    <view class="progress" style="margin-top: 22rpx">
+      <view class="progress-fill" style="width: {{item.progress}}%"></view>
     </view>
   </view>
 </view>

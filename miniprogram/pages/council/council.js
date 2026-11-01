@@ -6,6 +6,9 @@ var util = require("../../utils/util.js");
 
 var DEFAULT_SEATS = ["naval", "jobs", "taleb"];
 
+// 有真人头像的席位（与网页版 public/personas 一致）
+var PHOTO_IDS = ["naval", "jobs", "munger", "feynman", "taleb", "graham", "karpathy", "musk", "zhangxuefeng", "zhangyiming", "mrbeast", "sutskever"];
+
 function resolvePersona(id) {
   if (!id || id === "roundtable") return null;
   var s = seats.byId(id);
@@ -79,9 +82,15 @@ Page({
       picked[id] = true;
     });
     var allSeats = seats.ALL.map(function (s) {
-      return { id: s.id, name: s.name, tag: s.tag, color: s.color, concept: CONCEPT_IDS[s.id] === true };
+      return {
+        id: s.id,
+        name: s.name,
+        tag: s.tag,
+        color: s.color,
+        concept: CONCEPT_IDS[s.id] === true,
+        hasPhoto: PHOTO_IDS.indexOf(s.id) >= 0
+      };
     });
-    // 默认进「单独聊」，此时不预选（点谁跟谁聊）
     this.setData({
       view: "pick",
       pickMode: "single",
@@ -301,6 +310,7 @@ Page({
         id: p.id,
         name: p.name,
         color: (seats.byId(p.id) || {}).color || "#86868b",
+        hasPhoto: PHOTO_IDS.indexOf(p.id) >= 0,
         status: goodTakes[p.id] ? "done" : "pending",
         take: goodTakes[p.id] || ""
       };

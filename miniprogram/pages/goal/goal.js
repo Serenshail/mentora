@@ -51,9 +51,7 @@ Page({
           statusLabel: (STATUS_META[ph.status] || STATUS_META.locked).label,
           tone: (STATUS_META[ph.status] || STATUS_META.locked).tone,
           days: days,
-          outline: ph.outline || [],
-          // 进行中的阶段默认展开，其余收起；用户手动切换后由 setData 覆盖
-          open: this._opened ? Boolean(this._opened[ph.id]) : ph.status === "active"
+          outline: ph.outline || []
         });
       });
     }
@@ -81,11 +79,8 @@ Page({
 
   togglePhase: function (e) {
     var idx = e.currentTarget.dataset.idx;
-    var ph = this.data.phases[idx];
-    if (!this._opened) this._opened = {};
-    // 记录用户意图，render 时不再被默认值覆盖
-    this._opened[ph.id] = !ph.open;
     var key = "phases[" + idx + "].open";
-    this.setData({ [key]: !ph.open });
+    var cur = this.data.phases[idx].open;
+    this.setData({ [key]: !cur });
   }
 });

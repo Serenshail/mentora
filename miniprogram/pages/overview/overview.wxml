@@ -1,52 +1,47 @@
 <view class="page">
-  <view class="ov-head">
-    <view class="greet">{{name ? name : "你好"}}</view>
-    <view wx:if="{{streakDays > 0}}" class="streak">
-      <text class="streak-num num">{{streakDays}}</text>
-      <text class="streak-unit">天连续</text>
-    </view>
+  <view class="page-head">
+    <view class="page-head-title">继续。</view>
+    <view class="page-head-sub">{{name}}{{sync ? " · " + sync : ""}}</view>
   </view>
 
-  <!-- 当前目标：唯一的"形" -->
-  <view wx:if="{{goal}}" class="focus" bindtap="goToday" hover-class="tap-dim">
-    <view class="focus-top">
-      <view class="eyebrow" style="color: var(--accent)"><view class="eyebrow-mark"></view><text>进行中</text></view>
-      <text class="micro num">{{goal.progress}}%</text>
-    </view>
-    <view class="focus-topic">{{goal.topic}}</view>
-    <view class="focus-dir">{{goal.direction}}</view>
-    <view class="bar" style="margin-top: 30rpx">
-      <view class="bar-fill bar-fill-accent" style="width: {{goal.progress}}%"></view>
-    </view>
-    <view wx:if="{{goal.dayTitle}}" class="focus-next">
-      <view class="flex-1">
-        <view class="micro">{{goal.gated ? "还差一道迁移题" : goal.phaseTitle}}</view>
-        <view class="focus-day">{{goal.dayTitle}}</view>
+  <view wx:if="{{goal}}" class="card goal" bindtap="goToday" hover-class="tap-dim">
+    <view class="between">
+      <view class="badge badge-accent row gap-8">
+        <view class="dot dot-accent"></view>进行中
       </view>
-      <view class="btn btn-ink btn-sm">继续</view>
+      <text class="meta num">{{goal.progress}}%</text>
+    </view>
+    <view class="h2 goal-topic">{{goal.topic}}</view>
+    <view wx:if="{{goal.direction}}" class="goal-dir">{{goal.direction}}</view>
+    <view class="progress" style="margin-top: 24rpx">
+      <view class="progress-fill" style="width: {{goal.progress}}%"></view>
+    </view>
+    <view wx:if="{{goal.dayTitle}}" class="goal-next">
+      <view class="flex-1">
+        <view class="meta">{{goal.gated ? "还差一道迁移题" : goal.phaseTitle}}</view>
+        <view class="goal-day">{{goal.dayTitle}}</view>
+      </view>
+      <view class="btn btn-ink btn-sm">继续学</view>
     </view>
   </view>
 
-  <view wx:elif="{{!loading}}" class="blank-start" bindtap="goLearn" hover-class="tap-dim">
-    <view class="blank-title">还没开始</view>
-    <view class="blank-sub">在网页端做完引导，或者直接点这里看学习页</view>
+  <view wx:elif="{{!loading}}" class="card" bindtap="goLearn" hover-class="tap-dim">
+    <view class="h3">还没有进行中的目标</view>
+    <view class="sub" style="margin-top: 8rpx">新建目标在网页端完成引导，小程序同步后继续学</view>
   </view>
 
-  <!-- 复习：一行就够，不做卡 -->
-  <view wx:if="{{dueCount > 0}}" class="review-line" bindtap="goReview" hover-class="tap-dim">
-    <view class="dot dot-warn"></view>
+  <view wx:if="{{dueCount > 0}}" class="card review" bindtap="goReview" hover-class="tap-dim">
     <view class="flex-1">
-      <text class="strong">{{dueCount}} 条到期</text>
-      <text class="ink-3" style="font-size: 26rpx"> 该复习了</text>
+      <view class="h3">复习到期 <text class="accent-text num">{{dueCount}}</text> 条</view>
+      <view class="sub" style="margin-top: 6rpx">间隔重复：今天不记，明天更贵</view>
     </view>
-    <text class="link-action">开始</text>
+    <view class="btn btn-accent btn-sm">开始</view>
   </view>
 
-  <!-- 热力 -->
-  <view class="sec">
-    <view class="between" style="margin-bottom: 22rpx">
-      <view class="eyebrow"><view class="eyebrow-mark"></view><text>近 12 周</text></view>
-      <text class="micro">验收质量</text>
+  <view class="card">
+    <view class="between" style="margin-bottom: 20rpx">
+      <text class="h3">学习热力</text>
+      <text class="meta">验收质量 · 近 12 周</text>
     </view>
     <scroll-view scroll-x class="heat-scroll">
       <view class="heat">
@@ -55,45 +50,45 @@
             wx:for="{{item}}"
             wx:for-item="cell"
             wx:key="date"
-            class="heat-cell heat-{{cell.level}} {{cell.future ? 'heat-future' : ''}}"
+            class="heat-cell heat-{{cell.level}} {{cell.future ? 'heat-off' : ''}}"
           ></view>
         </view>
       </view>
     </scroll-view>
   </view>
 
-  <!-- 四个去处：纯列表 -->
-  <view class="sec">
-    <view class="eyebrow"><view class="eyebrow-mark"></view><text>去哪</text></view>
-    <view style="margin-top: 6rpx">
-      <view class="line" bindtap="goLearn" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">学习教练</view>
-          <view class="line-sub">计划、讲义、验收</view>
-        </view>
-        <text class="chev">›</text>
+  <view class="card card-tight entries">
+    <view class="entry" bindtap="goLearn" hover-class="tap-dim">
+      <image class="entry-img" src="/images/personas/naval.jpg" mode="aspectFill" />
+      <view class="flex-1">
+        <view class="card-row-title">学习教练</view>
+        <view class="card-row-sub">计划 · 讲义 · 验收闭环</view>
       </view>
-      <view class="line" bindtap="goBrain" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">第二大脑</view>
-          <view class="line-sub">{{counts.notes}} 篇笔记</view>
-        </view>
-        <text class="chev">›</text>
+      <view class="chev">›</view>
+    </view>
+    <view class="entry" bindtap="goBrain" hover-class="tap-dim">
+      <image class="entry-img" src="/images/personas/karpathy.jpg" mode="aspectFill" />
+      <view class="flex-1">
+        <view class="card-row-title">第二大脑</view>
+        <view class="card-row-sub">{{counts.notes}} 篇笔记 · 双链网络</view>
       </view>
-      <view class="line" bindtap="goRead" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">读书伙伴</view>
-          <view class="line-sub">{{counts.books}} 本在架</view>
-        </view>
-        <text class="chev">›</text>
+      <view class="chev">›</view>
+    </view>
+    <view class="entry" bindtap="goRead" hover-class="tap-dim">
+      <image class="entry-img" src="/images/personas/graham.jpg" mode="aspectFill" />
+      <view class="flex-1">
+        <view class="card-row-title">读书伙伴</view>
+        <view class="card-row-sub">{{counts.books}} 本书在架</view>
       </view>
-      <view class="line" bindtap="goCouncil" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">人生伙伴</view>
-          <view class="line-sub">单聊与圆桌</view>
-        </view>
-        <text class="chev">›</text>
+      <view class="chev">›</view>
+    </view>
+    <view class="entry" bindtap="goCouncil" hover-class="tap-dim">
+      <image class="entry-img" src="/images/personas/munger.jpg" mode="aspectFill" />
+      <view class="flex-1">
+        <view class="card-row-title">人生伙伴</view>
+        <view class="card-row-sub">16 席位 · 圆桌会议</view>
       </view>
+      <view class="chev">›</view>
     </view>
   </view>
 </view>

@@ -1,83 +1,82 @@
 <view class="page">
-  <view class="me-head">
-    <view class="avatar">{{user ? user.name[0] : "?"}}</view>
-    <view class="flex-1">
-      <view class="me-name">{{user ? user.name : "未登录"}}</view>
-      <view class="me-mail">{{user ? user.email : ""}}</view>
+  <view class="page-head"><view class="page-head-title">我的</view></view>
+
+  <view class="card">
+    <view class="row gap-20">
+      <view class="avatar" style="width: 104rpx; height: 104rpx">
+        <image class="avatar-img" src="/images/personas/naval.jpg" mode="aspectFill" wx:if="{{false}}" />
+        <view class="avatar-fallback" style="width: 100%; height: 100%; font-size: 40rpx">{{user ? user.name[0] : "?"}}</view>
+      </view>
+      <view class="flex-1">
+        <view class="h2">{{user ? user.name : "未登录"}}</view>
+        <view class="sub" style="margin-top: 4rpx">{{user ? user.email : ""}}</view>
+      </view>
+    </view>
+    <view class="stats">
+      <view class="stat"><view class="stat-n num">{{counts.goals}}</view><view class="tiny">目标</view></view>
+      <view class="stat"><view class="stat-n num">{{counts.notes}}</view><view class="tiny">笔记</view></view>
+      <view class="stat"><view class="stat-n num">{{counts.books}}</view><view class="tiny">书</view></view>
+      <view class="stat"><view class="stat-n num">{{counts.sessions}}</view><view class="tiny">会话</view></view>
+    </view>
+    <view wx:if="{{sync}}" class="tiny" style="margin-top: 16rpx; text-align: right">{{sync}}</view>
+  </view>
+
+  <view class="card card-tight sec-sm">
+    <view class="card-row" bindtap="pullNow" hover-class="tap-dim">
+      <view class="flex-1">
+        <view class="card-row-title">从云端恢复</view>
+        <view class="card-row-sub">以云端快照为准</view>
+      </view>
+      <view class="chev">›</view>
+    </view>
+    <view class="card-row" bindtap="pushNow" hover-class="tap-dim">
+      <view class="flex-1">
+        <view class="card-row-title">推送到云端</view>
+        <view class="card-row-sub">改动后 2.5 秒自动推送，这是手动兜底</view>
+      </view>
+      <view class="chev">›</view>
+    </view>
+    <view class="card-row" bindtap="copyWebUrl" hover-class="tap-dim">
+      <view class="flex-1">
+        <view class="card-row-title">网页版</view>
+        <view class="card-row-sub">引导 / 笔记编辑 / Obsidian 导入在那里</view>
+      </view>
+      <view class="chev">›</view>
     </view>
   </view>
 
-  <view class="stats">
-    <view class="stat"><view class="stat-n num">{{counts.goals}}</view><view class="micro">目标</view></view>
-    <view class="stat"><view class="stat-n num">{{counts.notes}}</view><view class="micro">笔记</view></view>
-    <view class="stat"><view class="stat-n num">{{counts.books}}</view><view class="micro">书</view></view>
-    <view class="stat"><view class="stat-n num">{{counts.sessions}}</view><view class="micro">会话</view></view>
+  <view class="card sec-sm">
+    <view class="between" style="margin-bottom: 6rpx">
+      <text class="h3">后端</text>
+      <text class="meta">{{baseLabel}}</text>
+    </view>
+    <view class="card-row" data-id="prod" bindtap="switchBase" hover-class="tap-dim">
+      <view class="flex-1">
+        <view class="card-row-title">官方部署（Vercel）</view>
+        <view class="card-row-sub">开发者工具里走代理可达</view>
+      </view>
+      <view wx:if="{{baseId === 'prod'}}" class="dot dot-accent"></view>
+    </view>
+    <view class="card-row" data-id="tunnel" bindtap="switchBase" hover-class="tap-dim">
+      <view class="flex-1">
+        <view class="card-row-title">本机隧道（UUMit）</view>
+        <view class="card-row-sub">真机预览用，需电脑上服务在跑</view>
+      </view>
+      <view wx:if="{{baseId === 'tunnel'}}" class="dot dot-accent"></view>
+    </view>
+    <view class="card-row" data-id="local" bindtap="switchBase" hover-class="tap-dim">
+      <view class="flex-1">
+        <view class="card-row-title">本机开发（localhost:3000）</view>
+        <view class="card-row-sub">只在开发者工具里用</view>
+      </view>
+      <view wx:if="{{baseId === 'local'}}" class="dot dot-accent"></view>
+    </view>
+    <view class="meta" style="margin-top: 18rpx; line-height: 1.55">大陆真机连不上 Vercel 域名，预览时切「本机隧道」。</view>
   </view>
 
-  <view wx:if="{{sync}}" class="sync">{{sync}}</view>
-
-  <view class="sec">
-    <view class="eyebrow"><view class="eyebrow-mark"></view><text>数据</text></view>
-    <view style="margin-top: 8rpx">
-      <view class="line" bindtap="pullNow" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">从云端恢复</view>
-          <view class="line-sub">以云端为准</view>
-        </view>
-        <text class="chev">›</text>
-      </view>
-      <view class="line" bindtap="pushNow" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">推送到云端</view>
-          <view class="line-sub">改动会自动推，这是手动兜底</view>
-        </view>
-        <text class="chev">›</text>
-      </view>
-      <view class="line" bindtap="copyWebUrl" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">网页版</view>
-          <view class="line-sub">引导、笔记编辑、Obsidian 导入在那里</view>
-        </view>
-        <text class="chev">›</text>
-      </view>
-    </view>
-  </view>
-
-  <view class="sec">
-    <view class="eyebrow"><view class="eyebrow-mark"></view><text>后端</text></view>
-    <view class="backend-now">{{baseLabel}}</view>
-    <view style="margin-top: 8rpx">
-      <view class="line" data-id="prod" bindtap="switchBase" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">官方部署</view>
-          <view class="line-sub">Vercel · 开发者工具可达</view>
-        </view>
-        <view wx:if="{{baseId === 'prod'}}" class="dot dot-accent"></view>
-      </view>
-      <view class="line" data-id="tunnel" bindtap="switchBase" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">本机隧道</view>
-          <view class="line-sub">真机预览用，需电脑上服务在跑</view>
-        </view>
-        <view wx:if="{{baseId === 'tunnel'}}" class="dot dot-accent"></view>
-      </view>
-      <view class="line" data-id="local" bindtap="switchBase" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="line-title">本机开发</view>
-          <view class="line-sub">localhost:3000，只在工具里用</view>
-        </view>
-        <view wx:if="{{baseId === 'local'}}" class="dot dot-accent"></view>
-      </view>
-    </view>
-    <view class="backend-note">大陆真机连不上 Vercel 域名，预览时切「本机隧道」。</view>
-  </view>
-
-  <view class="sec">
-    <view class="eyebrow"><view class="eyebrow-mark"></view><text>关于</text></view>
-    <view class="about">
-      Mentora 小程序 · 第一版<br/>
-      与网页版同一个账号、同一份数据。
-    </view>
-    <button class="btn btn-danger btn-block" style="margin-top: 40rpx" bindtap="logout">退出登录</button>
+  <view class="card sec-sm">
+    <view class="h3">关于</view>
+    <view class="sub" style="margin-top: 8rpx; line-height: 1.7">Mentora 小程序 · 第一版<br/>与网页版同一个账号、同一份数据。</view>
+    <button class="btn btn-danger btn-block" style="margin-top: 28rpx" bindtap="logout">退出登录</button>
   </view>
 </view>

@@ -1,43 +1,15 @@
-.brain-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 12rpx 0 36rpx;
-}
-.due {
-  display: flex;
-  align-items: center;
-  gap: 14rpx;
-  padding: 22rpx 26rpx;
-  border-radius: 22rpx;
-  background: var(--warn-wash);
-  font-size: 27rpx;
-  font-weight: 600;
-  color: var(--warn);
-}
-.search { margin: 28rpx 0 0; }
-.ph { color: #b8bcc4; }
-.folders { margin-top: 24rpx; white-space: nowrap; }
-.folder-row { display: inline-flex; gap: 12rpx; padding-bottom: 6rpx; }
-.folder {
-  padding: 12rpx 26rpx;
-  border-radius: 999rpx;
-  font-size: 25rpx;
-  font-weight: 600;
-  color: var(--ink-2);
-  background: var(--wash);
-  white-space: nowrap;
-}
-.folder-on { background: var(--ink); color: #fff; }
-
-.note-line {
+.review { display: flex; align-items: center; gap: 20rpx; border-color: rgba(4, 120, 87, 0.22); }
+.folders { margin-top: 20rpx; white-space: nowrap; }
+.folder-row { display: inline-flex; gap: 12rpx; padding: 4rpx 0 8rpx; }
+.notes { padding: 0 32rpx; }
+.note {
   display: flex;
   align-items: center;
   gap: 18rpx;
-  padding: 28rpx 0;
-  border-bottom: 1rpx solid var(--hairline);
+  padding: 26rpx 0;
+  border-bottom: 1rpx solid var(--border);
 }
-.note-title-row { display: flex; align-items: center; gap: 12rpx; }
+.note:last-child { border-bottom: none; }
 .note-title {
   font-size: 30rpx;
   font-weight: 600;
@@ -46,18 +18,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.note-due {
-  width: 12rpx;
-  height: 12rpx;
-  border-radius: 50%;
-  background: var(--warn);
   flex-shrink: 0;
+  max-width: 430rpx;
 }
 .note-excerpt {
   margin-top: 8rpx;
-  font-size: 25rpx;
-  line-height: 1.55;
+  font-size: 24rpx;
+  line-height: 1.5;
   color: var(--ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -65,4 +32,4 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-.note-meta { margin-top: 10rpx; font-size: 21rpx; color: #a8adb6; letter-spacing: 0.3rpx; }
+.chev { color: var(--faint); font-size: 30rpx; }

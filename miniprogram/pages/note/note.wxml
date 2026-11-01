@@ -1,42 +1,42 @@
 <import src="../../wxml/md.wxml" />
 
 <view class="page" wx:if="{{note}}">
-  <view class="note-head">
-    <view class="title">{{note.title}}</view>
-    <view class="note-tags">
-      <text wx:if="{{note.domain}}" class="pill">{{note.domain}}</text>
-      <text wx:if="{{masteryLabel !== '未测'}}" class="pill pill-accent">{{masteryLabel}}</text>
-      <text wx:if="{{note.nextReviewAt}}" class="pill">复习 {{note.nextReviewAt}}</text>
-      <text wx:for="{{note.tags}}" wx:key="*this" class="pill">#{{item}}</text>
+  <view class="page-head">
+    <view class="page-head-title">{{note.title}}</view>
+    <view class="row wrap gap-12" style="margin-top: 16rpx">
+      <view class="badge badge-dim">{{note.domain}}</view>
+      <view wx:if="{{masteryLabel !== '未测'}}" class="badge badge-accent">{{masteryLabel}}</view>
+      <view wx:if="{{note.nextReviewAt}}" class="badge badge-dim">复习 {{note.nextReviewAt}}</view>
+      <view wx:for="{{note.tags}}" wx:key="*this" class="badge badge-dim">#{{item}}</view>
     </view>
   </view>
 
-  <view class="note-body">
-    <view wx:if="{{!blocks.length}}" class="blank-sub" style="text-align: left">这篇还没有正文。</view>
+  <view class="card">
+    <view wx:if="{{!blocks.length}}" class="sub">这篇笔记还没有正文。</view>
     <template is="md-blocks" data="{{blocks}}" />
   </view>
 
-  <view wx:if="{{outLinks.length}}" class="sec">
-    <view class="eyebrow"><view class="eyebrow-mark"></view><text>出链 · {{outLinks.length}}</text></view>
-    <view style="margin-top: 8rpx">
-      <view wx:for="{{outLinks}}" wx:key="id" class="line" data-id="{{item.id}}" bindtap="openLinked" hover-class="tap-dim">
-        <text class="flex-1 accent" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
-        <text class="chev">›</text>
-      </view>
+  <view wx:if="{{outLinks.length}}" class="card card-tight sec-sm">
+    <view class="card-row" style="padding-top: 26rpx; padding-bottom: 4rpx; border-bottom: none">
+      <text class="h3">出链 · {{outLinks.length}}</text>
+    </view>
+    <view wx:for="{{outLinks}}" wx:key="id" class="card-row" data-id="{{item.id}}" bindtap="openLinked" hover-class="tap-dim">
+      <text class="flex-1 accent-text" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
+      <view class="chev">›</view>
     </view>
   </view>
 
-  <view wx:if="{{backLinks.length}}" class="sec">
-    <view class="eyebrow"><view class="eyebrow-mark"></view><text>反向链接 · {{backLinks.length}}</text></view>
-    <view style="margin-top: 8rpx">
-      <view wx:for="{{backLinks}}" wx:key="id" class="line" data-id="{{item.id}}" bindtap="openLinked" hover-class="tap-dim">
-        <text class="flex-1 accent" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
-        <text class="chev">›</text>
-      </view>
+  <view wx:if="{{backLinks.length}}" class="card card-tight sec-sm">
+    <view class="card-row" style="padding-top: 26rpx; padding-bottom: 4rpx; border-bottom: none">
+      <text class="h3">反向链接 · {{backLinks.length}}</text>
+    </view>
+    <view wx:for="{{backLinks}}" wx:key="id" class="card-row" data-id="{{item.id}}" bindtap="openLinked" hover-class="tap-dim">
+      <text class="flex-1 accent-text" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
+      <view class="chev">›</view>
     </view>
   </view>
 </view>
 
-<view wx:else class="blank">
-  <view class="blank-title">笔记不存在</view>
+<view wx:else class="empty">
+  <view class="empty-title">笔记不存在</view>
 </view>

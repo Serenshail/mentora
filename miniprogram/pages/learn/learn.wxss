@@ -1,25 +1,7 @@
-.page-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 12rpx 0 44rpx;
-}
-.goal { padding: 34rpx 0; border-top: 1rpx solid var(--hairline); }
-.goal-top { display: flex; align-items: center; justify-content: space-between; }
-.goal-status { font-size: 23rpx; font-weight: 600; letter-spacing: 0.4rpx; color: var(--ink-3); }
-.goal-topic {
-  margin-top: 18rpx;
-  font-size: 38rpx;
-  font-weight: 700;
-  letter-spacing: -1rpx;
-  line-height: 1.35;
-  color: var(--ink);
-}
+.goal-on { border-color: rgba(91, 84, 230, 0.22); }
+.goal-topic { margin-top: 14rpx; }
 .goal-dir {
-  margin-top: 10rpx;
-  font-size: 26rpx;
-  line-height: 1.6;
-  color: var(--ink-3);
+  margin-top: 8rpx;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;

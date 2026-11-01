@@ -5,8 +5,8 @@ var util = require("../../utils/util.js");
 Page({
   data: {
     loading: true,
-    goals: [],
-    syncHint: ""
+    syncHint: "",
+    goals: []
   },
 
   onShow: function () {
@@ -15,10 +15,8 @@ Page({
       wx.reLaunch({ url: "/pages/login/login" });
       return;
     }
-    that._offSync = store.onSyncStatus(function (s) {
-      that.setData({
-        syncHint: s === "saving" ? "同步中" : s === "error" ? "同步失败" : ""
-      });
+    that._offSync = store.onSyncStatus(function (st) {
+      that.setData({ syncHint: st === "saving" ? "同步中" : st === "error" ? "同步失败" : "" });
     });
     that.render();
     store.pullIfSafe(false).then(function () {
@@ -27,10 +25,7 @@ Page({
   },
 
   onHide: function () {
-    if (this._offSync) {
-      this._offSync();
-      this._offSync = null;
-    }
+    if (this._offSync) { this._offSync(); this._offSync = null; }
   },
 
   onPullDownRefresh: function () {
@@ -64,7 +59,7 @@ Page({
         passed: passed,
         total: total,
         statusLabel: statusLabel,
-        statusTone: statusTone,
+        tone: g.status === "active" ? "accent" : g.status === "done" ? "ok" : "dim",
         active: g.status === "active"
       };
     });

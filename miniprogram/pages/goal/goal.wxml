@@ -1,21 +1,24 @@
 <view class="page" wx:if="{{goal}}">
-  <view class="title" style="margin-top: 12rpx">{{goal.topic}}</view>
-  <view wx:if="{{goal.direction}}" class="sub" style="margin-top: 14rpx">{{goal.direction}}</view>
+  <view class="page-head">
+    <view class="page-head-title">{{goal.topic}}</view>
+    <view wx:if="{{goal.direction}}" class="page-head-sub">{{goal.direction}}</view>
+  </view>
 
-  <view wx:if="{{goal.summary}}" class="summary">{{goal.summary}}</view>
+  <view wx:if="{{goal.summary}}" class="card">
+    <view class="sub" style="line-height: 1.72">{{goal.summary}}</view>
+    <view wx:if="{{goal.graduated}}" class="badge badge-ok" style="margin-top: 20rpx">已结业</view>
+  </view>
 
-  <view wx:if="{{goal.graduated}}" class="pill pill-ok" style="margin-top: 26rpx">已结业</view>
-
-  <view wx:for="{{phases}}" wx:for-item="ph" wx:key="id" wx:for-index="pIdx" class="phase">
-    <view class="phase-head" data-idx="{{pIdx}}" bindtap="togglePhase" hover-class="tap-dim">
+  <view wx:for="{{phases}}" wx:for-item="ph" wx:key="id" wx:for-index="pIdx" class="card phase">
+    <view class="between" data-idx="{{pIdx}}" bindtap="togglePhase" hover-class="tap-dim">
       <view class="flex-1">
-        <view class="phase-title-row">
-          <text class="phase-title">{{ph.title}}</text>
+        <view class="row gap-12">
+          <text class="h3">{{ph.title}}</text>
           <view class="dot dot-{{ph.tone}}"></view>
         </view>
-        <view wx:if="{{ph.outcome}}" class="phase-outcome">{{ph.outcome}}</view>
+        <view wx:if="{{ph.outcome}}" class="sub" style="margin-top: 8rpx">{{ph.outcome}}</view>
       </view>
-      <text class="chev" style="transform: rotate({{ph.open ? '90deg' : '0'}}); transition: transform .18s">{{'›'}}</text>
+      <text class="chev {{ph.open ? 'chev-open' : ''}}">›</text>
     </view>
 
     <view wx:if="{{ph.open}}" class="days">
@@ -29,15 +32,15 @@
         bindtap="openDay"
         hover-class="{{d.status === 'locked' ? '' : 'tap-dim'}}"
       >
-        <view class="day-idx num">{{d.index}}</view>
+        <text class="day-idx num">{{d.index}}</text>
         <view class="flex-1">
           <view class="day-title">{{d.title}}</view>
-          <view wx:if="{{d.gated}}" class="micro" style="color: var(--warn); margin-top: 6rpx">待迁移题过关</view>
-          <view wx:elif="{{d.stub}}" class="micro" style="margin-top: 6rpx">详情待展开</view>
+          <view wx:if="{{d.gated}}" class="tiny warn-text" style="margin-top: 6rpx">待迁移题过关</view>
+          <view wx:elif="{{d.stub}}" class="tiny" style="margin-top: 6rpx">详情待展开</view>
         </view>
-        <view wx:if="{{d.status === 'passed'}}" class="pill pill-ok">过</view>
-        <view wx:elif="{{d.status === 'skipped'}}" class="pill pill-warn">跳过</view>
-        <view wx:elif="{{d.status === 'active'}}" class="pill pill-accent">今日</view>
+        <view wx:if="{{d.status === 'passed'}}" class="badge badge-ok">过</view>
+        <view wx:elif="{{d.status === 'skipped'}}" class="badge badge-warn">跳过</view>
+        <view wx:elif="{{d.status === 'active'}}" class="badge badge-accent">今日</view>
       </view>
     </view>
   </view>

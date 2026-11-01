@@ -19,7 +19,7 @@ Page({
     day: null,
     goalTopic: "",
     readOnly: false,
-    tab: "lesson", // lesson | qa | quiz
+    tab: "lesson",
     // 讲义
     lessonBlocks: [],
     lessonBusy: false,
@@ -56,8 +56,7 @@ Page({
   },
 
   retryQuiz: function () {
-    var answers = {};
-    this.setData({ grade: null, quizMode: "quiz", answers: answers, canSubmitQuiz: false });
+    this.setData({ grade: null, quizMode: "quiz", answers: {}, canSubmitQuiz: false });
   },
 
   onLoad: function (query) {
@@ -85,9 +84,7 @@ Page({
     var lessonMd = day.lesson || "";
     var parsed = lessonMd ? md.parse(lessonMd) : { blocks: [], links: [] };
     var qaView = (day.qa || []).map(function (m) {
-      if (m.role === "assistant") {
-        return { role: "assistant", blocks: md.parse(m.content).blocks };
-      }
+      if (m.role === "assistant") return { role: "assistant", blocks: md.parse(m.content).blocks };
       return { role: "user", content: m.content };
     });
     var resources = (day.resources || []).map(function (r, i) {
@@ -118,17 +115,7 @@ Page({
       resources: resources,
       qaView: qaView,
       acceptance: (day.acceptance || []).map(function (a) {
-        return {
-          id: a.id,
-          kind: a.kind,
-          kindLabel:
-            a.kind === "explain" ? "讲解" :
-            a.kind === "apply" ? "实操" :
-            a.kind === "oral" ? "口述" :
-            a.kind === "essay" ? "短文" : "实战",
-          question: a.question,
-          hint: a.hint || ""
-        };
+        return { id: a.id, kind: a.kind, question: a.question, hint: a.hint || "" };
       }),
       gateQuestion: day.transferQuestion || "",
       gateAnswer: day.transferAnswer || ""
@@ -284,10 +271,7 @@ Page({
     goal.plan = plan;
     store.markDirtyPublic();
     that.setData({
-      qaView: qa.map(function (m) {
-        if (m.role === "assistant") return { role: "assistant", blocks: md.parse(m.content).blocks };
-        return { role: "user", content: m.content };
-      })
+      qaView: qa.map(function (m) { return { role: m.role, content: m.content }; })
     });
     var ctx = JSON.stringify({
       topic: goal.topic,
@@ -317,10 +301,7 @@ Page({
         g2.plan = plan2;
         store.markDirtyPublic();
         that.setData({
-          qaView: finalQa.map(function (m) {
-            if (m.role === "assistant") return { role: "assistant", blocks: md.parse(m.content).blocks };
-            return { role: "user", content: m.content };
-          }),
+          qaView: finalQa.map(function (m) { return { role: m.role, content: m.content }; }),
           qaStreamBlocks: []
         });
       })
@@ -460,6 +441,10 @@ Page({
         transferQuestion: g.transferQuestion || ""
       }
     });
+    // 状态变了（passed/解锁链），整页刷新
+    that.render();
+    // render 会重置 quizMode 相关展示，重新置为 result 视图
+    that.setData({ quizMode: "result" });
   },
 
   onGateInput: function (e) {
@@ -530,7 +515,6 @@ Page({
   },
 
   backToLearn: function () {
-    this.setData({ tab: "lesson", quizMode: "learn", grade: null });
-    this.render();
+    this.setData({ quizMode: "learn", grade: null });
   }
 });

@@ -1,49 +1,9 @@
-.me-head {
-  display: flex;
-  align-items: center;
-  gap: 24rpx;
-  padding: 24rpx 0 40rpx;
-}
-.avatar {
-  width: 104rpx;
-  height: 104rpx;
-  border-radius: 50%;
-  background: var(--ink);
-  color: #fff;
-  font-size: 42rpx;
-  font-weight: 700;
-  text-align: center;
-  line-height: 104rpx;
-  flex-shrink: 0;
-}
-.me-name {
-  font-size: 40rpx;
-  font-weight: 700;
-  letter-spacing: -1rpx;
-  color: var(--ink);
-}
-.me-mail { margin-top: 6rpx; font-size: 24rpx; color: var(--ink-3); }
-
 .stats {
   display: flex;
-  padding: 30rpx 0;
-  border-top: 1rpx solid var(--hairline);
-  border-bottom: 1rpx solid var(--hairline);
+  margin-top: 28rpx;
+  padding-top: 26rpx;
+  border-top: 1rpx solid var(--border);
 }
 .stat { flex: 1; }
-.stat-n {
-  font-size: 40rpx;
-  font-weight: 700;
-  letter-spacing: -1rpx;
-  line-height: 1.2;
-  color: var(--ink);
-}
-.sync { margin-top: 16rpx; font-size: 22rpx; color: var(--ink-3); text-align: right; }
-.backend-now { margin-top: 14rpx; font-size: 27rpx; font-weight: 600; color: var(--ink); }
-.backend-note {
-  margin-top: 18rpx;
-  font-size: 23rpx;
-  line-height: 1.6;
-  color: var(--ink-3);
-}
-.about { margin-top: 16rpx; font-size: 25rpx; line-height: 1.7; color: var(--ink-2); }
+.stat-n { font-size: 40rpx; font-weight: 700; letter-spacing: -1rpx; line-height: 1.2; color: var(--ink); }
+.chev { color: var(--faint); font-size: 30rpx; }

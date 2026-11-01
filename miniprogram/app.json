@@ -22,7 +22,7 @@
   },
   "tabBar": {
     "color": "#86868b",
-    "selectedColor": "#5b54e6",
+    "selectedColor": "#1d1d1f",
     "backgroundColor": "#ffffff",
     "borderStyle": "white",
     "list": [
@@ -39,16 +39,16 @@
         "selectedIconPath": "images/tab/learn-on.png"
       },
       {
-        "pagePath": "pages/brain/brain",
-        "text": "大脑",
-        "iconPath": "images/tab/brain.png",
-        "selectedIconPath": "images/tab/brain-on.png"
-      },
-      {
         "pagePath": "pages/read/read",
         "text": "读书",
         "iconPath": "images/tab/read.png",
         "selectedIconPath": "images/tab/read-on.png"
+      },
+      {
+        "pagePath": "pages/council/council",
+        "text": "圆桌",
+        "iconPath": "images/tab/council.png",
+        "selectedIconPath": "images/tab/council-on.png"
       },
       {
         "pagePath": "pages/profile/profile",

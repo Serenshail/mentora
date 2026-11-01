@@ -37,15 +37,15 @@ function tokenize(text) {
 
 function spanStyle(sp) {
   var s = "";
-  if (sp.b) s += "font-weight:700;";
+  if (sp.b) s += "font-weight:600;";
   if (sp.i) s += "font-style:italic;";
   if (sp.c) {
-    s += "font-family:ui-monospace,Menlo,Consolas,monospace;";
-    s += "font-size:0.92em;";
-    s += "background:#f2f3f5;border-radius:6rpx;padding:3rpx 9rpx;";
+    s += "font-family:ui-monospace,Menlo,monospace;";
+    s += "font-size:0.94em;";
+    s += "background:#f2f2f7;border-radius:4px;padding:1px 4px;";
   }
-  if (sp.w) s += "color:#4f46e5;font-weight:600;";
-  if (sp.link) s += "color:#4f46e5;text-decoration:underline;";
+  if (sp.w) s += "color:#007aff;font-weight:600;";
+  if (sp.link) s += "color:#007aff;";
   return s;
 }
 
@@ -109,7 +109,7 @@ function parse(text) {
     var h = /^(#{1,6})\s+(.*)$/.exec(trimmed);
     if (h) {
       var level = Math.min(h[1].length, 4);
-      pushInline("h", h[2], "font-weight:700;color:#101114;", { level: level });
+      pushInline("h", h[2], "font-weight:600;color:#000000;", { level: level });
       i += 1;
       continue;
     }
@@ -128,7 +128,7 @@ function parse(text) {
         qbuf.push(lines[i].trim().replace(/^>\s?/, ""));
         i += 1;
       }
-      pushInline("quote", qbuf.join(" "), "color:#5c6068;");
+      pushInline("quote", qbuf.join(" "), "color:#3c3c4399;");
       continue;
     }
 

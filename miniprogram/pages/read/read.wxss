@@ -1,18 +1,1 @@
-.page-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 12rpx 0 40rpx;
-}
-.add-form { padding-bottom: 20rpx; }
-.ph { color: #b8bcc4; }
-.book { padding: 34rpx 0; border-top: 1rpx solid var(--hairline); }
-.book-title {
-  margin-top: 18rpx;
-  font-size: 38rpx;
-  font-weight: 700;
-  letter-spacing: -1rpx;
-  line-height: 1.35;
-  color: var(--ink);
-}
-.book-author { margin-top: 8rpx; font-size: 25rpx; color: var(--ink-3); }
+.book-title { margin-top: 14rpx; }
