@@ -2,7 +2,10 @@
   "description": "Mentora 微信小程序端：与 Web 同一产品、同一后端（Vercel），按手机形态重排 UI",
   "packOptions": {
     "ignore": [
-      { "type": "folder", "value": "tools" }
+      {
+        "type": "folder",
+        "value": "tools"
+      }
     ],
     "include": []
   },
@@ -32,7 +35,7 @@
   },
   "compileType": "miniprogram",
   "libVersion": "3.7.12",
-  "appid": "touristappid",
+  "appid": "wx6f1576b29864c3a6",
   "projectname": "mentora-miniprogram",
   "condition": {},
   "editorSetting": {
