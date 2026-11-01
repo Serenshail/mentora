@@ -1,13 +1,61 @@
-.review-q {
-  margin: 22rpx 0;
-  font-size: 30rpx;
+.review-page { padding-top: 60rpx; }
+.rv-title {
+  font-size: 54rpx;
+  font-weight: 700;
+  letter-spacing: -1.8rpx;
+  color: var(--ink);
+}
+.rv-lead { margin: 44rpx 0 56rpx; }
+.rv-num {
+  font-size: 132rpx;
+  font-weight: 700;
+  letter-spacing: -5rpx;
+  line-height: 1;
+  color: var(--ink);
+}
+.rv-lead-text {
+  margin-top: 24rpx;
+  font-size: 27rpx;
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+.rv-progress { font-size: 22rpx; letter-spacing: 1rpx; color: var(--ink-3); }
+.rv-note { margin-top: 18rpx; font-size: 24rpx; color: var(--ink-3); }
+.rv-q {
+  margin: 26rpx 0 34rpx;
+  font-size: 36rpx;
   font-weight: 600;
-  line-height: 1.7;
+  letter-spacing: -0.8rpx;
+  line-height: 1.55;
   color: var(--ink);
   white-space: pre-wrap;
 }
-.review-answer { min-height: 200rpx; margin-top: 8rpx; }
-.review-stats { margin-top: 26rpx; }
-.review-num { font-size: 44rpx; font-weight: 700; color: var(--ink); }
-.grade-fb { font-size: 27rpx; line-height: 1.7; color: var(--ink); margin-top: 12rpx; }
-.grade-ev { margin-top: 10rpx; line-height: 1.5; }
+.rv-area { min-height: 260rpx; }
+.ph { color: #b8bcc4; }
+.rv-verdict {
+  font-size: 54rpx;
+  font-weight: 700;
+  letter-spacing: -1.8rpx;
+}
+.rv-pass { color: var(--ok); }
+.rv-fail { color: var(--bad); }
+.rv-fb { font-size: 29rpx; line-height: 1.75; color: var(--ink); margin-top: 22rpx; }
+.rv-ev {
+  margin-top: 24rpx;
+  padding: 20rpx 24rpx;
+  border-radius: 18rpx;
+  background: var(--wash);
+  font-size: 23rpx;
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+.rv-stats { display: flex; gap: 56rpx; margin: 48rpx 0 36rpx; }
+.rv-stat { flex: 0 0 auto; }
+.rv-stat-num {
+  font-size: 56rpx;
+  font-weight: 700;
+  letter-spacing: -2rpx;
+  line-height: 1.1;
+  color: var(--ink);
+}
+.rv-next { font-size: 26rpx; color: var(--ink-3); }

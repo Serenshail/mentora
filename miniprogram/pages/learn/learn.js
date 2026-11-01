@@ -5,7 +5,8 @@ var util = require("../../utils/util.js");
 Page({
   data: {
     loading: true,
-    goals: []
+    goals: [],
+    syncHint: ""
   },
 
   onShow: function () {
@@ -14,10 +15,22 @@ Page({
       wx.reLaunch({ url: "/pages/login/login" });
       return;
     }
+    that._offSync = store.onSyncStatus(function (s) {
+      that.setData({
+        syncHint: s === "saving" ? "同步中" : s === "error" ? "同步失败" : ""
+      });
+    });
     that.render();
     store.pullIfSafe(false).then(function () {
       that.render();
     });
+  },
+
+  onHide: function () {
+    if (this._offSync) {
+      this._offSync();
+      this._offSync = null;
+    }
   },
 
   onPullDownRefresh: function () {

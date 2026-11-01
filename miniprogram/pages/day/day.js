@@ -19,6 +19,7 @@ Page({
     day: null,
     goalTopic: "",
     readOnly: false,
+    tab: "lesson", // lesson | qa | quiz
     // 讲义
     lessonBlocks: [],
     lessonBusy: false,
@@ -30,7 +31,7 @@ Page({
     qaView: [],
     qaInput: "",
     qaBusy: false,
-    qaStream: "",
+    qaStreamBlocks: [],
     // 验收
     quizMode: "learn", // learn | quiz | result
     acceptance: [],
@@ -46,6 +47,17 @@ Page({
     skipText: "",
     // 链接清单
     links: []
+  },
+
+  setTab: function (e) {
+    var tab = e.currentTarget.dataset.tab;
+    if (tab === this.data.tab) return;
+    this.setData({ tab: tab });
+  },
+
+  retryQuiz: function () {
+    var answers = {};
+    this.setData({ grade: null, quizMode: "quiz", answers: answers, canSubmitQuiz: false });
   },
 
   onLoad: function (query) {
@@ -73,7 +85,10 @@ Page({
     var lessonMd = day.lesson || "";
     var parsed = lessonMd ? md.parse(lessonMd) : { blocks: [], links: [] };
     var qaView = (day.qa || []).map(function (m) {
-      return { role: m.role, content: m.content };
+      if (m.role === "assistant") {
+        return { role: "assistant", blocks: md.parse(m.content).blocks };
+      }
+      return { role: "user", content: m.content };
     });
     var resources = (day.resources || []).map(function (r, i) {
       return {
@@ -103,7 +118,17 @@ Page({
       resources: resources,
       qaView: qaView,
       acceptance: (day.acceptance || []).map(function (a) {
-        return { id: a.id, kind: a.kind, question: a.question, hint: a.hint || "" };
+        return {
+          id: a.id,
+          kind: a.kind,
+          kindLabel:
+            a.kind === "explain" ? "讲解" :
+            a.kind === "apply" ? "实操" :
+            a.kind === "oral" ? "口述" :
+            a.kind === "essay" ? "短文" : "实战",
+          question: a.question,
+          hint: a.hint || ""
+        };
       }),
       gateQuestion: day.transferQuestion || "",
       gateAnswer: day.transferAnswer || ""
@@ -250,7 +275,7 @@ Page({
     var goal = store.goalById(this.data.goalId);
     var day = this.currentDay();
     if (!text || that.data.qaBusy || !goal || !day) return;
-    that.setData({ qaInput: "", qaBusy: true, qaStream: "" });
+    that.setData({ qaInput: "", qaBusy: true, qaStreamBlocks: [] });
     var qa = (day.qa || []).concat([
       { id: util.uid("m"), role: "user", content: text, at: new Date().toISOString() }
     ]);
@@ -259,7 +284,10 @@ Page({
     goal.plan = plan;
     store.markDirtyPublic();
     that.setData({
-      qaView: qa.map(function (m) { return { role: m.role, content: m.content }; })
+      qaView: qa.map(function (m) {
+        if (m.role === "assistant") return { role: "assistant", blocks: md.parse(m.content).blocks };
+        return { role: "user", content: m.content };
+      })
     });
     var ctx = JSON.stringify({
       topic: goal.topic,
@@ -275,7 +303,7 @@ Page({
         messages: qa.slice(-6).map(function (m) { return { role: m.role, content: m.content }; }),
         onDelta: function (d) {
           stream += d;
-          that.setData({ qaStream: stream });
+          that.setData({ qaStreamBlocks: md.parse(stream).blocks });
         }
       })
       .then(function (full) {
@@ -289,13 +317,16 @@ Page({
         g2.plan = plan2;
         store.markDirtyPublic();
         that.setData({
-          qaView: finalQa.map(function (m) { return { role: m.role, content: m.content }; }),
-          qaStream: ""
+          qaView: finalQa.map(function (m) {
+            if (m.role === "assistant") return { role: "assistant", blocks: md.parse(m.content).blocks };
+            return { role: "user", content: m.content };
+          }),
+          qaStreamBlocks: []
         });
       })
       .catch(function (e) {
         util.toast(e.message || "答疑失败");
-        that.setData({ qaStream: "" });
+        that.setData({ qaStreamBlocks: [] });
       })
       .then(function () {
         that.setData({ qaBusy: false });
@@ -429,10 +460,6 @@ Page({
         transferQuestion: g.transferQuestion || ""
       }
     });
-    // 状态变了（passed/解锁链），整页刷新
-    that.render();
-    // render 会重置 quizMode 相关展示，重新置为 result 视图
-    that.setData({ quizMode: "result" });
   },
 
   onGateInput: function (e) {
@@ -503,6 +530,7 @@ Page({
   },
 
   backToLearn: function () {
-    this.setData({ quizMode: "learn", grade: null });
+    this.setData({ tab: "lesson", quizMode: "learn", grade: null });
+    this.render();
   }
 });

@@ -1,3 +1,3 @@
-.note-h { line-height: 1.4; }
-.note-body { line-height: 1.75; }
-.note-links { margin-top: 16rpx; }
+.note-head { padding: 8rpx 0 34rpx; border-bottom: 1rpx solid var(--hairline); }
+.note-tags { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 24rpx; }
+.note-body { padding-top: 30rpx; }

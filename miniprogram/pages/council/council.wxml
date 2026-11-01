@@ -1,164 +1,129 @@
 <import src="../../wxml/md.wxml" />
 
-<!-- 会话列表 -->
-<view wx:if="{{view === 'list'}}" class="page-pad safe-bottom">
-  <view class="row-between" style="margin-bottom: 20rpx">
-    <view class="h1">人生伙伴</view>
-    <view class="btn btn-accent btn-sm" bindtap="openPick">+ 新会话</view>
+<!-- ===== 会话列表 ===== -->
+<view wx:if="{{view === 'list'}}" class="page">
+  <view class="page-head">
+    <view class="title">人生伙伴</view>
+    <text class="link-action" bindtap="openPick">+ 新会话</text>
   </view>
 
-  <view wx:if="{{sessions.length === 0}}" class="card empty-card">
-    <view class="empty-title">还没有会话</view>
-    <view class="dim small">和 12 位人物或 4 个认知工具单独聊，或开一场圆桌会议</view>
+  <view wx:if="{{sessions.length === 0}}" class="blank">
+    <view class="blank-title">还没有对话</view>
+    <view class="blank-sub">和某一位单独聊，或者开一张圆桌\n让几个人同时回答你的问题</view>
   </view>
 
-  <view class="card section-gap" wx:if="{{sessions.length}}">
-    <view
-      wx:for="{{sessions}}"
-      wx:key="id"
-      class="cell"
-      data-id="{{item.id}}"
-      bindtap="openSession"
-      data-eid="{{item.id}}"
-      hover-class="btn-tap"
-    >
-      <view class="flex-1">
-        <view class="row" style="gap: 10rpx">
-          <view class="cell-title session-title">{{item.title}}</view>
-          <view wx:if="{{item.roundtable}}" class="badge badge-accent">圆桌</view>
-        </view>
-        <view class="cell-sub num">{{item.count}} 条 · {{item.when}}</view>
+  <view wx:for="{{sessions}}" wx:key="id" class="line" data-id="{{item.id}}" bindtap="openSession" hover-class="tap-dim">
+    <view class="flex-1">
+      <view class="row gap-12">
+        <text class="session-name">{{item.title}}</text>
+        <text wx:if="{{item.roundtable}}" class="pill pill-accent">圆桌</text>
       </view>
-      <view class="btn btn-ghost btn-sm" data-id="{{item.id}}" catchtap="deleteSession">删除</view>
+      <view class="line-sub">{{item.count}} 条 · {{item.when}}</view>
     </view>
+    <view class="trash" data-id="{{item.id}}" catchtap="deleteSession">删除</view>
   </view>
 </view>
 
-<!-- 席位选择 -->
-<view wx:if="{{view === 'pick'}}" class="page-pad safe-bottom">
-  <view class="row-between" style="margin-bottom: 20rpx">
-    <view class="h1">开一场会</view>
-    <view class="btn btn-outline btn-sm" bindtap="back">返回</view>
+<!-- ===== 开新会话 ===== -->
+<view wx:if="{{view === 'pick'}}" class="page">
+  <view class="page-head">
+    <view class="title">找谁</view>
+    <text class="link-action" bindtap="back">返回</text>
   </view>
 
-  <view class="card">
-    <view class="row" style="gap: 14rpx">
-      <view class="btn {{pickMode === 'single' ? 'btn-primary' : 'btn-outline'}} btn-sm" data-mode="single" bindtap="switchPickMode">单聊</view>
-      <view class="btn {{pickMode === 'roundtable' ? 'btn-primary' : 'btn-outline'}} btn-sm" data-mode="roundtable" bindtap="switchPickMode">圆桌会议</view>
-    </view>
-    <view class="dim small" style="margin-top: 14rpx">
-      {{pickMode === 'single' ? "点任意席位直接开始" : "选 2-6 席（推荐 3 席）。全员独立发言后主持人出纪要；每多一席多一次调用。"}}
-    </view>
-    <view wx:if="{{pickMode === 'roundtable' && pickedCount > 6}}" class="badge badge-warn" style="margin-top: 12rpx">
-      已选 {{pickedCount}} 席——超过 6 席会很慢、很贵
+  <view class="segments" style="margin-bottom: 12rpx">
+    <view class="segment {{pickMode === 'single' ? 'segment-on' : ''}}" data-mode="single" bindtap="switchPickMode">单独聊</view>
+    <view class="segment {{pickMode === 'roundtable' ? 'segment-on' : ''}}" data-mode="roundtable" bindtap="switchPickMode">圆桌</view>
+  </view>
+  <view class="pick-hint">
+    {{pickMode === 'single' ? "点谁就跟谁聊" : "选 2–6 席，各自独立发言，最后主持人出纪要"}}
+  </view>
+
+  <view class="sec-sm">
+    <view class="eyebrow"><view class="eyebrow-mark"></view><text>人物</text></view>
+    <view class="seats">
+      <view wx:for="{{allSeats}}" wx:key="id" wx:if="{{!item.concept}}" class="seat {{picked[item.id] ? 'seat-on' : ''}}" data-id="{{item.id}}" bindtap="toggleSeat" hover-class="tap-dim">
+        <view class="seat-mono" style="background: {{item.color}}">{{item.name[0]}}</view>
+        <view class="seat-name">{{item.name}}</view>
+        <view class="seat-tag">{{item.tag}}</view>
+      </view>
     </view>
   </view>
 
-  <view class="card section-gap">
-    <view class="h3" style="margin-bottom: 10rpx">人物席</view>
-    <view class="seat-grid">
-      <view
-        wx:for="{{allSeats}}"
-        wx:key="id"
-        wx:if="{{!item.concept}}"
-        class="seat {{picked[item.id] ? 'seat-on' : ''}}"
-        data-id="{{item.id}}"
-        bindtap="toggleSeat"
-        hover-class="btn-tap"
-      >
-        <view class="seat-avatar" style="background: {{item.color}}">{{item.name[0]}}</view>
+  <view class="sec">
+    <view class="eyebrow"><view class="eyebrow-mark"></view><text>思维工具</text></view>
+    <view class="seats">
+      <view wx:for="{{allSeats}}" wx:key="id" wx:if="{{item.concept}}" class="seat {{picked[item.id] ? 'seat-on' : ''}}" data-id="{{item.id}}" bindtap="toggleSeat" hover-class="tap-dim">
+        <view class="seat-mono" style="background: {{item.color}}">{{item.name[0]}}</view>
         <view class="seat-name">{{item.name}}</view>
-        <view class="tiny dim3 seat-tag">{{item.tag}}</view>
+        <view class="seat-tag">{{item.tag}}</view>
       </view>
     </view>
-    <view class="h3" style="margin: 20rpx 0 10rpx">认知工具席</view>
-    <view class="seat-grid">
-      <view
-        wx:for="{{allSeats}}"
-        wx:key="id"
-        wx:if="{{item.concept}}"
-        class="seat {{picked[item.id] ? 'seat-on' : ''}}"
-        data-id="{{item.id}}"
-        bindtap="toggleSeat"
-        hover-class="btn-tap"
-      >
-        <view class="seat-avatar" style="background: {{item.color}}">{{item.name[0]}}</view>
-        <view class="seat-name">{{item.name}}</view>
-        <view class="tiny dim3 seat-tag">{{item.tag}}</view>
-      </view>
-    </view>
-    <button
-      wx:if="{{pickMode === 'roundtable'}}"
-      class="btn btn-accent btn-block {{pickedCount >= 2 ? '' : 'disabled'}}"
-      style="margin-top: 24rpx"
-      bindtap="{{pickedCount >= 2 ? 'startRoundtable' : ''}}"
-    >开始圆桌（{{pickedCount}} 席）</button>
+  </view>
+
+  <view wx:if="{{pickMode === 'roundtable'}}">
+    <view wx:if="{{pickedCount > 6}}" class="over">已选 {{pickedCount}} 席，会慢也会贵</view>
+    <button class="btn btn-ink btn-block {{pickedCount >= 2 ? '' : 'disabled'}}" style="margin-top: 48rpx" bindtap="{{pickedCount >= 2 ? 'startRoundtable' : ''}}">
+      开桌 · {{pickedCount}} 席
+    </button>
   </view>
 </view>
 
-<!-- 聊天 -->
-<view wx:if="{{view === 'chat'}}" class="page-pad safe-bottom">
-  <view class="row-between" style="margin-bottom: 16rpx">
-    <view class="row" style="gap: 12rpx">
-      <view class="btn btn-ghost btn-sm" bindtap="back">‹ 会话</view>
-      <view>
-        <view class="h3">{{session.title}}</view>
-        <view class="tiny dim3">{{session.personaTag}}</view>
-      </view>
+<!-- ===== 对话 ===== -->
+<view wx:if="{{view === 'chat'}}" class="chat-page">
+  <view class="chat-head">
+    <text class="back" bindtap="back">‹</text>
+    <view class="flex-1">
+      <view class="chat-title">{{session.title}}</view>
+      <view wx:if="{{session.personaTag}}" class="micro">{{session.personaTag}}</view>
     </view>
-    <view wx:if="{{session.isRoundtable}}" class="badge badge-accent">圆桌</view>
+    <text wx:if="{{session.isRoundtable}}" class="pill pill-accent">圆桌</text>
   </view>
 
-  <!-- 历史消息 -->
-  <view class="chat-zone">
-    <view wx:for="{{chatView}}" wx:key="index" class="chat-row {{item.role === 'user' ? 'chat-right' : ''}}">
-      <view wx:if="{{item.role === 'user'}}" class="bubble bubble-user">{{item.content}}</view>
-      <view wx:else class="card-flat ai-card">
-        <template is="md-blocks" data="{{blocks: item.blocks}}" />
+  <scroll-view scroll-y class="chat-scroll">
+    <view class="chat">
+      <view wx:if="{{chatView.length === 0 && !busy}}" class="blank">
+        <view class="blank-title">把你的问题放桌上</view>
+        <view class="blank-sub">{{session.isRoundtable ? "几席各自回答，主持人最后综合" : "直接说，越具体越好"}}</view>
       </view>
-    </view>
-  </view>
 
-  <!-- 圆桌运行态 -->
-  <view wx:if="{{busy && rtSeats.length}}" class="card section-gap">
-    <view class="row" style="gap: 10rpx">
-      <view class="h3">{{rtPhase === 'host' ? "主持人在写纪要…" : "圆桌发言中…"}}</view>
-    </view>
-    <view wx:for="{{rtSeats}}" wx:key="id" class="rt-seat">
-      <view class="seat-avatar rt-avatar" style="background: {{item.color}}">{{item.name[0]}}</view>
-      <view class="flex-1">
-        <view class="row" style="gap: 10rpx">
-          <view class="rt-name">{{item.name}}</view>
-          <view class="badge {{item.status === 'done' ? 'badge-ok' : item.status === 'failed' ? 'badge-bad' : item.status === 'streaming' ? 'badge-accent' : 'badge-dim'}}">
-            {{item.status === 'done' ? '已发言' : item.status === 'failed' ? '失败' : item.status === 'streaming' ? '正在说' : '待发言'}}
+      <view wx:for="{{chatView}}" wx:key="index" class="msg {{item.role === 'user' ? 'msg-user' : 'msg-ai'}}">
+        <view wx:if="{{item.role === 'user'}}" class="bubble">{{item.content}}</view>
+        <block wx:else>
+          <template is="md-blocks" data="{{blocks: item.blocks}}" />
+        </block>
+      </view>
+
+      <!-- 圆桌进度 -->
+      <view wx:if="{{busy && rtSeats.length}}" class="rt">
+        <view class="rt-phase">{{rtPhase === 'host' ? "主持人正在综合" : "各自在想"}}</view>
+        <view wx:for="{{rtSeats}}" wx:key="id" class="rt-row">
+          <view class="seat-mono rt-mono" style="background: {{item.color}}">{{item.name[0]}}</view>
+          <view class="flex-1">
+            <view class="between">
+              <text class="rt-name">{{item.name}}</text>
+              <text class="micro {{item.status === 'failed' ? 'bad' : item.status === 'done' ? 'ok' : ''}}">
+                {{item.status === 'done' ? '说完了' : item.status === 'failed' ? '失败' : item.status === 'streaming' ? '说话中' : '等待'}}
+              </text>
+            </view>
+            <view wx:if="{{item.take}}" class="rt-take">{{item.take}}</view>
           </view>
         </view>
-        <view wx:if="{{item.take}}" class="rt-take dim">{{item.take}}</view>
+      </view>
+
+      <view wx:if="{{busy && (!rtSeats.length || rtPhase === 'host')}}" class="msg msg-ai">
+        <template is="md-blocks" data="{{blocks: rtPhase === 'host' ? rtHostBlocks : streamBlocks}}" />
+        <view class="row" style="margin-top: 12rpx">
+          <view class="caret"></view>
+        </view>
       </view>
     </view>
-  </view>
+  </scroll-view>
 
-  <!-- 流式中（单聊 / 主持人纪要） -->
-  <view wx:if="{{busy && !rtSeats.length || (busy && rtPhase === 'host')}}" class="card section-gap">
-    <template is="md-blocks" data="{{blocks: rtPhase === 'host' ? rtHostBlocks : streamBlocks}}" />
-    <view class="row" style="gap: 10rpx; margin-top: 10rpx">
-      <view class="cursor-blink"></view>
-      <text class="thinking">{{session.personaName}}正在思考…</text>
-    </view>
-  </view>
-
-  <view class="composer-zone">
-    <view class="composer">
-      <input
-        class="input composer-input"
-        placeholder="{{session.isRoundtable ? '把你的决策问题抛给圆桌…' : '说点什么…'}}"
-        value="{{input}}"
-        confirm-hold
-        bindinput="onInput"
-        bindconfirm="send"
-        disabled="{{busy}}"
-      />
-      <button class="btn btn-primary btn-sm {{input && !busy ? '' : 'disabled'}}" bindtap="{{input && !busy ? 'send' : ''}}">发送</button>
+  <view class="chat-composer">
+    <view class="chat-composer-inner">
+      <input class="composer-input" placeholder="{{session.isRoundtable ? '把决策问题抛给圆桌' : '说点什么'}}" placeholder-class="ph" value="{{input}}" confirm-hold bindinput="onInput" bindconfirm="send" disabled="{{busy}}" />
+      <view class="composer-send {{input && !busy ? '' : 'disabled'}}" bindtap="{{input && !busy ? 'send' : ''}}">↑</view>
     </view>
   </view>
 </view>

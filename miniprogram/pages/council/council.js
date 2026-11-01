@@ -81,6 +81,7 @@ Page({
     var allSeats = seats.ALL.map(function (s) {
       return { id: s.id, name: s.name, tag: s.tag, color: s.color, concept: CONCEPT_IDS[s.id] === true };
     });
+    // 默认进「单独聊」，此时不预选（点谁跟谁聊）
     this.setData({
       view: "pick",
       pickMode: "single",

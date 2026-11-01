@@ -1,52 +1,44 @@
-<view class="page-pad safe-bottom">
-  <view class="row-between" style="margin-bottom: 20rpx">
-    <view class="h1">读书伙伴</view>
-    <view class="btn btn-outline btn-sm" bindtap="toggleAdd">{{adding ? "收起" : "+ 建档"}}</view>
+<view class="page">
+  <view class="page-head">
+    <view class="title">读书</view>
+    <text class="link-action" bindtap="toggleAdd">{{adding ? "收起" : "+ 建档"}}</text>
   </view>
 
-  <view wx:if="{{adding}}" class="card">
-    <view class="h3">新书建档</view>
-    <view class="dim small" style="margin-top: 6rpx">书名 + 作者 + 粘贴的原文/笔记（可选）→ 生成书籍档案与阅读路线。</view>
-    <view class="field-gap">
-      <view class="field-label">书名 *</view>
-      <input class="input" placeholder="例如：思考，快与慢" value="{{title}}" bindinput="onTitle" />
+  <view wx:if="{{adding}}" class="add-form">
+    <view class="field">
+      <text class="field-label">书名</text>
+      <input class="field-input" placeholder="例如：思考，快与慢" placeholder-class="ph" value="{{title}}" bindinput="onTitle" />
     </view>
-    <view class="field-gap">
-      <view class="field-label">作者</view>
-      <input class="input" placeholder="可选" value="{{author}}" bindinput="onAuthor" />
+    <view class="field">
+      <text class="field-label">作者</text>
+      <input class="field-input" placeholder="可选" placeholder-class="ph" value="{{author}}" bindinput="onAuthor" />
     </view>
-    <view class="field-gap">
-      <view class="field-label">粘贴原文 / 你的笔记</view>
-      <textarea class="textarea" placeholder="目录、章节摘录、读书笔记都行（最多 6000 字）" value="{{pasted}}" bindinput="onPasted" maxlength="8000"></textarea>
+    <view class="field" style="border-bottom: none">
+      <text class="field-label">原文或你的笔记</text>
+      <textarea class="area" placeholder="目录、摘录、读书笔记都行" placeholder-class="ph" value="{{pasted}}" bindinput="onPasted" maxlength="8000" />
     </view>
-    <button
-      class="btn btn-accent btn-block {{title && !creating ? '' : 'disabled'}}"
-      style="margin-top: 24rpx"
-      bindtap="{{title && !creating ? 'create' : ''}}"
-    >{{creating ? "正在读这本书…" : "建档，生成阅读路线"}}</button>
+    <button class="btn btn-ink btn-block {{title && !creating ? '' : 'disabled'}}" style="margin-top: 30rpx" bindtap="{{title && !creating ? 'create' : ''}}">
+      {{creating ? "正在读这本书…" : "建档并生成路线"}}
+    </button>
   </view>
 
-  <view wx:if="{{books.length === 0 && !loading && !adding}}" class="card empty-card">
-    <view class="empty-title">书架是空的</view>
-    <view class="dim small">建一本正在读的书，读书伙伴会带你一章一章真正读进去</view>
+  <view wx:if="{{books.length === 0 && !loading && !adding}}" class="blank">
+    <view class="blank-title">书架空的</view>
+    <view class="blank-sub">建一本正在读的书，它会带你一章一章读进去</view>
   </view>
 
-  <view
-    wx:for="{{books}}"
-    wx:key="id"
-    class="card section-gap"
-    data-id="{{item.id}}"
-    bindtap="openBook"
-    hover-class="btn-tap"
-  >
-    <view class="row-between">
-      <view class="badge badge-{{item.status === 'done' ? 'ok' : 'accent'}}">{{item.statusLabel}}</view>
-      <view class="dim3 small num">{{item.chapters}} 章</view>
+  <view wx:for="{{books}}" wx:key="id" class="book" data-id="{{item.id}}" bindtap="openBook" hover-class="tap-dim">
+    <view class="between">
+      <view class="row gap-12">
+        <view class="dot {{item.status === 'done' ? 'dot-ok' : 'dot-accent'}}"></view>
+        <text class="micro">{{item.statusLabel}}</text>
+      </view>
+      <text class="micro num">{{item.chapters}}</text>
     </view>
-    <view class="h2" style="margin-top: 12rpx">{{item.title}}</view>
-    <view class="dim small" wx:if="{{item.author}}" style="margin-top: 4rpx">{{item.author}}</view>
-    <view class="progress-track">
-      <view class="progress-fill" style="width: {{item.progress}}%"></view>
+    <view class="book-title">{{item.title}}</view>
+    <view wx:if="{{item.author}}" class="book-author">{{item.author}}</view>
+    <view class="bar" style="margin-top: 24rpx">
+      <view class="bar-fill" style="width: {{item.progress}}%"></view>
     </view>
   </view>
 </view>

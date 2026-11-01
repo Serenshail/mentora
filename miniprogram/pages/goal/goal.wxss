@@ -1,18 +1,32 @@
-.goal-summary {
-  margin-top: 18rpx;
-  padding-top: 18rpx;
-  border-top: 1rpx solid var(--border);
-  font-size: 26rpx;
-  line-height: 1.7;
+.summary {
+  margin-top: 34rpx;
+  padding: 28rpx 30rpx;
+  border-radius: 24rpx;
+  background: var(--wash);
+  font-size: 27rpx;
+  line-height: 1.75;
+  color: var(--ink-2);
 }
-.phase-outcome { margin-top: 6rpx; }
-.day-row {
+.phase { margin-top: 52rpx; }
+.phase-head { display: flex; align-items: center; gap: 16rpx; padding-bottom: 20rpx; }
+.phase-title-row { display: flex; align-items: center; gap: 12rpx; }
+.phase-title { font-size: 27rpx; font-weight: 700; letter-spacing: 0.4rpx; color: var(--ink-2); }
+.phase-outcome { margin-top: 10rpx; font-size: 25rpx; line-height: 1.6; color: var(--ink-3); }
+.days { border-top: 1rpx solid var(--hairline); }
+.day {
   display: flex;
   align-items: center;
-  gap: 16rpx;
-  padding: 22rpx 0;
-  border-bottom: 1rpx solid var(--border);
+  gap: 22rpx;
+  padding: 28rpx 0;
+  border-bottom: 1rpx solid var(--hairline);
 }
-.day-row:last-child { border-bottom: none; }
-.day-locked { opacity: 0.45; }
-.day-title { font-size: 28rpx; font-weight: 600; color: var(--ink); }
+.day-off { opacity: 0.38; }
+.day-idx {
+  width: 44rpx;
+  font-size: 24rpx;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-align: left;
+  flex-shrink: 0;
+}
+.day-title { font-size: 30rpx; line-height: 1.5; color: var(--ink); letter-spacing: -0.2rpx; }

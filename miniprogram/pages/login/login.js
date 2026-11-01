@@ -18,11 +18,10 @@ Page({
   onName: function (e) { this.setData({ name: e.detail.value }); },
   onInvite: function (e) { this.setData({ inviteCode: e.detail.value }); },
 
-  switchMode: function () {
-    this.setData({
-      mode: this.data.mode === "login" ? "register" : "login",
-      error: ""
-    });
+  setMode: function (e) {
+    var m = e.currentTarget.dataset.mode;
+    if (m === this.data.mode) return;
+    this.setData({ mode: m, error: "" });
   },
 
   submit: function () {
