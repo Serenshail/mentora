@@ -4,6 +4,7 @@ var grade = require("../../utils/grade.js");
 var mastery = require("../../utils/mastery.js");
 var md = require("../../utils/md.js");
 var util = require("../../utils/util.js");
+var streamView = require("../../utils/stream-view.js");
 
 var VERDICT_LABEL = {
   correct: { label: "过", tone: "ok" },
@@ -23,8 +24,6 @@ Page({
     // 讲义
     lessonBlocks: [],
     lessonBusy: false,
-    lessonThink: "",
-    lessonFull: "",
     // 资料
     resources: [],
     // 答疑
@@ -82,11 +81,36 @@ Page({
     }
     var readOnly = goal.status !== "active" || day.status === "passed" || day.status === "skipped";
     var lessonMd = day.lesson || "";
-    var parsed = lessonMd ? md.parse(lessonMd) : { blocks: [], links: [] };
-    var qaView = (day.qa || []).map(function (m) {
-      if (m.role === "assistant") return { role: "assistant", blocks: md.parse(m.content).blocks };
-      return { role: "user", content: m.content };
+
+    /* 解析缓存（页面实例级，跟着页面走）：
+     * onShow 每次都会 render，QA 历史/讲义的内容没变就不该重解析。
+     * 键 = 内容签名（长度 + 首尾采样），内容变了自动失效。 */
+    if (!this._parseCache) this._parseCache = {};
+    var cache = this._parseCache;
+    var sig = function (s) {
+      return s ? s.length + ":" + (s.slice(0, 40) + "|" + s.slice(-40)) : "";
+    };
+
+    var lessonSig = sig(lessonMd);
+    if (cache._lessonSig !== lessonSig) {
+      cache._lessonSig = lessonSig;
+      cache._lesson = lessonMd ? md.parse(lessonMd) : { blocks: [], links: [] };
+    }
+    var parsed = cache._lesson;
+
+    var qaSig = [];
+    (day.qa || []).forEach(function (m) {
+      qaSig.push(m.role[0] + sig(m.content));
     });
+    qaSig = qaSig.join("\n");
+    if (cache._qaSig !== qaSig) {
+      cache._qaSig = qaSig;
+      cache._qaView = (day.qa || []).map(function (m) {
+        if (m.role === "assistant") return { role: "assistant", blocks: md.parse(m.content).blocks };
+        return { role: "user", content: m.content };
+      });
+    }
+
     var resources = (day.resources || []).map(function (r, i) {
       return {
         _i: i,
@@ -110,17 +134,15 @@ Page({
         kps: (day.knowledgePoints || []).map(function (k) { return k.text; })
       },
       lessonBlocks: parsed.blocks,
-      lessonFull: lessonMd,
       links: parsed.links,
       resources: resources,
-      qaView: qaView,
+      qaView: cache._qaView,
       acceptance: (day.acceptance || []).map(function (a) {
         return { id: a.id, kind: a.kind, question: a.question, hint: a.hint || "" };
       }),
       gateQuestion: day.transferQuestion || "",
       gateAnswer: day.transferAnswer || ""
     });
-    wx.setNavigationBarTitle({ title: day.title.slice(0, 12) });
   },
 
   copyCode: function (e) {
@@ -174,7 +196,7 @@ Page({
     var goal = store.goalById(this.data.goalId);
     var day = this.currentDay();
     if (!goal || !day) return;
-    that.setData({ lessonBusy: true, lessonThink: "", lessonBlocks: [], lessonFull: "" });
+    that.setData({ lessonBusy: true, lessonBlocks: [] });
     var mastered = [];
     Object.keys(goal.plan.days).forEach(function (k) {
       var d = goal.plan.days[k];
@@ -206,6 +228,12 @@ Page({
       }
     });
     var buf = "";
+    /* 性能（官方 setData 纪律）：流式期间 delta 只进本地缓冲，
+     * 节流到 ~180ms 才做一次 md.parse + setData。此前每个 delta 都
+     * 全文重解析 + 整包传输，长讲义是 O(n²)——这是"点起来特别卡"的最大来源。 */
+    var renderer = streamView.createStreamRenderer(function () {
+      that.setData({ lessonBlocks: md.parse(buf).blocks });
+    }, 180);
     chat
       .streamChat({
         task: "lesson",
@@ -214,11 +242,12 @@ Page({
         temperature: 0.6,
         onDelta: function (d) {
           buf += d;
-          that.setData({ lessonFull: buf, lessonBlocks: md.parse(buf).blocks });
+          renderer.push();
         },
         onThink: function () {}
       })
       .then(function (full) {
+        renderer.flush();
         var text = full || buf;
         if (text.trim().length > 0) {
           that.saveLesson(goal, day, text);
@@ -227,6 +256,7 @@ Page({
         }
       })
       .catch(function (e) {
+        renderer.cancel();
         if (buf.trim().length > 200) {
           that.saveLesson(goal, day, buf);
           util.toast("生成中断，已保留已生成的内容");
@@ -235,7 +265,7 @@ Page({
         }
       })
       .then(function () {
-        that.setData({ lessonBusy: false, lessonThink: "" });
+        that.setData({ lessonBusy: false });
       });
   },
 
@@ -280,6 +310,10 @@ Page({
       learnerProfile: goal.learnerProfile || []
     });
     var stream = "";
+    /* 同讲义：delta 只进缓冲，节流刷新（避免每 delta 全文重解析 + 全量传输） */
+    var renderer = streamView.createStreamRenderer(function () {
+      that.setData({ qaStreamBlocks: md.parse(stream).blocks });
+    }, 180);
     chat
       .streamChat({
         task: "coach-qa",
@@ -287,10 +321,11 @@ Page({
         messages: qa.slice(-6).map(function (m) { return { role: m.role, content: m.content }; }),
         onDelta: function (d) {
           stream += d;
-          that.setData({ qaStreamBlocks: md.parse(stream).blocks });
+          renderer.push();
         }
       })
       .then(function (full) {
+        renderer.flush();
         var content = full || stream;
         var finalQa = qa.concat([
           { id: util.uid("m"), role: "assistant", content: content, at: new Date().toISOString() }
@@ -306,6 +341,7 @@ Page({
         });
       })
       .catch(function (e) {
+        renderer.cancel();
         util.toast(e.message || "答疑失败");
         that.setData({ qaStreamBlocks: [] });
       })

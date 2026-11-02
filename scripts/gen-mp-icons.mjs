@@ -110,15 +110,15 @@ const tri = (ax, ay, bx, by, cx, cy) => (px, py) => {
 const union = (...tests) => (px, py) => tests.some((t) => t(px, py));
 const minus = (a, b) => (px, py) => a(px, py) && !b(px, py);
 
-/* ---- 五个图形（填充式，简洁几何） ---- */
+/* ---- 图形（填充式，简洁几何；96 视框，线宽 7） ---- */
 const ICONS = {
-  // 总览：仪表盘 = 圆角方框 + 内部两块
-  home: () => [
-    { bounds: [14, 14, 82, 82], test: minus(roundRect(14, 14, 68, 68, 16), roundRect(21, 21, 54, 54, 11)) },
-    { bounds: [26, 26, 46, 46], test: roundRect(26, 26, 20, 20, 5) },
-    { bounds: [52, 26, 72, 42], test: roundRect(52, 26, 20, 16, 5) },
-    { bounds: [26, 52, 46, 72], test: roundRect(26, 52, 20, 20, 5) },
-    { bounds: [52, 52, 72, 72], test: roundRect(52, 52, 20, 20, 5) },
+  // 今天：日历 = 外框 + 表头分隔线 + 两个挂钩 + 今天标记点
+  today: () => [
+    { bounds: [14, 20, 82, 84], test: minus(roundRect(14, 20, 68, 64, 14), roundRect(21, 27, 54, 50, 8)) },
+    { bounds: [14, 39, 82, 47], test: inRect(14, 40, 68, 6) },
+    { bounds: [30, 10, 37, 28], test: inRect(30, 10, 7, 18) },
+    { bounds: [59, 10, 66, 28], test: inRect(59, 10, 7, 18) },
+    { bounds: [40, 54, 56, 70], test: disc(48, 62, 8) },
   ],
   // 学习：毕业帽 = 菱形帽 + 帽穗
   learn: () => [
@@ -145,6 +145,20 @@ const ICONS = {
       ) },
     { bounds: [46, 28, 50, 70], test: inRect(46, 28, 4, 42) },
   ],
+
+  // 伙伴：两人对话 = 两个一致的描边气泡（左大右小、错位层叠）
+  council: () => [
+    // 左气泡（描边 + 左下尾巴）
+    { bounds: [8, 22, 60, 74], test: union(
+        minus(roundRect(8, 24, 48, 34, 11), roundRect(15, 31, 34, 20, 5)),
+        minus(tri(14, 54, 30, 54, 14, 70), tri(14, 54, 24, 54, 14, 63)),
+      ) },
+    // 右气泡（描边 + 右下尾巴）
+    { bounds: [44, 44, 88, 82], test: union(
+        minus(roundRect(44, 48, 40, 26, 9), roundRect(51, 55, 26, 12, 4)),
+        minus(tri(66, 74, 80, 74, 80, 84), tri(66, 74, 76, 74, 80, 78)),
+      ) },
+  ],
   // 我的：人 = 头 + 肩弧
   me: () => [
     { bounds: [32, 16, 64, 48], test: minus(disc(48, 32, 16), disc(48, 32, 16 - stroke)) },
@@ -154,8 +168,12 @@ const ICONS = {
   ],
 };
 
+/* 生成小程序图标：5 个 tabBar 图（常态/选中）+ 功能入口图（墨色）。
+ * 只读状态用单个灰度色，选中/tab 用墨色，功能入口用 accent —— 与设计系统一致。 */
 const GRAY = [134, 134, 139]; // #86868b
-const ACCENT = [91, 84, 230]; // #5b54e6
+const ACCENT = [29, 29, 31]; // #1d1d1f（tabBar selectedColor）
+const WHITE = [255, 255, 255]; // 用于深底/强调底上的图（本轮暂未使用，保留扩展位）
+void WHITE;
 
 mkdirSync(OUT, { recursive: true });
 for (const [name, make] of Object.entries(ICONS)) {

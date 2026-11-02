@@ -1,5 +1,7 @@
 {
-  "navigationBarTitleText": "学习教练",
+  "usingComponents": {
+    "nav-bar": "/components/nav-bar/nav-bar"
+  },
   "enablePullDownRefresh": true,
   "backgroundTextStyle": "dark"
 }

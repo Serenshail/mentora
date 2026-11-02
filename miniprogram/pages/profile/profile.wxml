@@ -1,82 +1,77 @@
+<nav-bar home="{{true}}" />
+
 <view class="page">
-  <view class="page-head"><view class="page-head-title">我的</view></view>
+  <view class="head">
+    <view class="head-greet">我的</view>
+    <view class="head-title">{{user ? user.name : "未登录"}}</view>
+    <view wx:if="{{user}}" class="head-sub">{{user.email}}</view>
+  </view>
 
+  <!-- 账号与数据概况：一张卡说完，不做成四条 -->
   <view class="card">
-    <view class="row gap-20">
-      <view class="avatar" style="width: 104rpx; height: 104rpx">
-        <image class="avatar-img" src="/images/personas/naval.jpg" mode="aspectFill" wx:if="{{false}}" />
-        <view class="avatar-fallback" style="width: 100%; height: 100%; font-size: 40rpx">{{user ? user.name[0] : "?"}}</view>
-      </view>
-      <view class="flex-1">
-        <view class="h2">{{user ? user.name : "未登录"}}</view>
-        <view class="sub" style="margin-top: 4rpx">{{user ? user.email : ""}}</view>
-      </view>
-    </view>
     <view class="stats">
-      <view class="stat"><view class="stat-n num">{{counts.goals}}</view><view class="tiny">目标</view></view>
-      <view class="stat"><view class="stat-n num">{{counts.notes}}</view><view class="tiny">笔记</view></view>
-      <view class="stat"><view class="stat-n num">{{counts.books}}</view><view class="tiny">书</view></view>
-      <view class="stat"><view class="stat-n num">{{counts.sessions}}</view><view class="tiny">会话</view></view>
+      <view class="stat"><view class="stat-n">{{counts.goals}}</view><view class="stat-l">目标</view></view>
+      <view class="stat"><view class="stat-n">{{counts.notes}}</view><view class="stat-l">笔记</view></view>
+      <view class="stat"><view class="stat-n">{{counts.books}}</view><view class="stat-l">书</view></view>
+      <view class="stat"><view class="stat-n">{{counts.sessions}}</view><view class="stat-l">会话</view></view>
     </view>
-    <view wx:if="{{sync}}" class="tiny" style="margin-top: 16rpx; text-align: right">{{sync}}</view>
-  </view>
-
-  <view class="card card-tight sec-sm">
-    <view class="card-row" bindtap="pullNow" hover-class="tap-dim">
-      <view class="flex-1">
-        <view class="card-row-title">从云端恢复</view>
-        <view class="card-row-sub">以云端快照为准</view>
-      </view>
-      <view class="chev">›</view>
-    </view>
-    <view class="card-row" bindtap="pushNow" hover-class="tap-dim">
-      <view class="flex-1">
-        <view class="card-row-title">推送到云端</view>
-        <view class="card-row-sub">改动后 2.5 秒自动推送，这是手动兜底</view>
-      </view>
-      <view class="chev">›</view>
-    </view>
-    <view class="card-row" bindtap="copyWebUrl" hover-class="tap-dim">
-      <view class="flex-1">
-        <view class="card-row-title">网页版</view>
-        <view class="card-row-sub">引导 / 笔记编辑 / Obsidian 导入在那里</view>
-      </view>
-      <view class="chev">›</view>
+    <view wx:if="{{sync}}" class="sync-line">
+      <view class="dot dot-{{syncTone}}"></view>
+      <text class="tiny">{{sync}}</text>
     </view>
   </view>
 
-  <view class="card sec-sm">
-    <view class="between" style="margin-bottom: 6rpx">
-      <text class="h3">后端</text>
-      <text class="meta">{{baseLabel}}</text>
-    </view>
-    <view class="card-row" data-id="prod" bindtap="switchBase" hover-class="tap-dim">
+  <!-- 同步 -->
+  <view class="label" style="margin: 40rpx 0 16rpx">数据</view>
+  <view class="list">
+    <view class="item" bindtap="pullNow">
       <view class="flex-1">
-        <view class="card-row-title">官方部署（Vercel）</view>
-        <view class="card-row-sub">开发者工具里走代理可达</view>
+        <view class="item-title">从云端恢复</view>
+        <view class="item-sub">以云端快照为准，覆盖本机</view>
       </view>
-      <view wx:if="{{baseId === 'prod'}}" class="dot dot-accent"></view>
+      <view class="chev">›</view>
     </view>
-    <view class="card-row" data-id="tunnel" bindtap="switchBase" hover-class="tap-dim">
+    <view class="item" bindtap="pushNow">
       <view class="flex-1">
-        <view class="card-row-title">本机隧道（UUMit）</view>
-        <view class="card-row-sub">真机预览用，需电脑上服务在跑</view>
+        <view class="item-title">推送到云端</view>
+        <view class="item-sub">改动后 2.5 秒会自动推，这里是手动兜底</view>
       </view>
-      <view wx:if="{{baseId === 'tunnel'}}" class="dot dot-accent"></view>
+      <view class="chev">›</view>
     </view>
-    <view class="card-row" data-id="local" bindtap="switchBase" hover-class="tap-dim">
+    <view class="item" bindtap="copyWebUrl">
       <view class="flex-1">
-        <view class="card-row-title">本机开发（localhost:3000）</view>
-        <view class="card-row-sub">只在开发者工具里用</view>
+        <view class="item-title">网页版</view>
+        <view class="item-sub">苏格拉底引导、笔记编辑、Obsidian 导入在那里</view>
       </view>
-      <view wx:if="{{baseId === 'local'}}" class="dot dot-accent"></view>
+      <view class="chev">›</view>
     </view>
-    <view class="meta" style="margin-top: 18rpx; line-height: 1.55">大陆真机连不上 Vercel 域名，预览时切「本机隧道」。</view>
   </view>
 
-  <view class="card sec-sm">
-    <view class="h3">关于</view>
-    <view class="sub" style="margin-top: 8rpx; line-height: 1.7">Mentora 小程序 · 第一版<br/>与网页版同一个账号、同一份数据。</view>
-    <button class="btn btn-danger btn-block" style="margin-top: 28rpx" bindtap="logout">退出登录</button>
+  <!-- 后端 -->
+  <view class="label" style="margin: 40rpx 0 16rpx">连接</view>
+  <view class="list">
+    <view class="item" wx:for="{{bases}}" wx:key="id" data-id="{{item.id}}" bindtap="switchBase">
+      <view class="flex-1">
+        <view class="item-title">{{item.label}}</view>
+        <view class="item-sub">{{item.desc}}</view>
+      </view>
+      <view wx:if="{{baseId === item.id}}" class="dot dot-accent"></view>
+    </view>
   </view>
+  <view class="tiny" style="margin: 14rpx 6rpx 0; line-height: 1.6">
+    大陆真机连不上 Vercel 域名，真机预览时切到「本机隧道」。
+  </view>
+
+  <!-- 关于 -->
+  <view class="label" style="margin: 40rpx 0 16rpx">关于</view>
+  <view class="card">
+    <view class="sub">Mentora 小程序</view>
+    <view class="tiny" style="margin-top: 8rpx; line-height: 1.7">
+      与网页版同一个账号、同一份数据。手机上专注「学」与「复习」，创作与编辑在网页端。
+    </view>
+  </view>
+
+  <button class="btn btn-danger btn-block" style="margin-top: 32rpx" bindtap="logout">退出登录</button>
+
+  <view class="page-tail"></view>
 </view>

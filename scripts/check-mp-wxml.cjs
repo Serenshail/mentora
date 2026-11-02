@@ -59,11 +59,21 @@ function checkFile(file) {
       if (!declared) err(rel, `事件处理器 ${h} 在 ${path.basename(jsFile)} 里找不到`);
     }
     // 4) 模板引用（data 字段）是否在 data 里声明
+    const isComponent = /Component\s*\(/.test(js);
     const dataBlock = /data\s*:\s*\{([\s\S]*?)\n\s{2}\}/.exec(js);
     if (dataBlock) {
       const dataKeys = new Set(
         [...dataBlock[1].matchAll(/^\s{4}([a-zA-Z_$][\w$]*)\s*:/gm)].map((x) => x[1])
       );
+      /* 自定义组件的 properties 也是模板可见字段，语义等同 data。
+       * 不把它们算进来会把每个组件都误报成"引用了 data 里没有的字段"——
+       * 检查器必须认得组件的合法字段来源，否则只能被迫关掉这条规则。 */
+      if (isComponent) {
+        const propBlock = /properties\s*:\s*\{([\s\S]*?)\n\s{2}\}/.exec(js);
+        if (propBlock) {
+          for (const mm of propBlock[1].matchAll(/^\s{4}([a-zA-Z_$][\w$]*)\s*:/gm)) dataKeys.add(mm[1]);
+        }
+      }
       const used = new Set([...src.matchAll(/\{\{\s*([a-zA-Z_$][\w$]*)/g)].map((x) => x[1]));
       const builtin = new Set(["item", "index", "true", "false", "null", "undefined"]);
       // <template is="..." data="{{x: y}}"/> 里声明的局部别名（如 blocks）不属于页面 data

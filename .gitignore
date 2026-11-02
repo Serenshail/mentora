@@ -56,3 +56,9 @@ deploy/hw/hw-resources.ps1
 hw-secrets.txt
 preview/
 shots/
+
+# 本机运维（隧道看门狗/自启动）：与仓库代码无关，含本机路径与运行日志，不上传
+scripts/keep-alive.log
+scripts/keep-alive.ps1
+scripts/start-mentora.cmd
+.auto-deploy/

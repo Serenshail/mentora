@@ -52,7 +52,25 @@ function cacheKey() {
   return state.userId ? "mentora-mp-store-" + state.userId : "mentora-mp-store-anon";
 }
 
+/* 本地快照：写盘走「脏标记 + 防抖」。
+ * 为什么：知识库大时（几百篇笔记）JSON.stringify 是 MB 级主线程开销，
+ * 而 markDirty 在验收/记笔记/答题等高频路径上每次都会触发——
+ * 之前每次都同步写盘，"点一下卡一下"就是它。数据在内存里永远是最新的，
+ * 防抖只是推迟持久化；onHide/app onHide 有 flushPush 兜底，不怕丢。 */
+var saveTimer = null;
+function saveLocalSoon() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(function () {
+    saveTimer = null;
+    saveLocal();
+  }, 800);
+}
+
 function saveLocal() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
   try {
     wx.setStorageSync(
       cacheKey(),
@@ -151,6 +169,7 @@ function pushNow() {
         pendingPush = false;
         return pushNow();
       }
+      dirtyPending = false; // 已推上去：本地不再有未推送改动
       emitStatus("saved");
       return true;
     })
@@ -164,8 +183,16 @@ function pushNow() {
 
 var pushDebounced = null;
 
+/* 未推送的本地改动标记。
+ * 为什么需要它：markDirty 到真正 pushNow 之间有 2.5s 防抖，
+ * 这期间 syncStatus 仍是 "idle"。如果 pullIfSafe 只看 syncStatus，
+ * 就会把还没推上去的本地改动当成"已同步"从而被云端覆盖
+ * （真实场景：改完笔记立刻切 tab，onShow 里的 pullIfSafe(false) 会把改动抹掉）。 */
+var dirtyPending = false;
+
 function markDirty() {
-  saveLocal();
+  dirtyPending = true;
+  saveLocalSoon(); // 写盘防抖：高频路径上不再每次都做 MB 级 JSON 序列化
   if (!pushDebounced) {
     pushDebounced = util.debounce(function () {
       pushNow();
@@ -178,6 +205,7 @@ function markDirty() {
 function onLogin(userId) {
   state.userId = userId;
   state.loaded = false;
+  dirtyPending = false;
   loadLocal();
   state.loaded = true;
   return pullIfSafe(true);
@@ -202,7 +230,8 @@ function pullIfSafe(force) {
         if (force && hasLocalData()) return pushNow().then(function () { return "pushed"; });
         return "none";
       }
-      if (!force && hasLocalData() && syncStatus === "saving") return "skip";
+      // 有未推送改动（含防抖窗口内的）→ 绝不覆盖本地
+      if (!force && hasLocalData() && (dirtyPending || syncStatus === "saving")) return "skip";
       adoptCloud(cloud.data);
       return "pulled";
     })
@@ -212,6 +241,10 @@ function pullIfSafe(force) {
 }
 
 function flushPush() {
+  if (saveTimer) {
+    // 待写的本地快照立即落盘（切后台前保证本机缓存完整）
+    saveLocal();
+  }
   if (pushTimer) {
     clearTimeout(pushTimer);
     pushTimer = null;
@@ -278,32 +311,39 @@ function sessionById(id) {
 
 /* ---------------- 写路径（复刻 Web store 语义） ---------------- */
 
-/* 通过某天后解锁同阶段下一天 / 下一阶段首天 */
+/* 通过某天后解锁同阶段下一天 / 下一阶段首天。
+ * 返回值：本次推进是否把整个目标走完了（true = 最后一个阶段最后一天）。
+ *
+ * 注意（曾经的真 bug）：早期版本在这里直接给传入的 goal 赋 status="done"，
+ * 而调用方传的是一个临时 shadow 对象——赋值落在临时对象上，真实 goal 永远停在
+ * active，导致「目标永远完不成」：首页一直显示进行中、结业回路永不触发。
+ * 现在改为**返回结论**，由调用方写回真实 goal，不依赖对象引用。 */
 function unlockNext(goal, dayId) {
-  if (!goal.plan) return;
+  if (!goal.plan) return false;
   var day = goal.plan.days[dayId];
-  if (!day) return;
+  if (!day) return false;
   var phase = null;
   for (var i = 0; i < goal.plan.phases.length; i++) {
     if (goal.plan.phases[i].id === day.phaseId) phase = goal.plan.phases[i];
   }
-  if (!phase) return;
+  if (!phase) return false;
   var idx = phase.dayIds.indexOf(dayId);
   if (idx >= 0 && idx < phase.dayIds.length - 1) {
     var next = goal.plan.days[phase.dayIds[idx + 1]];
     if (next && next.status === "locked") next.status = "active";
-  } else {
-    phase.status = "passed";
-    var pIdx = goal.plan.phases.indexOf(phase);
-    var nextPhase = goal.plan.phases[pIdx + 1];
-    if (nextPhase && nextPhase.status === "locked") {
-      nextPhase.status = "active";
-      var first = goal.plan.days[nextPhase.dayIds[0]];
-      if (first && first.status === "locked") first.status = "active";
-    } else if (!nextPhase) {
-      goal.status = "done";
-    }
+    return false;
   }
+  phase.status = "passed";
+  var pIdx = goal.plan.phases.indexOf(phase);
+  var nextPhase = goal.plan.phases[pIdx + 1];
+  if (nextPhase && nextPhase.status === "locked") {
+    nextPhase.status = "active";
+    var first = goal.plan.days[nextPhase.dayIds[0]];
+    if (first && first.status === "locked") first.status = "active";
+    return false;
+  }
+  // 没有下一阶段了 → 整个目标走完
+  return !nextPhase;
 }
 
 function setDayStatus(goalId, dayId, status, opts) {
@@ -321,8 +361,10 @@ function setDayStatus(goalId, dayId, status, opts) {
   } else if (status === "passed") {
     delete day.pendingUnlock;
   }
-  var shadow = { id: goal.id, status: goal.status, plan: plan };
-  if ((status === "passed" && !gate) || status === "skipped") unlockNext(shadow, dayId);
+  var shadow = { id: goal.id, plan: plan };
+  if ((status === "passed" && !gate) || status === "skipped") {
+    if (unlockNext(shadow, dayId)) goal.status = "done";
+  }
   goal.plan = plan;
   if (goal.status === "done" && !goal.graduatedAt && !goal.needsGraduation) {
     goal.needsGraduation = true;
@@ -338,8 +380,8 @@ function completeTransfer(goalId, dayId, answer) {
   if (!day || day.status !== "passed") return;
   day.pendingUnlock = false;
   day.transferAnswer = answer;
-  var shadow = { id: goal.id, status: goal.status, plan: plan };
-  unlockNext(shadow, dayId);
+  var shadow = { id: goal.id, plan: plan };
+  if (unlockNext(shadow, dayId)) goal.status = "done";
   goal.plan = plan;
   if (goal.status === "done" && !goal.graduatedAt) goal.needsGraduation = true;
   markDirty();

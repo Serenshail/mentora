@@ -9,6 +9,7 @@ Page({
     links: [],
     outLinks: [],
     backLinks: [],
+    chips: [],
     masteryLabel: ""
   },
 
@@ -45,6 +46,16 @@ Page({
         return { id: x.id, title: x.title };
       });
     wx.setNavigationBarTitle({ title: k.title.slice(0, 12) });
+    // 元信息收成 chips：掌握度有值才显示，避免"未测"占位噪音
+    var masteryLabel = mastery.LABELS[k.masteryStatus || "unknown"];
+    var chips = [];
+    if (masteryLabel && masteryLabel !== "未测") chips.push({ text: masteryLabel, tone: "accent" });
+    if (k.nextReviewAt) chips.push({ text: "复习 " + k.nextReviewAt, tone: "dim" });
+    if (k.unresolved) chips.push({ text: "未解析链接", tone: "dim" });
+    (k.tags || []).forEach(function (t) {
+      chips.push({ text: "#" + t, tone: "dim" });
+    });
+
     this.setData({
       note: {
         id: k.id,
@@ -55,11 +66,12 @@ Page({
         nextReviewAt: k.nextReviewAt || "",
         body: k.body || ""
       },
+      chips: chips,
       blocks: parsed.blocks,
       links: parsed.links,
       outLinks: outLinks,
       backLinks: backLinks,
-      masteryLabel: mastery.LABELS[k.masteryStatus || "unknown"]
+      masteryLabel: masteryLabel
     });
   },
 

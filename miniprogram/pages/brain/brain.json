@@ -1,5 +1,7 @@
 {
-  "navigationBarTitleText": "第二大脑",
+  "usingComponents": {
+    "nav-bar": "/components/nav-bar/nav-bar"
+  },
   "enablePullDownRefresh": true,
   "backgroundTextStyle": "dark"
 }

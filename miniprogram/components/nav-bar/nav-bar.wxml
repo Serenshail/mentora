@@ -1,0 +1,14 @@
+<view class="nav" style="padding-top: {{m.statusBar}}px" wx:if="{{spacer}}">
+  <view class="nav-bar {{bordered ? 'nav-bar-line' : ''}}" style="height: {{m.navBar}}px">
+    <view class="nav-left">
+      <view wx:if="{{!home}}" class="nav-back" bindtap="onBack" hover-class="nav-back-tap" aria-role="button" aria-label="返回">
+        <view class="nav-chev"></view>
+      </view>
+      <view wx:else class="nav-brand font-brand">Mentora</view>
+      <view wx:if="{{!home && title}}" class="nav-title ellipsis">{{title}}</view>
+    </view>
+  </view>
+</view>
+
+<!-- 不占位时只画一层与页面同色的渐变底色，让内容可以从导航下方滚过 -->
+<view wx:else class="nav-fade" style="height: {{m.statusBar}}px"></view>

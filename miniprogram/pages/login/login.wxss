@@ -1,33 +1,62 @@
+/* 登录页：这是用户见到的第一屏，必须回答"这是什么、为什么值得注册"。
+ * 之前只有一个单词 Mentora + 一张表单，没有任何主张。 */
+
 .login-wrap {
   min-height: 100vh;
-  padding: 0 48rpx calc(60rpx + env(safe-area-inset-bottom));
+  padding: 0 44rpx calc(64rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   justify-content: center;
+  background: var(--bg);
+}
+
+.brand-wrap {
+  text-align: center;
+  margin-bottom: 52rpx;
 }
 .brand {
-  font-size: 76rpx;
-  font-weight: 700;
-  letter-spacing: -0.03em;
+  /* 与网页首页 hero 标题同一份资产：Great Vibes 手写体（.font-brand）。
+   * 手写体自身带斜度与连笔，不再叠负字距/加粗——那是无衬线体的调整手段。 */
+  font-size: 96rpx;
+  font-weight: 400;
+  line-height: 1.2;
   color: var(--ink);
-  text-align: center;
 }
 .brand-sub {
-  text-align: center;
+  margin-top: 14rpx;
+  font-size: 23rpx;
+  letter-spacing: 0.4rpx;
   color: var(--ink-3);
-  font-size: 24rpx;
-  margin: 8rpx 0 56rpx;
 }
-.login-card { padding: 44rpx 36rpx; }
+/* 一句主张：把产品定位说成一句人话，而不是功能清单 */
+.brand-line {
+  margin-top: 28rpx;
+  font-size: 28rpx;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.login-card {
+  padding: 40rpx 32rpx;
+}
 .login-error {
-  margin-top: 26rpx;
+  margin-top: 24rpx;
+  padding: 18rpx 20rpx;
+  border-radius: 16rpx;
+  background: var(--bad-wash);
   color: var(--bad);
-  font-size: 25rpx;
+  font-size: 24rpx;
   line-height: 1.5;
 }
-.login-btn { margin-top: 40rpx; }
+.login-btn {
+  margin-top: 36rpx;
+}
 .login-foot {
+  margin-top: 40rpx;
   text-align: center;
-  margin-top: 44rpx;
+  font-size: 21rpx;
+  line-height: 1.6;
+  color: var(--ink-3);
 }

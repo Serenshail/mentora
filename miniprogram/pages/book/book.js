@@ -3,6 +3,7 @@ var chat = require("../../utils/chat.js");
 var modes = require("../../utils/modes.js");
 var md = require("../../utils/md.js");
 var util = require("../../utils/util.js");
+var streamView = require("../../utils/stream-view.js");
 
 function toChatView(messages) {
   return messages.map(function (m) {
@@ -25,7 +26,10 @@ Page({
     streamBlocks: [],
     showModes: false,
     showChapters: false,
-    chapters: []
+    chapters: [],
+    doneCount: 0,
+    toBottom: "",
+    navH: "" // 由 nav-bar 组件量出后回写
   },
 
   onLoad: function (query) {
@@ -46,6 +50,7 @@ Page({
       b.chapters.filter(function (c) { return c.status === "todo"; })[0] || b.chapters[0] || null;
     var modeId = b.chatMode || modes.defaultMode(chapter && chapter.knowledgeType);
     var chatView = toChatView(b.chat || []);
+    var doneCount = b.chapters.filter(function (c) { return c.status === "done"; }).length;
     wx.setNavigationBarTitle({ title: b.title.slice(0, 12) });
     this.setData({
       book: {
@@ -58,14 +63,17 @@ Page({
       chapter: chapter
         ? {
             id: chapter.id,
+            index: b.chapters.indexOf(chapter) + 1,
             title: chapter.title,
             focusQuestion: chapter.focusQuestion || "",
             coreIdea: chapter.coreIdea || "",
+            knowledgeType: chapter.knowledgeType || "concept",
             status: chapter.status
           }
         : null,
       mode: modes.byId(modeId),
       chatView: chatView,
+      doneCount: doneCount,
       chapters: b.chapters.map(function (c, i) {
         return { id: c.id, title: c.title, status: c.status, index: i + 1 };
       })
@@ -73,10 +81,13 @@ Page({
     this.scrollBottom();
   },
 
+  /* 这页用的是内部 scroll-view（不是页面滚动），
+   * 所以必须用 scroll-into-view 定位到底部锚点；
+   * 之前调 wx.pageScrollTo 在这页永远不会生效。 */
   scrollBottom: function () {
     var that = this;
     wx.nextTick(function () {
-      wx.pageScrollTo({ duration: 100 });
+      that.setData({ toBottom: "chat-bottom" });
     });
   },
 
@@ -159,6 +170,9 @@ Page({
     that.setData({ chatView: chatView });
     that.scrollBottom();
     var stream = "";
+    var renderer = streamView.createStreamRenderer(function () {
+      that.setData({ streamBlocks: md.parse(stream).blocks });
+    }, 180);
     chat
       .streamChat({
         task: sendOpts.task,
@@ -166,10 +180,11 @@ Page({
         messages: [{ role: "user", content: text }],
         onDelta: function (d) {
           stream += d;
-          that.setData({ streamBlocks: md.parse(stream).blocks });
+          renderer.push();
         }
       })
       .then(function (full) {
+        renderer.flush();
         var content = full || stream;
         store.addBookMsg(that.bookId, {
           id: util.uid("m"),
@@ -186,6 +201,7 @@ Page({
         that.scrollBottom();
       })
       .catch(function (e) {
+        renderer.cancel();
         util.toast(e.message || "发送失败");
         that.setData({ stream: "" });
       })

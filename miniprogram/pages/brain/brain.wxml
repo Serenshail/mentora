@@ -1,47 +1,71 @@
+<nav-bar home="{{true}}" />
+
 <view class="page">
-  <view class="page-head">
-    <view class="between">
-      <view class="page-head-title">第二大脑</view>
-      <text class="meta num">{{total}} 篇 · 连接 {{linkCount}}</text>
+  <view class="head">
+    <view class="head-greet">第二大脑</view>
+    <view class="head-title">你的知识网络</view>
+    <view class="head-sub">{{total}} 篇笔记 · {{linkCount}} 条双链</view>
+  </view>
+
+  <!-- 到期复习：这是本页唯一带动作的主卡 -->
+  <view wx:if="{{dueCount > 0}}" class="card card-tap due" bindtap="goReview">
+    <view class="row gap-20">
+      <view class="due-num num">{{dueCount}}</view>
+      <view class="flex-1">
+        <view class="h3">条到期</view>
+        <view class="sub" style="margin-top: 4rpx">复习官从你的笔记原文出题，必须引原文才算过</view>
+      </view>
+      <view class="chev">›</view>
     </view>
   </view>
 
-  <view wx:if="{{dueCount > 0}}" class="card review" bindtap="goReview" hover-class="tap-dim">
-    <view class="flex-1">
-      <view class="h3">待复习 <text class="accent-text num">{{dueCount}}</text> 条</view>
-      <view class="sub" style="margin-top: 6rpx">复习官从原文出题，必须引原文才算过</view>
-    </view>
-    <view class="btn btn-accent btn-sm">复习</view>
-  </view>
-
+  <!-- 搜索 -->
   <view style="margin-top: 24rpx">
-    <input class="input" placeholder="搜标题、正文、标签" placeholder-class="ph" value="{{query}}" bindinput="onQuery" confirm-type="search" />
+    <input
+      class="input"
+      placeholder="搜标题、正文、标签"
+      placeholder-class="ph"
+      value="{{query}}"
+      bindinput="onQuery"
+      confirm-type="search"
+    />
   </view>
 
+  <!-- 目录筛选 -->
   <scroll-view scroll-x class="folders" wx:if="{{folders.length}}">
     <view class="folder-row">
-      <view class="badge {{activeFolder === '' ? 'badge-ink' : 'badge-dim'}}" bindtap="pickFolder" data-f="">全部</view>
-      <view wx:for="{{folders}}" wx:key="*this" class="badge {{activeFolder === item ? 'badge-ink' : 'badge-dim'}}" data-f="{{item}}" bindtap="pickFolder">{{item}}</view>
+      <view class="chip {{activeFolder === '' ? 'chip-on' : ''}}" data-f="" bindtap="pickFolder">全部</view>
+      <view
+        wx:for="{{folders}}"
+        wx:key="*this"
+        class="chip {{activeFolder === item ? 'chip-on' : ''}}"
+        data-f="{{item}}"
+        bindtap="pickFolder"
+      >{{item}}</view>
     </view>
   </scroll-view>
 
   <view wx:if="{{notes.length === 0 && !loading}}" class="card empty">
     <view class="empty-title">{{query ? "没有匹配的笔记" : "第二大脑还是空的"}}</view>
-    <view class="empty-sub">{{query ? "换个词试试" : "学习与读书时，知识点会自动沉淀到这里"}}</view>
+    <view class="empty-sub">
+      {{query ? "换个词试试" : "学习验收通过的知识点、读书聊出的洞见，都会自动沉淀到这里"}}
+    </view>
   </view>
 
-  <view wx:if="{{notes.length}}" class="card card-tight notes">
-    <view wx:for="{{notes}}" wx:key="id" class="note" data-id="{{item.id}}" bindtap="openNote" hover-class="tap-dim">
+  <view wx:if="{{notes.length}}" class="list" style="margin-top: 20rpx">
+    <view wx:for="{{notes}}" wx:key="id" class="item" data-id="{{item.id}}" bindtap="openNote">
       <view class="flex-1">
         <view class="row gap-12">
-          <text class="note-title">{{item.title}}</text>
-          <view wx:if="{{item.due}}" class="badge badge-warn">待复习</view>
+          <text class="note-title ellipsis">{{item.title}}</text>
+          <view wx:if="{{item.due}}" class="badge badge-warn">到期</view>
           <view wx:if="{{item.unresolved}}" class="badge badge-dim">未解析</view>
         </view>
-        <view wx:if="{{item.excerpt}}" class="note-excerpt">{{item.excerpt}}</view>
+        <view wx:if="{{item.excerpt}}" class="item-sub clamp-2">{{item.excerpt}}</view>
         <view class="meta" style="margin-top: 6rpx">{{item.domain}}</view>
       </view>
       <view class="chev">›</view>
     </view>
   </view>
+
+  <view class="page-tail"></view>
 </view>

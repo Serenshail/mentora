@@ -133,5 +133,106 @@ ok("skip logged forced", goal.quizLog.some((q) => q.forced === true));
 const config = require(path.join(proj, "config.js"));
 ok("config default prod", config.current().indexOf("https://") === 0);
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+/* ============ 结业回归锁（曾经的真 bug） ============
+ * unlockNext 早期直接给传入对象赋 status="done"，而调用方传的是临时 shadow，
+ * 赋值丢失 → 目标永远 active（首页永远"进行中"、结业回路永不触发）。
+ * 这里把修复钉死：全部走完必须 done + needsGraduation。 */
+function finishAll(userId, mode) {
+  store.onLogin(userId);
+  const gid2 = store.seedSampleGoal();
+  const gg = store.goalById(gid2);
+  const ids = gg.plan.phases[0].dayIds;
+  ids.forEach((id) => {
+    if (mode === "skip") {
+      store.setDayStatus(gid2, id, "skipped");
+    } else {
+      store.setDayStatus(gid2, id, "passed", { pendingUnlock: true, transferQuestion: "q" });
+      store.completeTransfer(gid2, id, "a");
+    }
+  });
+  return store.goalById(gid2);
+}
+const doneGoal = finishAll("u-done", "pass");
+ok("完成全部天 → goal.status=done", doneGoal.status === "done");
+ok("完成全部天 → needsGraduation", doneGoal.needsGraduation === true);
+const skippedAll = finishAll("u-skip", "skip");
+ok("全部跳过也算完成", skippedAll.status === "done");
+
+/* 中间态不得提前 done */
+store.onLogin("u-mid");
+const gidMid = store.seedSampleGoal();
+const idsMid = store.goalById(gidMid).plan.phases[0].dayIds;
+store.setDayStatus(gidMid, idsMid[0], "passed", { pendingUnlock: true, transferQuestion: "q" });
+store.completeTransfer(gidMid, idsMid[0], "a");
+const midGoal = store.goalById(gidMid);
+ok("只过第一天 → 仍是 active", midGoal.status === "active");
+ok("只过第一天 → 第二天已解锁", midGoal.plan.days[idsMid[1]].status === "active");
+
+/* ============ 流式渲染节流器 ============ */
+const { createStreamRenderer } = require(path.join(proj, "utils/stream-view.js"));
+// 断言挪进底部 async 段（顶层 setTimeout 会与 process.exit 竞态）
+
+/* ============ 防抖窗口拉取回归锁（曾经的真 bug） ============
+ * markDirty 后 2.5s 内 syncStatus 仍是 idle，若 pullIfSafe 只看 syncStatus，
+ * 会把未推送的本地改动当成已同步而被云端覆盖（改完笔记立刻切 tab 就会中招）。
+ * 用脏标记后：窗口内必须返回 "skip"，本地改动必须存活。 */
+(async () => {
+  /* ---- 节流器：push 合并 / flush 立即 / cancel 丢弃 ---- */
+  let svCalls = 0;
+  const throttled = createStreamRenderer(() => { svCalls++; }, 30);
+  for (let i = 0; i < 20; i++) throttled.push();
+  ok("节流：push 当下不立即刷新", svCalls === 0);
+  await new Promise((r) => setTimeout(r, 80));
+  ok("节流：20 次 push 只触发 ≤2 次刷新", svCalls >= 1 && svCalls <= 2);
+  const beforeFlush = svCalls;
+  throttled.flush();
+  ok("flush 立即补一次", svCalls === beforeFlush + 1);
+  throttled.cancel();
+  const afterCancel = svCalls;
+  throttled.push();
+  await new Promise((r) => setTimeout(r, 80));
+  ok("cancel 后 push 不触发", svCalls === afterCancel);
+
+  /* ---- 防抖窗口拉取 ---- */
+  const apiPath = require.resolve(path.join(proj, "utils/api.js"));
+  const saved = require.cache[apiPath];
+  const cloudSnapshot = {
+    data: {
+      goals: [{ id: "g-race", topic: "cloud", plan: null, quizLog: [] }],
+      knowledge: [],
+      books: [],
+      sessions: [],
+      customPersonas: [],
+      settings: {}
+    },
+    updatedAt: "2026-01-01T00:00:00.000Z"
+  };
+  require.cache[apiPath] = {
+    id: apiPath,
+    filename: apiPath,
+    loaded: true,
+    exports: {
+      pullCloud: () => Promise.resolve(cloudSnapshot),
+      pushCloud: () => Promise.resolve(true),
+      hasSession: () => true,
+      me: () => Promise.resolve({ user: { userId: "u-race" } })
+    }
+  };
+  // 重新加载 store，让它拿到被 stub 的 api
+  delete require.cache[require.resolve(path.join(proj, "utils/store.js"))];
+  const store2 = require(path.join(proj, "utils/store.js"));
+  await store2.onLogin("u-race");
+  const g = store2.goalById("g-race");
+  g.topic = "local-edit";
+  store2.markDirtyPublic();
+  const r = await store2.pullIfSafe(false);
+  ok("防抖窗口内 pull 必须 skip", r === "skip");
+  ok("防抖窗口内本地改动不被覆盖", store2.goalById("g-race").topic === "local-edit");
+
+  // 还原 api 缓存，避免影响其它断言
+  if (saved) require.cache[apiPath] = saved;
+  else delete require.cache[apiPath];
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

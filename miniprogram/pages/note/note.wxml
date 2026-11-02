@@ -1,14 +1,16 @@
 <import src="../../wxml/md.wxml" />
 
+<nav-bar title="{{note ? note.title : '笔记'}}" />
+
 <view class="page" wx:if="{{note}}">
-  <view class="page-head">
-    <view class="page-head-title">{{note.title}}</view>
-    <view class="row wrap gap-12" style="margin-top: 16rpx">
-      <view class="badge badge-dim">{{note.domain}}</view>
-      <view wx:if="{{masteryLabel !== '未测'}}" class="badge badge-accent">{{masteryLabel}}</view>
-      <view wx:if="{{note.nextReviewAt}}" class="badge badge-dim">复习 {{note.nextReviewAt}}</view>
-      <view wx:for="{{note.tags}}" wx:key="*this" class="badge badge-dim">#{{item}}</view>
-    </view>
+  <view class="head">
+    <view class="head-greet">{{note.domain}}</view>
+    <view class="head-title">{{note.title}}</view>
+  </view>
+
+  <!-- 元信息：掌握度、复习日期、标签，全部收成一行 chips -->
+  <view wx:if="{{chips.length}}" class="row wrap gap-8" style="margin-bottom: 24rpx">
+    <view class="badge badge-{{item.tone}}" wx:for="{{chips}}" wx:key="text">{{item.text}}</view>
   </view>
 
   <view class="card">
@@ -16,27 +18,36 @@
     <template is="md-blocks" data="{{blocks}}" />
   </view>
 
-  <view wx:if="{{outLinks.length}}" class="card card-tight sec-sm">
-    <view class="card-row" style="padding-top: 26rpx; padding-bottom: 4rpx; border-bottom: none">
-      <text class="h3">出链 · {{outLinks.length}}</text>
-    </view>
-    <view wx:for="{{outLinks}}" wx:key="id" class="card-row" data-id="{{item.id}}" bindtap="openLinked" hover-class="tap-dim">
-      <text class="flex-1 accent-text" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
-      <view class="chev">›</view>
+  <view wx:if="{{outLinks.length}}" class="sec-sm">
+    <view class="label" style="margin: 0 0 14rpx">出链 · {{outLinks.length}}</view>
+    <view class="list">
+      <view wx:for="{{outLinks}}" wx:key="id" class="item" data-id="{{item.id}}" bindtap="openLinked">
+        <text class="flex-1 accent-text" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
+        <view class="chev">›</view>
+      </view>
     </view>
   </view>
 
-  <view wx:if="{{backLinks.length}}" class="card card-tight sec-sm">
-    <view class="card-row" style="padding-top: 26rpx; padding-bottom: 4rpx; border-bottom: none">
-      <text class="h3">反向链接 · {{backLinks.length}}</text>
-    </view>
-    <view wx:for="{{backLinks}}" wx:key="id" class="card-row" data-id="{{item.id}}" bindtap="openLinked" hover-class="tap-dim">
-      <text class="flex-1 accent-text" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
-      <view class="chev">›</view>
+  <view wx:if="{{backLinks.length}}" class="sec-sm">
+    <view class="label" style="margin: 0 0 14rpx">反向链接 · {{backLinks.length}}</view>
+    <view class="list">
+      <view wx:for="{{backLinks}}" wx:key="id" class="item" data-id="{{item.id}}" bindtap="openLinked">
+        <text class="flex-1 accent-text" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
+        <view class="chev">›</view>
+      </view>
     </view>
   </view>
+
+  <view wx:if="{{!outLinks.length && !backLinks.length}}" class="tiny" style="margin-top: 28rpx; text-align: center; line-height: 1.7">
+    这篇还孤立着。在网页版给正文加 [[双链]]，或用「AI 建联」把它织进网络。
+  </view>
+
+  <view class="page-tail"></view>
 </view>
 
-<view wx:else class="empty">
-  <view class="empty-title">笔记不存在</view>
+<view wx:else class="page">
+  <view class="empty">
+    <view class="empty-title">笔记不存在</view>
+    <view class="empty-sub">可能已被删除，或还没同步到本机</view>
+  </view>
 </view>

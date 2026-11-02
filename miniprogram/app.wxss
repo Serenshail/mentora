@@ -1,20 +1,25 @@
 /* ============================================================
- * Mentora 小程序 · 设计系统
+ * Mentora 小程序 · 设计系统 v2
  *
- * 基准 = 网页版（src/app/globals.css，用户自己定的那套主题）：
- *   底色 #f5f5f7 · 纯白面板 · 发丝边框 rgba(0,0,0,.07)
- *   墨色 #1d1d1f / #6e6e73 / #86868b / #aeaeb2
- *   强调靛蓝 #5b54e6（只给聚焦、激活、链接）
- *   圆角 18px（36rpx） · 两层柔和阴影（紧凑接触层 + 柔和扩散层）
+ * 与网页版（src/app/globals.css）同一套视觉语言，但**为手机重排层级**：
+ *   网页是"多栏 + 大量同权卡片"；手机只有一屏，必须回答一个问题——
+ *   **现在该做什么**。所以手机版有一条网页没有的规则：
  *
- * 小程序这边唯一的改动是**把排版刻度换成手机可读尺寸**（rpx），
- * 视觉语言完全沿用网页版，不另起一套。
+ *   一张页面只有一个"墨色主卡"（.hero）。它承载当下唯一的主任务；
+ *   其余一切内容都是白卡或纯排版，永远不得与它争抢注意力。
+ *
+ * 色板与网页完全一致（纸面灰白 #f5f5f7 / 墨色 #1d1d1f / 靛蓝 #5b54e6），
+ * 刻度改成手机可读的 rpx。
  * ============================================================ */
+/* 品牌字体：与网页版同一份 Great Vibes（由 gen-mp-font.mjs 生成，勿手改） */
+@import "styles/font-brand.wxss";
 page {
   --bg: #f5f5f7;
   --surface: #ffffff;
   --surface-2: #f4f4f5;
+  --surface-3: #ededf0;
   --border: rgba(0, 0, 0, 0.07);
+  --border-strong: rgba(0, 0, 0, 0.12);
   --ink: #1d1d1f;
   --ink-2: #6e6e73;
   --ink-3: #86868b;
@@ -23,12 +28,22 @@ page {
   --track: #e8e8ed;
   --accent: #5b54e6;
   --accent-wash: rgba(91, 84, 230, 0.08);
+  --accent-line: rgba(91, 84, 230, 0.24);
   --ok: #047857;
   --ok-wash: rgba(4, 120, 87, 0.08);
   --warn: #b45309;
   --warn-wash: rgba(180, 83, 9, 0.08);
   --bad: #dc2626;
   --bad-wash: rgba(220, 38, 38, 0.07);
+  --ink-wash: rgba(0, 0, 0, 0.045);
+
+  /* 阴影：手机只用两级（卡片 / 浮层）。主卡不用阴影——它靠颜色立起来，不靠浮起。 */
+  --lift: 0 2rpx 6rpx rgba(0, 0, 0, 0.04), 0 12rpx 32rpx rgba(0, 0, 0, 0.05);
+  --overlay: 0 4rpx 12rpx rgba(0, 0, 0, 0.1), 0 32rpx 80rpx rgba(0, 0, 0, 0.22);
+
+  /* 真实导航高度（状态栏 + 44px）。默认值兜底；运行时由 nav-bar 组件
+   * 量出机型真实值后，通过页面内联 style 覆盖。全屏对话页靠它算内容区高度。 */
+  --nav-h: 64px;
 
   background: var(--bg);
   color: var(--ink);
@@ -39,23 +54,24 @@ page {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ---------------- 文字层级 ---------------- */
+/* ============ 文字层级 ============
+ * 手机上只保留 5 级。网页的 6 级在 375px 屏上分不出来，反而变成噪音。 */
 .display {
-  font-size: 56rpx;
+  font-size: 60rpx;
   font-weight: 700;
-  letter-spacing: -1.6rpx;
-  line-height: 1.18;
+  letter-spacing: -2rpx;
+  line-height: 1.12;
   color: var(--ink);
 }
 .title {
-  font-size: 44rpx;
+  font-size: 46rpx;
   font-weight: 700;
-  letter-spacing: -1.2rpx;
-  line-height: 1.25;
+  letter-spacing: -1.4rpx;
+  line-height: 1.22;
   color: var(--ink);
 }
-.h2 { font-size: 36rpx; font-weight: 700; letter-spacing: -0.7rpx; line-height: 1.35; color: var(--ink); }
-.h3 { font-size: 31rpx; font-weight: 600; letter-spacing: -0.2rpx; color: var(--ink); }
+.h2 { font-size: 36rpx; font-weight: 700; letter-spacing: -0.8rpx; line-height: 1.32; color: var(--ink); }
+.h3 { font-size: 31rpx; font-weight: 600; letter-spacing: -0.2rpx; line-height: 1.4; color: var(--ink); }
 .body { font-size: 30rpx; line-height: 1.72; color: var(--ink); }
 .sub { font-size: 27rpx; line-height: 1.6; color: var(--ink-2); }
 .meta { font-size: 24rpx; line-height: 1.5; color: var(--ink-3); }
@@ -68,62 +84,202 @@ page {
 .ok-text { color: var(--ok); }
 .warn-text { color: var(--warn); }
 .bad-text { color: var(--bad); }
+.on-ink { color: #fff; }
+.on-ink-dim { color: rgba(255, 255, 255, 0.66); }
 .strong { font-weight: 600; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clamp-2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
 
-/* ---------------- 容器 ---------------- */
-.page { padding: 0 32rpx 60rpx; }
-.sec { margin-top: 44rpx; }
-.sec-sm { margin-top: 28rpx; }
+/* ============ 页面骨架 ============
+ * .page 给固定底部留位（tabBar 高度），避免最后一屏内容被 tabBar 盖住。
+ * 详情页（不在 tab 里）自己不带底部安全区，用 .page-plain。 */
+.page { padding: 0 32rpx 40rpx; }
+.page-tail { height: 40rpx; }
+.sec { margin-top: 40rpx; }
+.sec-sm { margin-top: 24rpx; }
 .row { display: flex; align-items: center; }
 .between { display: flex; align-items: center; justify-content: space-between; }
+.col { display: flex; flex-direction: column; }
+.gap-6 { gap: 6rpx; }
 .gap-8 { gap: 8rpx; }
 .gap-12 { gap: 12rpx; }
 .gap-16 { gap: 16rpx; }
 .gap-20 { gap: 20rpx; }
 .flex-1 { flex: 1; min-width: 0; }
+.min-w-0 { min-width: 0; }
 .wrap { flex-wrap: wrap; }
 
-.page-head { padding: 24rpx 0 32rpx; }
-.page-head-title { font-size: 44rpx; font-weight: 700; letter-spacing: -1.2rpx; line-height: 1.2; color: var(--ink); }
-.page-head-sub { margin-top: 8rpx; font-size: 24rpx; color: var(--ink-3); }
+/* ============ 页头 ============
+ * 手机上页头不是"标题栏"，是"这一屏的定位"。
+ * 所以：小字问候在上、大字结论在下、可选一行右侧动作。 */
+.head { padding: 20rpx 0 28rpx; }
+.head-greet { font-size: 25rpx; font-weight: 600; color: var(--ink-3); letter-spacing: 0.2rpx; }
+.head-title {
+  margin-top: 6rpx;
+  font-size: 46rpx;
+  font-weight: 700;
+  letter-spacing: -1.4rpx;
+  line-height: 1.2;
+  color: var(--ink);
+}
+.head-sub { margin-top: 10rpx; font-size: 25rpx; line-height: 1.55; color: var(--ink-3); }
 
-/* ---------------- 卡片（网页版 card 同款：白面 + 发丝边 + 两层柔和阴影 + 18px 圆角） ---------------- */
+/* 分段标题（"今天""最近"这类小标题） */
+.label {
+  font-size: 22rpx;
+  font-weight: 700;
+  letter-spacing: 1.4rpx;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* ============ 卡片 ============
+ * 两种：.card（白卡，承载内容）与 .hero（墨色主卡，承载当下唯一任务）。
+ * 不再提供第三种——之前的同权白卡堆叠正是"没有层级"的根源。 */
 .card {
   background: var(--surface);
   border: 1rpx solid var(--border);
-  border-radius: 36rpx;
-  padding: 32rpx;
-  box-shadow: 0 2rpx 4rpx rgba(0, 0, 0, 0.04), 0 16rpx 48rpx rgba(0, 0, 0, 0.05);
+  border-radius: 32rpx;
+  padding: 30rpx;
   box-sizing: border-box;
 }
-.card + .card { margin-top: 24rpx; }
+.card + .card { margin-top: 20rpx; }
 .card-tight { padding: 0; }
 .card-flat {
-  background: var(--surface);
-  border: 1rpx solid var(--border);
+  background: var(--surface-2);
   border-radius: 24rpx;
-  padding: 26rpx;
+  padding: 24rpx;
   box-sizing: border-box;
 }
+/* 可点的卡片：有按压反馈，但没有 hover 态（手机上 hover 是伪概念） */
+.card-tap { transition: transform 0.12s ease, opacity 0.12s ease; }
+.card-tap:active { transform: scale(0.985); opacity: 0.9; }
 
-.card-row {
+/* ---- 墨色主卡：一屏只有一个 ----
+ * 注意：WXSS 不支持 ::before/::after 伪元素，所以主卡上的那层淡光斑
+ * 用真实节点（.hero-glow）实现，见 pages 里的用法。 */
+.hero {
+  position: relative;
+  overflow: hidden;
+  background: #1a1a1a;
+  color: #fff;
+  border-radius: 32rpx;
+  padding: 34rpx 32rpx 30rpx;
+  box-sizing: border-box;
+}
+/* 光斑节点：极淡径向渐变，让纯黑不死板，又不至于产生廉价玻璃感 */
+.hero-glow {
+  position: absolute;
+  top: -160rpx;
+  right: -80rpx;
+  width: 420rpx;
+  height: 420rpx;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(91, 84, 230, 0.28) 0%, rgba(91, 84, 230, 0) 70%);
+  pointer-events: none;
+}
+.hero-kicker {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  font-size: 22rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
+  color: rgba(255, 255, 255, 0.58);
+}
+.hero-title {
+  position: relative;
+  z-index: 1;
+  margin-top: 18rpx;
+  font-size: 42rpx;
+  font-weight: 700;
+  letter-spacing: -1.2rpx;
+  line-height: 1.26;
+  color: #fff;
+}
+.hero-sub {
+  position: relative;
+  z-index: 1;
+  margin-top: 12rpx;
+  font-size: 26rpx;
+  line-height: 1.58;
+  color: rgba(255, 255, 255, 0.62);
+}
+.hero-cta {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 28rpx;
+  padding-top: 24rpx;
+  border-top: 1rpx solid rgba(255, 255, 255, 0.12);
+}
+.hero-btn {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  height: 76rpx;
+  padding: 0 32rpx;
+  border-radius: 999rpx;
+  background: #fff;
+  color: #1a1a1a;
+  font-size: 28rpx;
+  font-weight: 700;
+  letter-spacing: -0.2rpx;
+}
+.hero-bar { height: 6rpx; border-radius: 999rpx; background: rgba(255, 255, 255, 0.16); overflow: hidden; }
+.hero-bar-fill { height: 100%; border-radius: 999rpx; background: #fff; }
+
+/* ============ 列表行 ============
+ * 统一的行式列表：图标位 + 主副文字 + 尾部。行高 ≥ 88rpx（触摸目标）。 */
+.list { background: var(--surface); border-radius: 32rpx; border: 1rpx solid var(--border); overflow: hidden; }
+.item {
   display: flex;
   align-items: center;
   gap: 20rpx;
-  padding: 26rpx 0;
+  min-height: 100rpx;
+  padding: 22rpx 28rpx;
   border-bottom: 1rpx solid var(--border);
+  box-sizing: border-box;
+  transition: background 0.12s ease;
 }
-.card-row:last-child { border-bottom: none; }
-.card-row:first-child { padding-top: 0; }
-.card-row-title { font-size: 30rpx; font-weight: 600; color: var(--ink); letter-spacing: -0.2rpx; }
-.card-row-sub { margin-top: 6rpx; font-size: 24rpx; color: var(--ink-3); }
+.item:last-child { border-bottom: none; }
+.item:active { background: var(--surface-2); }
+.item-title { font-size: 30rpx; font-weight: 600; letter-spacing: -0.2rpx; color: var(--ink); }
+.item-sub { margin-top: 6rpx; font-size: 24rpx; line-height: 1.5; color: var(--ink-3); }
+.item-icon {
+  width: 76rpx;
+  height: 76rpx;
+  border-radius: 20rpx;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 32rpx;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.item-icon-img { width: 76rpx; height: 76rpx; border-radius: 20rpx; flex-shrink: 0; background: var(--surface-2); }
+.chev { color: var(--faint); font-size: 32rpx; line-height: 1; flex-shrink: 0; }
 
-/* ---------------- 按钮（网页版：墨色主按钮 + 描边次按钮） ---------------- */
+/* ============ 按钮 ============
+ * 主按钮墨色，次按钮描边。全部 ≥ 88rpx 高（约 44pt）。 */
 .btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 88rpx;
+  gap: 10rpx;
+  height: 92rpx;
   padding: 0 36rpx;
   border-radius: 24rpx;
   font-size: 30rpx;
@@ -131,22 +287,36 @@ page {
   letter-spacing: -0.2rpx;
   border: none;
   box-sizing: border-box;
+  transition: transform 0.12s ease, opacity 0.12s ease;
 }
 .btn::after { border: none; }
+.btn:active { transform: scale(0.98); opacity: 0.88; }
 .btn-ink { background: #1a1a1a; color: #fff; }
 .btn-accent { background: var(--accent); color: #fff; }
-.btn-outline { background: var(--surface); color: var(--ink); border: 1rpx solid var(--border); }
+.btn-outline { background: var(--surface); color: var(--ink); border: 1rpx solid var(--border-strong); }
 .btn-ghost { background: transparent; color: var(--ink-2); }
 .btn-danger { background: var(--bad-wash); color: var(--bad); }
 .btn-block { display: flex; width: 100%; }
-.btn-sm { height: 64rpx; padding: 0 26rpx; font-size: 25rpx; border-radius: 18rpx; }
-.btn-xs { height: 52rpx; padding: 0 20rpx; font-size: 22rpx; border-radius: 14rpx; }
-.btn.disabled { opacity: 0.35; }
-.tap-dim { opacity: 0.6; }
+.btn-sm { height: 68rpx; padding: 0 26rpx; font-size: 25rpx; border-radius: 18rpx; }
+.btn-xs { height: 56rpx; padding: 0 20rpx; font-size: 22rpx; border-radius: 14rpx; }
+.btn.disabled { opacity: 0.32; }
+.btn.disabled:active { transform: none; }
 
+/* 文字按钮：点击区补到 88rpx 高，避免"一行小字点不中" */
+.tap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+  min-height: 88rpx;
+  padding: 0 8rpx;
+  font-size: 27rpx;
+  font-weight: 600;
+  color: var(--accent);
+}
+.tap-quiet { color: var(--ink-3); }
 .link { font-size: 26rpx; font-weight: 600; color: var(--accent); }
 
-/* ---------------- 徽标 ---------------- */
+/* ============ 徽标 ============ */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -157,6 +327,7 @@ page {
   font-size: 22rpx;
   font-weight: 600;
   line-height: 1;
+  flex-shrink: 0;
 }
 .badge-dim { background: var(--surface-2); color: var(--ink-2); }
 .badge-accent { background: var(--accent-wash); color: var(--accent); }
@@ -164,6 +335,7 @@ page {
 .badge-warn { background: var(--warn-wash); color: var(--warn); }
 .badge-bad { background: var(--bad-wash); color: var(--bad); }
 .badge-ink { background: #1a1a1a; color: #fff; }
+.badge-on-ink { background: rgba(255, 255, 255, 0.16); color: #fff; }
 
 .dot { width: 12rpx; height: 12rpx; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .dot-ok { background: var(--ok); }
@@ -172,7 +344,7 @@ page {
 .dot-accent { background: var(--accent); }
 .dot-idle { background: var(--faint); }
 
-/* ---------------- 表单 ---------------- */
+/* ============ 表单 ============ */
 .field-label {
   display: block;
   font-size: 23rpx;
@@ -180,9 +352,10 @@ page {
   color: var(--ink-2);
   margin-bottom: 12rpx;
 }
+.field-gap { margin-top: 26rpx; }
 .input {
   width: 100%;
-  height: 88rpx;
+  height: 92rpx;
   padding: 0 28rpx;
   border-radius: 20rpx;
   background: var(--surface);
@@ -193,7 +366,7 @@ page {
 }
 .area {
   width: 100%;
-  min-height: 200rpx;
+  min-height: 220rpx;
   padding: 24rpx 28rpx;
   border-radius: 20rpx;
   background: var(--surface);
@@ -205,12 +378,13 @@ page {
 }
 .ph { color: var(--placeholder); }
 
-/* ---------------- 进度 ---------------- */
+/* ============ 进度 ============ */
 .progress { height: 8rpx; border-radius: 999rpx; background: var(--track); overflow: hidden; }
-.progress-fill { height: 100%; border-radius: 999rpx; background: var(--accent); }
+.progress-fill { height: 100%; border-radius: 999rpx; background: var(--accent); transition: width 0.4s ease; }
 .progress-fill-ink { background: #1a1a1a; }
+.progress-fill-ok { background: var(--ok); }
 
-/* ---------------- 头像（对齐网页版 PersonaAvatar：真实照片 + 圆角 + 发丝边） ---------------- */
+/* ============ 头像 ============ */
 .avatar {
   border-radius: 18rpx;
   border: 1rpx solid var(--border);
@@ -232,12 +406,12 @@ page {
 }
 .avatar-round { border-radius: 50%; }
 
-/* ---------------- 对话 ---------------- */
+/* ============ 对话 ============ */
 .chat { padding: 8rpx 0 24rpx; }
 .msg { margin: 20rpx 0; display: flex; }
 .msg-out { justify-content: flex-end; }
 .bubble {
-  max-width: 80%;
+  max-width: 82%;
   padding: 20rpx 28rpx;
   border-radius: 28rpx;
   font-size: 30rpx;
@@ -271,9 +445,9 @@ page {
 }
 .composer-field {
   flex: 1;
-  min-height: 76rpx;
+  min-height: 80rpx;
   max-height: 240rpx;
-  padding: 18rpx 26rpx;
+  padding: 20rpx 26rpx;
   border-radius: 999rpx;
   background: var(--surface-2);
   font-size: 29rpx;
@@ -281,45 +455,26 @@ page {
   box-sizing: border-box;
 }
 .composer-send {
-  width: 76rpx;
-  height: 76rpx;
+  width: 80rpx;
+  height: 80rpx;
   border-radius: 50%;
   background: #1a1a1a;
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 30rpx;
+  font-size: 32rpx;
   flex-shrink: 0;
+  transition: opacity 0.15s ease;
 }
-.composer-send.disabled { opacity: 0.28; }
+.composer-send.disabled { opacity: 0.24; }
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12rpx;
-  padding: 14rpx 32rpx calc(14rpx + env(safe-area-inset-bottom));
-  background: var(--surface);
-  border-top: 1rpx solid var(--border);
-}
-.tool-btn {
-  height: 64rpx;
-  padding: 0 24rpx;
-  border-radius: 16rpx;
-  background: var(--surface-2);
-  font-size: 26rpx;
-  font-weight: 600;
-  color: var(--ink-2);
-  display: flex;
-  align-items: center;
-}
-
-/* ---------------- 空态 ---------------- */
-.empty { padding: 100rpx 56rpx; text-align: center; }
+/* ============ 空态 ============ */
+.empty { padding: 88rpx 48rpx; text-align: center; }
 .empty-title { font-size: 31rpx; font-weight: 600; color: var(--ink-2); }
 .empty-sub { margin-top: 12rpx; font-size: 25rpx; line-height: 1.6; color: var(--ink-3); }
 
-/* ---------------- 底部弹层 ---------------- */
+/* ============ 底部弹层 ============ */
 .mask { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32); z-index: 900; }
 .sheet {
   position: fixed;
@@ -329,7 +484,7 @@ page {
   z-index: 901;
   background: var(--surface);
   border-radius: 36rpx 36rpx 0 0;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1), 0 30rpx 80rpx rgba(0, 0, 0, 0.24);
+  box-shadow: var(--overlay);
   padding: 20rpx 0 calc(24rpx + env(safe-area-inset-bottom));
   max-height: 76vh;
   display: flex;
@@ -355,48 +510,86 @@ page {
   display: flex;
   align-items: center;
   gap: 20rpx;
-  padding: 24rpx 32rpx;
+  min-height: 100rpx;
+  padding: 22rpx 32rpx;
   border-top: 1rpx solid var(--border);
 }
 .sheet-item:first-child { border-top: none; }
 
+/* ============ 分段控件 ============
+ * 用于"目标 | 书架"这类同层切换。滑块式，选中项白底浮起。 */
 .segmented {
   display: flex;
-  gap: 6rpx;
+  gap: 4rpx;
   padding: 6rpx;
   border-radius: 999rpx;
   background: var(--surface-2);
+  box-sizing: border-box;
 }
 .segmented-item {
   flex: 1;
-  height: 64rpx;
+  height: 68rpx;
   border-radius: 999rpx;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8rpx;
   font-size: 26rpx;
   font-weight: 600;
   color: var(--ink-2);
+  transition: background 0.18s ease, color 0.18s ease;
 }
 .segmented-item-on {
   background: var(--surface);
   color: var(--ink);
   box-shadow: 0 1rpx 3rpx rgba(0, 0, 0, 0.1);
 }
+.seg-count {
+  font-size: 20rpx;
+  font-weight: 700;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.segmented-item-on .seg-count { color: var(--accent); }
 
-/* ============================================================
- * Markdown（wxml/md.wxml；行内样式由 utils/md.js 注入）
- * ============================================================ */
+/* ============ 统计 ============ */
+.stats { display: flex; }
+.stat { flex: 1; }
+.stat-n {
+  font-size: 42rpx;
+  font-weight: 700;
+  letter-spacing: -1.2rpx;
+  line-height: 1.2;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.stat-l { margin-top: 4rpx; font-size: 21rpx; color: var(--ink-3); }
+
+/* ============ 热力墙 ============
+ * 一格 = 一天。强度 = 当天验收质量（0 无 / 1 仅新掌握 / 2 部分通过 / 3 全过）。 */
+.heat-scroll { width: 100%; white-space: nowrap; }
+.heat { display: inline-flex; gap: 6rpx; }
+.heat-col { display: inline-flex; flex-direction: column; gap: 6rpx; }
+.heat-cell { width: 22rpx; height: 22rpx; border-radius: 5rpx; background: var(--track); }
+.heat-0 { background: var(--track); }
+.heat-1 { background: rgba(91, 84, 230, 0.18); }
+.heat-2 { background: rgba(91, 84, 230, 0.46); }
+.heat-3 { background: var(--accent); }
+.heat-off { opacity: 0.28; }
+.heat-legend { display: flex; align-items: center; justify-content: flex-end; gap: 8rpx; margin-top: 16rpx; }
+.heat-legend-cell { width: 18rpx; height: 18rpx; border-radius: 4rpx; }
+
+/* ============ Markdown（wxml/md.wxml；行内样式由 utils/md.js 注入） ============ */
 .md-h { margin: 40rpx 0 14rpx; }
-.md-h1 { font-size: 40rpx; line-height: 1.3; font-weight: 700; letter-spacing: -1rpx; }
-.md-h2 { font-size: 36rpx; line-height: 1.35; font-weight: 700; letter-spacing: -0.7rpx; }
+.md-h1 { font-size: 42rpx; line-height: 1.3; font-weight: 700; letter-spacing: -1.2rpx; }
+.md-h2 { font-size: 36rpx; line-height: 1.35; font-weight: 700; letter-spacing: -0.8rpx; }
 .md-h3 { font-size: 32rpx; line-height: 1.4; font-weight: 600; letter-spacing: -0.3rpx; }
 .md-h4 { font-size: 30rpx; line-height: 1.45; font-weight: 600; color: var(--ink-2); }
-.md-p { margin: 16rpx 0; font-size: 30rpx; line-height: 1.8; letter-spacing: -0.1rpx; color: var(--ink); }
+.md-p { margin: 16rpx 0; font-size: 30rpx; line-height: 1.82; letter-spacing: -0.1rpx; color: var(--ink); }
 .md-quote {
   margin: 22rpx 0;
   padding: 4rpx 0 4rpx 24rpx;
-  border-left: 5rpx solid var(--accent-wash);
+  border-left: 5rpx solid var(--accent-line);
   color: var(--ink-2);
   font-size: 28rpx;
   line-height: 1.75;

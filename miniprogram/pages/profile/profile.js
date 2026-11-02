@@ -3,20 +3,20 @@ var store = require("../../utils/store.js");
 var config = require("../../config.js");
 var util = require("../../utils/util.js");
 
-var BASE_LABELS = {
-  prod: "官方部署（Vercel）",
-  tunnel: "本机隧道（UUMit）",
-  local: "本机开发（localhost）"
+var BASE_META = {
+  prod: { label: "官方部署", desc: "Vercel，开发者工具里走代理可达" },
+  tunnel: { label: "本机隧道", desc: "UUMit 映射，真机预览用，需电脑服务在跑" },
+  local: { label: "本机开发", desc: "localhost:3000，只在开发者工具里用" }
 };
 
 Page({
   data: {
     user: null,
     sync: "",
+    syncTone: "idle",
     counts: { goals: 0, notes: 0, books: 0, sessions: 0 },
     baseId: "prod",
-    baseLabel: "",
-    switching: false,
+    bases: [],
     busy: false
   },
 
@@ -34,19 +34,29 @@ Page({
             : s === "saved"
               ? "已同步"
               : s === "error"
-                ? "同步失败"
-                : ""
+                ? "同步失败，稍后自动重试"
+                : "",
+        syncTone: s === "saved" ? "ok" : s === "error" ? "bad" : s === "saving" ? "accent" : "idle"
       });
     });
     that.render();
   },
 
   onHide: function () {
-    if (this._offSync) this._offSync();
+    if (this._offSync) {
+      this._offSync();
+      this._offSync = null;
+    }
   },
 
   render: function () {
     var st = store.state;
+    var baseId = config.currentId();
+    // 用 config.BASES 的键序生成列表，保证与可切换集合一致（不硬编码三个字符串）
+    var bases = Object.keys(config.BASES).map(function (id) {
+      var meta = BASE_META[id] || { label: id, desc: "" };
+      return { id: id, label: meta.label, desc: meta.desc };
+    });
     this.setData({
       user: getApp().globalData.user,
       counts: {
@@ -55,8 +65,8 @@ Page({
         books: st.books.length,
         sessions: st.sessions.length
       },
-      baseId: config.currentId(),
-      baseLabel: BASE_LABELS[config.currentId()] || ""
+      baseId: baseId,
+      bases: bases
     });
   },
 
@@ -95,20 +105,18 @@ Page({
     wx.setClipboardData({
       data: "https://mentora-orpin.vercel.app",
       success: function () {
-        util.toast("网址已复制，去浏览器打开网页版");
+        util.toast("网址已复制，去浏览器打开");
       }
     });
   },
-
-  noop: function () {},
 
   switchBase: function (e) {
     var that = this;
     var id = e.currentTarget.dataset.id;
     if (!id || id === config.currentId() || !config.BASES[id]) return;
     wx.showModal({
-      title: "切换后端？",
-      content: "切换到「" + BASE_LABELS[id] + "」后需要重新登录。",
+      title: "切换连接？",
+      content: "切换后需要重新登录。",
       success: function (res) {
         if (!res.confirm) return;
         store.onLogout();
@@ -121,7 +129,6 @@ Page({
   },
 
   logout: function () {
-    var that = this;
     wx.showModal({
       title: "退出登录？",
       content: "本机数据已同步到云端，退出后随时可以登录回来。",

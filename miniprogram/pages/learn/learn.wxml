@@ -1,35 +1,118 @@
+<nav-bar home="{{true}}" />
+
 <view class="page">
-  <view class="page-head">
-    <view class="between">
-      <view class="page-head-title">学习教练</view>
-      <text wx:if="{{syncHint}}" class="meta">{{syncHint}}</text>
+  <view class="head">
+    <view class="head-greet">学习</view>
+    <view class="head-title">目标与书架</view>
+    <view class="head-sub">学完的知识点会自动进第二大脑，按遗忘曲线复习。</view>
+  </view>
+
+  <!-- 同层切换：目标 / 书架。两个都是"我在投入的东西" -->
+  <view class="segmented">
+    <view class="segmented-item {{tab === 'goals' ? 'segmented-item-on' : ''}}" data-tab="goals" bindtap="setTab">
+      目标<text class="seg-count">{{goals.length}}</text>
+    </view>
+    <view class="segmented-item {{tab === 'books' ? 'segmented-item-on' : ''}}" data-tab="books" bindtap="setTab">
+      书架<text class="seg-count">{{books.length}}</text>
     </view>
   </view>
 
-  <view wx:if="{{goals.length === 0 && !loading}}" class="card empty">
-    <view class="empty-title">还没有学习目标</view>
-    <view class="empty-sub">网页端完成苏格拉底引导后会同步到这里；也可以先用示例目标体验闭环</view>
-    <button class="btn btn-outline btn-sm" style="margin-top: 32rpx; display: inline-flex" bindtap="seedSample">用示例目标试一试</button>
-  </view>
+  <!-- ============ 目标 ============ -->
+  <block wx:if="{{tab === 'goals'}}">
+    <view wx:if="{{goals.length === 0 && !loading}}" class="card empty" style="margin-top: 24rpx">
+      <view class="empty-title">还没有学习目标</view>
+      <view class="empty-sub">苏格拉底引导在网页版完成，计划会同步到手机；也可以先用示例目标走一遍闭环。</view>
+      <button class="btn btn-outline btn-sm" style="margin: 32rpx auto 0; width: 60%" bindtap="seedSample">
+        用示例目标试一试
+      </button>
+    </view>
 
-  <view
-    wx:for="{{goals}}"
-    wx:key="id"
-    class="card goal {{item.active ? 'goal-on' : ''}}"
-    data-id="{{item.id}}"
-    bindtap="openGoal"
-    hover-class="tap-dim"
-  >
-    <view class="between">
-      <view class="badge badge-{{item.tone}} row gap-8">
-        <view class="dot dot-{{item.tone}}"></view>{{item.statusLabel}}
+    <view wx:if="{{goals.length}}" class="sec-sm">
+      <view
+        wx:for="{{goals}}"
+        wx:key="id"
+        class="card card-tap goal {{item.active ? 'goal-on' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="openGoal"
+      >
+        <view class="between">
+          <view class="badge badge-{{item.tone}}">
+            <view class="dot dot-{{item.tone}}"></view>
+            <text style="margin-left: 8rpx">{{item.statusLabel}}</text>
+          </view>
+          <text class="meta num">{{item.done}}/{{item.total}} 天</text>
+        </view>
+        <view class="goal-topic">{{item.topic}}</view>
+        <view wx:if="{{item.direction}}" class="sub clamp-2" style="margin-top: 6rpx">{{item.direction}}</view>
+        <view class="progress" style="margin-top: 22rpx">
+          <view class="progress-fill {{item.active ? '' : 'progress-fill-ok'}}" style="width: {{item.progress}}%"></view>
+        </view>
       </view>
-      <text class="meta num">通过 {{item.passed}}/{{item.total}} 天</text>
     </view>
-    <view class="h2 goal-topic">{{item.topic}}</view>
-    <view wx:if="{{item.direction}}" class="goal-dir">{{item.direction}}</view>
-    <view class="progress" style="margin-top: 22rpx">
-      <view class="progress-fill" style="width: {{item.progress}}%"></view>
+  </block>
+
+  <!-- ============ 书架 ============ -->
+  <block wx:if="{{tab === 'books'}}">
+    <view wx:if="{{books.length === 0 && !loading}}" class="card empty" style="margin-top: 24rpx">
+      <view class="empty-title">书架空着</view>
+      <view class="empty-sub">说个书名，读书伙伴会先解剖这本书的论证结构，再陪你一章一章读。</view>
+      <button class="btn btn-ink btn-sm" style="margin: 32rpx auto 0; width: 60%" bindtap="toggleAdd">
+        添加一本书
+      </button>
     </view>
+
+    <view wx:if="{{books.length}}" class="sec-sm">
+      <view wx:for="{{books}}" wx:key="id" class="card card-tap" data-id="{{item.id}}" bindtap="openBook">
+        <view class="between">
+          <text class="h3 ellipsis" style="flex: 1; min-width: 0">《{{item.title}}》</text>
+          <view class="badge badge-{{item.status === 'done' ? 'ok' : 'accent'}}">{{item.statusLabel}}</view>
+        </view>
+        <view wx:if="{{item.author}}" class="meta" style="margin-top: 6rpx">{{item.author}}</view>
+        <view class="between" style="margin-top: 20rpx">
+          <view class="progress flex-1" style="margin-right: 20rpx">
+            <view class="progress-fill" style="width: {{item.progress}}%"></view>
+          </view>
+          <text class="meta num">{{item.chapters}}</text>
+        </view>
+      </view>
+    </view>
+
+    <button class="btn btn-outline btn-block" style="margin-top: 24rpx" bindtap="toggleAdd">
+      + 添加一本书
+    </button>
+  </block>
+
+  <!-- ============ 建档弹层 ============ -->
+  <view wx:if="{{adding}}" class="mask" bindtap="toggleAdd"></view>
+  <view wx:if="{{adding}}" class="sheet">
+    <view class="sheet-grip"></view>
+    <view class="sheet-title">添加一本书</view>
+    <scroll-view scroll-y class="sheet-scroll">
+      <view style="padding: 0 32rpx 24rpx">
+        <view class="field-label">书名（必填）</view>
+        <input class="input" placeholder="例如：思考，快与慢" placeholder-class="ph" value="{{title}}" bindinput="onTitle" />
+        <view class="field-gap">
+          <view class="field-label">作者（可选）</view>
+          <input class="input" placeholder="例如：丹尼尔·卡尼曼" placeholder-class="ph" value="{{author}}" bindinput="onAuthor" />
+        </view>
+        <view class="field-gap">
+          <view class="field-label">粘贴原文或笔记（可选）</view>
+          <textarea
+            class="area"
+            style="min-height: 200rpx"
+            placeholder="有的话，阅读路线会围绕它安排"
+            placeholder-class="ph"
+            value="{{pasted}}"
+            bindinput="onPasted"
+            maxlength="6000"
+          />
+        </view>
+        <button class="btn btn-ink btn-block" style="margin-top: 28rpx" bindtap="create" loading="{{creating}}">
+          {{creating ? "正在解剖这本书…" : "生成阅读路线"}}
+        </button>
+      </view>
+    </scroll-view>
   </view>
+
+  <view class="page-tail"></view>
 </view>

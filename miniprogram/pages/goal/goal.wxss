@@ -1,15 +1,47 @@
-.phase { margin-top: 24rpx; }
-.chev { color: var(--faint); font-size: 30rpx; transform: rotate(0deg); transition: transform .18s; }
+/* 目标详情：路径 = 阶段（可折叠）→ 天。
+ * 天行必须能一眼扫出"哪几天是锁的"，所以锁态用低透明度 + 明确徽标，
+ * 而不是只靠一个灰点——用户点不动的时候必须知道为什么点不动。 */
+
+.phase { margin-bottom: 20rpx; }
+
+.chev {
+  color: var(--faint);
+  font-size: 32rpx;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 0.18s ease;
+  flex-shrink: 0;
+}
 .chev-open { transform: rotate(90deg); }
-.days { margin-top: 20rpx; border-top: 1rpx solid var(--border); }
+
+.days {
+  margin-top: 22rpx;
+  border-top: 1rpx solid var(--border);
+}
 .day {
   display: flex;
   align-items: center;
-  gap: 20rpx;
-  padding: 24rpx 0;
+  gap: 18rpx;
+  min-height: 100rpx;
+  padding: 20rpx 0;
   border-bottom: 1rpx solid var(--border);
+  box-sizing: border-box;
+  transition: opacity 0.15s ease;
 }
 .day:last-child { border-bottom: none; }
-.day-off { opacity: 0.4; }
-.day-idx { width: 40rpx; font-size: 23rpx; color: var(--ink-3); flex-shrink: 0; }
-.day-title { font-size: 29rpx; line-height: 1.5; color: var(--ink); }
+.day:active { opacity: 0.6; }
+.day-off { opacity: 0.38; }
+.day-off:active { opacity: 0.38; }
+.day-idx {
+  width: 40rpx;
+  font-size: 23rpx;
+  font-weight: 600;
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+.day-title {
+  font-size: 29rpx;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--ink);
+}

@@ -1,57 +1,102 @@
-.gate-card { border-color: rgba(4, 120, 87, 0.3); background: rgba(4, 120, 87, 0.03); }
+/* 今日任务页：全产品信息量最大的一屏。
+ * 层级策略 —— 迁移题真门（如果有）占据墨绿 hero，因为那是"现在唯一该做的事"；
+ * 没有真门时，讲义/答疑/验收三段切换是主结构，内容全部收进白卡。 */
+
+/* ===== 迁移题真门（墨绿 hero 内的白卡） ===== */
+.gate-box {
+  position: relative;
+  z-index: 1;
+  margin-top: 24rpx;
+  padding: 24rpx;
+  border-radius: 24rpx;
+  background: rgba(255, 255, 255, 0.1);
+}
 .gate-q {
-  margin: 18rpx 0;
-  font-size: 28rpx;
-  line-height: 1.7;
-  color: var(--ink);
+  font-size: 29rpx;
   font-weight: 600;
+  line-height: 1.7;
+  color: #fff;
 }
-.gate-btn { margin-top: 20rpx; }
-.kps { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 18rpx; }
-.lesson-body { margin-top: 6rpx; }
-.lesson-links {
+.gate-area {
   margin-top: 18rpx;
-  padding: 16rpx 20rpx;
-  background: var(--accent-wash);
-  border-radius: 16rpx;
+  background: #fff;
+  min-height: 180rpx;
 }
-.lesson-gen { padding-bottom: 6rpx; }
-.res-row {
+
+/* ===== 三段切换 =====
+ * 不用 position:sticky（WXSS 部分基础库不稳定），
+ * 改为普通定位：切换器保持在内文顶部，滚动时随页面一起走。 */
+.sticky-seg {
+  margin: 8rpx 0 24rpx;
+}
+
+/* ===== 讲义 ===== */
+.lesson-links {
   display: flex;
   align-items: center;
   gap: 16rpx;
-  padding: 20rpx 0;
-  border-bottom: 1rpx solid var(--border);
-}
-.res-row:last-child { border-bottom: none; }
-.res-title {
-  font-size: 27rpx;
-  font-weight: 600;
-  color: var(--ink);
-  flex: 1;
-  min-width: 0;
-}
-.qa-list { margin: 12rpx 0; }
-.qa-row { display: flex; margin: 14rpx 0; }
-.qa-right { justify-content: flex-end; }
-.qa-composer { display: flex; gap: 14rpx; margin-top: 16rpx; align-items: center; }
-.qa-input { flex: 1; }
-.skip-zone { margin-top: 22rpx; padding-top: 20rpx; border-top: 1rpx solid var(--border); }
-.skip-input { margin-bottom: 14rpx; font-size: 24rpx; }
-.acc-item { margin-top: 26rpx; }
-.acc-q {
-  margin: 12rpx 0;
-  font-size: 28rpx;
-  font-weight: 600;
-  color: var(--ink);
-  line-height: 1.65;
-}
-.result-summary { margin-top: 10rpx; line-height: 1.7; }
-.grade-item {
   margin-top: 22rpx;
-  padding: 20rpx;
-  background: var(--surface-2);
+  padding: 18rpx 22rpx;
+  background: var(--accent-wash);
   border-radius: 18rpx;
 }
-.grade-fb { font-size: 26rpx; line-height: 1.65; color: var(--ink); margin-top: 8rpx; }
-.grade-ev { margin-top: 8rpx; line-height: 1.5; }
+.less-regen {
+  margin-top: 24rpx;
+  padding-top: 20rpx;
+  border-top: 1rpx solid var(--border);
+  text-align: center;
+  font-size: 24rpx;
+  color: var(--ink-3);
+}
+
+/* ===== 验收 ===== */
+.acc-q {
+  margin: 14rpx 0 16rpx;
+  font-size: 29rpx;
+  font-weight: 600;
+  line-height: 1.65;
+  color: var(--ink);
+}
+.grade-q {
+  margin: 14rpx 0 10rpx;
+  font-size: 29rpx;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.evidence {
+  margin-top: 16rpx;
+  padding-left: 20rpx;
+  border-left: 4rpx solid var(--border-strong);
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+.review-advice {
+  margin-top: 20rpx;
+  padding: 18rpx 22rpx;
+  border-radius: 18rpx;
+  background: var(--accent-wash);
+  font-size: 26rpx;
+  line-height: 1.65;
+  color: var(--accent);
+}
+.pass-card {
+  border-color: rgba(4, 120, 87, 0.3);
+}
+
+/* 跳过区：视觉上明确"次要且带后果" */
+.skip-zone {
+  margin-top: 24rpx;
+  border-style: dashed;
+}
+
+/* hero 内小箭头 */
+.hero-btn-chev {
+  width: 14rpx;
+  height: 14rpx;
+  border-right: 3rpx solid #1a1a1a;
+  border-top: 3rpx solid #1a1a1a;
+  transform: rotate(45deg);
+  border-radius: 1rpx;
+}

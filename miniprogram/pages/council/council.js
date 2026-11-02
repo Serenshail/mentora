@@ -3,11 +3,29 @@ var chat = require("../../utils/chat.js");
 var seats = require("../../utils/seats.js");
 var md = require("../../utils/md.js");
 var util = require("../../utils/util.js");
+var streamView = require("../../utils/stream-view.js");
 
 var DEFAULT_SEATS = ["naval", "jobs", "taleb"];
 
 // 有真人头像的席位（与网页版 public/personas 一致）
 var PHOTO_IDS = ["naval", "jobs", "munger", "feynman", "taleb", "graham", "karpathy", "musk", "zhangxuefeng", "zhangyiming", "mrbeast", "sutskever"];
+
+/* 认知工具席（不是人，是思维模型）。必须在使用前定义——
+ * 此前它写在文件末尾，openPick 运行时读到的是 undefined，
+ * 于是"人物/工具"两类席位在 UI 上无法正确分组。 */
+var CONCEPT_IDS = {
+  "first-principles": true,
+  incentives: true,
+  "antifragile-filter": true,
+  "attention-econ": true
+};
+
+/** 取名字首字（中文取第一个字，英文取首字母大写） */
+function initialOf(name) {
+  if (!name) return "?";
+  var c = String(name).trim().charAt(0);
+  return /[a-z]/i.test(c) ? c.toUpperCase() : c;
+}
 
 function resolvePersona(id) {
   if (!id || id === "roundtable") return null;
@@ -47,25 +65,27 @@ Page({
     // 圆桌运行态
     rtSeats: [], // [{id,name,color,status}]  status: pending|streaming|done|failed
     rtPhase: "", // takes | host
-    rtHostBlocks: []
+    rtHostBlocks: [],
+    navH: "" // 由 nav-bar 组件量出后回写，用于算对话区高度
   },
 
   onShow: function () {
-    if (!store.state.userId) {
+    if (!store.state.userId && !getApp().globalData.user) {
       wx.reLaunch({ url: "/pages/login/login" });
       return;
     }
-    this.renderList();
+    // tab 页每次回来都要刷新列表；但正在对话中的会话不要被打断
+    if (this.data.view === "list") this.renderList();
   },
 
   renderList: function () {
     var sessions = store.state.sessions.map(function (s) {
       var p = resolvePersona(s.personaId);
       var title = s.title || (s.personaId === "roundtable" ? "圆桌会议" : p ? p.name : "会话");
-      var last = (s.messages || []).slice(-1)[0];
       return {
         id: s.id,
         title: title,
+        initial: initialOf(title),
         count: (s.messages || []).length,
         when: (s.createdAt || "").slice(5, 10).replace("-", "/"),
         roundtable: s.personaId === "roundtable"
@@ -87,6 +107,7 @@ Page({
         name: s.name,
         tag: s.tag,
         color: s.color,
+        initial: initialOf(s.name),
         concept: CONCEPT_IDS[s.id] === true,
         hasPhoto: PHOTO_IDS.indexOf(s.id) >= 0
       };
@@ -231,6 +252,9 @@ Page({
     // s.messages 已包含刚落地的用户消息（store 里是同一引用），直接截尾即可
     var history = (s.messages || []).slice(-8);
     var stream = "";
+    var renderer = streamView.createStreamRenderer(function () {
+      that.setData({ streamBlocks: md.parse(stream).blocks });
+    }, 180);
     chat
       .streamChat({
         task: "council",
@@ -241,10 +265,11 @@ Page({
         temperature: 0.8,
         onDelta: function (d) {
           stream += d;
-          that.setData({ streamBlocks: md.parse(stream).blocks });
+          renderer.push();
         }
       })
       .then(function (full) {
+        renderer.flush();
         var content = full || stream;
         store.addSessionMsg(that.sessionId, {
           id: util.uid("m"),
@@ -260,6 +285,7 @@ Page({
         });
       })
       .catch(function (e) {
+        renderer.cancel();
         util.toast(e.message || "发言失败");
         that.setData({ streamBlocks: [] });
       })
@@ -323,9 +349,18 @@ Page({
       var seat = seatState[i];
       if (seat.status === "done") return runSequential(i + 1);
       seat.status = "streaming";
-      that.setData({ rtSeats: seatState.slice() });
+      /* 性能：只把这一席的状态用路径更新传给渲染层（官方 setData 纪律：
+       * 只传变化的数据路径）。此前每个 delta 都整组 rtSeats 全量传输。 */
+      that.setData({
+        ["rtSeats[" + i + "].status"]: "streaming",
+        ["rtSeats[" + i + "].take"]: ""
+      });
+      var seatIndex = i;
       var p = resolvePersona(seat.id);
       var stream = "";
+      var renderer = streamView.createStreamRenderer(function () {
+        that.setData({ ["rtSeats[" + seatIndex + "].take"]: stream });
+      }, 180);
       return chat
         .streamChat({
           task: "council",
@@ -340,18 +375,23 @@ Page({
           onDelta: function (d) {
             stream += d;
             seat.take = stream;
-            that.setData({ rtSeats: seatState.slice() });
+            renderer.push();
           }
         })
         .then(function (full) {
+          renderer.flush();
           seat.take = full || stream;
           seat.status = seat.take ? "done" : "failed";
           if (seat.take) takes[seat.id] = seat.take;
-          that.setData({ rtSeats: seatState.slice() });
+          that.setData({
+            ["rtSeats[" + seatIndex + "].status"]: seat.status,
+            ["rtSeats[" + seatIndex + "].take"]: seat.take
+          });
         })
         .catch(function () {
+          renderer.cancel();
           seat.status = "failed";
-          that.setData({ rtSeats: seatState.slice() });
+          that.setData({ ["rtSeats[" + seatIndex + "].status"]: "failed" });
         })
         .then(function () {
           return runSequential(i + 1);
@@ -391,6 +431,9 @@ Page({
         })
         .join("\n\n");
       var hostStream = "";
+      var hostRenderer = streamView.createStreamRenderer(function () {
+        that.setData({ rtHostBlocks: md.parse(hostStream).blocks });
+      }, 180);
       chat
         .streamChat({
           task: "council",
@@ -399,10 +442,11 @@ Page({
           temperature: 0.4,
           onDelta: function (d) {
             hostStream += d;
-            that.setData({ rtHostBlocks: md.parse(hostStream).blocks });
+            hostRenderer.push();
           }
         })
         .then(function (full) {
+          hostRenderer.flush();
           var content = "## 圆桌纪要\n\n" + (full || hostStream);
           store.addSessionMsg(that.sessionId, {
             id: util.uid("m"),
@@ -419,6 +463,7 @@ Page({
           });
         })
         .catch(function () {
+          hostRenderer.cancel();
           store.addSessionMsg(that.sessionId, {
             id: util.uid("m"),
             role: "assistant",
@@ -453,10 +498,3 @@ Page({
     wx.setClipboardData({ data: e.currentTarget.dataset.code || "" });
   }
 });
-
-var CONCEPT_IDS = {
-  "first-principles": true,
-  incentives: true,
-  "antifragile-filter": true,
-  "attention-econ": true
-};

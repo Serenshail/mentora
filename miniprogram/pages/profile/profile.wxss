@@ -1,9 +1,12 @@
-.stats {
+/* 我的：账号概况 + 数据操作 + 连接切换。
+ * 结构照抄 iOS 设置页的语法：分组标题 + 圆角列表 + 尾部说明，
+ * 因为它已经是"设置这类页面"最长寿、最不必创新的形态。 */
+
+.sync-line {
   display: flex;
-  margin-top: 28rpx;
-  padding-top: 26rpx;
+  align-items: center;
+  gap: 10rpx;
+  margin-top: 22rpx;
+  padding-top: 20rpx;
   border-top: 1rpx solid var(--border);
 }
-.stat { flex: 1; }
-.stat-n { font-size: 40rpx; font-weight: 700; letter-spacing: -1rpx; line-height: 1.2; color: var(--ink); }
-.chev { color: var(--faint); font-size: 30rpx; }

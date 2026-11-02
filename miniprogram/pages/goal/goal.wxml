@@ -1,22 +1,37 @@
+<nav-bar title="{{goal ? goal.topic : '学习目标'}}" />
+
 <view class="page" wx:if="{{goal}}">
-  <view class="page-head">
-    <view class="page-head-title">{{goal.topic}}</view>
-    <view wx:if="{{goal.direction}}" class="page-head-sub">{{goal.direction}}</view>
+  <view class="head">
+    <view class="head-greet">{{goal.statusLabel}}</view>
+    <view class="head-title">{{goal.topic}}</view>
+    <view wx:if="{{goal.direction}}" class="head-sub">{{goal.direction}}</view>
   </view>
 
-  <view wx:if="{{goal.summary}}" class="card">
-    <view class="sub" style="line-height: 1.72">{{goal.summary}}</view>
-    <view wx:if="{{goal.graduated}}" class="badge badge-ok" style="margin-top: 20rpx">已结业</view>
+  <!-- 进度概览：一眼知道走到哪 -->
+  <view class="card">
+    <view class="between">
+      <view class="col gap-6">
+        <text class="meta">整体进度</text>
+        <text class="h2 num">{{goal.done}}<text class="sub" style="font-weight: 400">/{{goal.total}} 天</text></text>
+      </view>
+      <view wx:if="{{goal.graduated}}" class="badge badge-ok">已结业</view>
+    </view>
+    <view class="progress" style="margin-top: 20rpx">
+      <view class="progress-fill" style="width: {{goal.progress}}%"></view>
+    </view>
+    <view wx:if="{{goal.summary}}" class="sub" style="margin-top: 20rpx; line-height: 1.7">{{goal.summary}}</view>
   </view>
+
+  <view class="label" style="margin: 40rpx 0 16rpx">路径</view>
 
   <view wx:for="{{phases}}" wx:for-item="ph" wx:key="id" wx:for-index="pIdx" class="card phase">
-    <view class="between" data-idx="{{pIdx}}" bindtap="togglePhase" hover-class="tap-dim">
+    <view class="between" data-idx="{{pIdx}}" bindtap="togglePhase">
       <view class="flex-1">
         <view class="row gap-12">
-          <text class="h3">{{ph.title}}</text>
           <view class="dot dot-{{ph.tone}}"></view>
+          <text class="h3">{{ph.title}}</text>
         </view>
-        <view wx:if="{{ph.outcome}}" class="sub" style="margin-top: 8rpx">{{ph.outcome}}</view>
+        <view wx:if="{{ph.outcome}}" class="sub clamp-2" style="margin-top: 8rpx">{{ph.outcome}}</view>
       </view>
       <text class="chev {{ph.open ? 'chev-open' : ''}}">›</text>
     </view>
@@ -30,7 +45,6 @@
         data-id="{{d.id}}"
         data-status="{{d.status}}"
         bindtap="openDay"
-        hover-class="{{d.status === 'locked' ? '' : 'tap-dim'}}"
       >
         <text class="day-idx num">{{d.index}}</text>
         <view class="flex-1">
@@ -41,7 +55,10 @@
         <view wx:if="{{d.status === 'passed'}}" class="badge badge-ok">过</view>
         <view wx:elif="{{d.status === 'skipped'}}" class="badge badge-warn">跳过</view>
         <view wx:elif="{{d.status === 'active'}}" class="badge badge-accent">今日</view>
+        <view wx:else class="badge badge-dim">锁</view>
       </view>
     </view>
   </view>
+
+  <view class="page-tail"></view>
 </view>

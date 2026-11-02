@@ -28,11 +28,15 @@ Page({
       return;
     }
     var phases = [];
+    var totalDays = 0;
+    var doneDays = 0;
     if (goal.plan) {
       goal.plan.phases.forEach(function (ph, pi) {
         var days = (ph.dayIds || []).map(function (id, di) {
           var d = goal.plan.days[id];
           var meta = STATUS_META[d.status] || STATUS_META.locked;
+          totalDays += 1;
+          if (d.status === "passed" || d.status === "skipped") doneDays += 1;
           return {
             id: id,
             title: d.title,
@@ -55,7 +59,29 @@ Page({
         });
       });
     }
-    wx.setNavigationBarTitle({ title: goal.topic.slice(0, 12) });
+    /* 首个未完成的阶段默认展开——否则用户进来看到一排折叠标题，
+       还得自己猜该点哪一个。 */
+    var opened = false;
+    phases.forEach(function (ph) {
+      if (opened) return;
+      var hasUndone = ph.days.some(function (d) {
+        return d.status === "active" || d.status === "locked";
+      });
+      if (hasUndone) {
+        ph.open = true;
+        opened = true;
+      }
+    });
+
+    var goalStatusLabel =
+      goal.status === "active"
+        ? "进行中"
+        : goal.status === "done"
+          ? "已完成"
+          : goal.status === "draft"
+            ? "引导中"
+            : "已暂停";
+
     this.setData({
       goal: {
         id: goal.id,
@@ -63,7 +89,11 @@ Page({
         direction: goal.direction,
         summary: goal.plan ? goal.plan.summary : "",
         status: goal.status,
-        graduated: Boolean(goal.graduatedAt)
+        statusLabel: goalStatusLabel,
+        graduated: Boolean(goal.graduatedAt),
+        done: doneDays,
+        total: totalDays,
+        progress: totalDays ? Math.round((doneDays / totalDays) * 100) : 0
       },
       phases: phases
     });

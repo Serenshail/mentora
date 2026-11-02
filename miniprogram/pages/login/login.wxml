@@ -1,34 +1,62 @@
 <view class="login-wrap">
-  <view class="brand">Mentora</view>
-  <view class="brand-sub">学习教练 × 第二大脑 × 人生伙伴</view>
+  <!-- 首屏说清这是什么，而不是只放一个 logo -->
+  <view class="brand-wrap">
+    <view class="brand font-brand">Mentora</view>
+    <view class="brand-sub">学习教练 · 第二大脑 · 读书伙伴 · 人生伙伴</view>
+    <view class="brand-line">把「学会任何东西」变成日常。</view>
+  </view>
 
   <view class="card login-card">
     <view wx:if="{{mode === 'register'}}" class="field-gap">
       <view class="field-label">称呼</view>
-      <input class="input" placeholder="怎么叫你" value="{{name}}" bindinput="onName" />
+      <input class="input" placeholder="怎么叫你" placeholder-class="ph" value="{{name}}" bindinput="onName" />
     </view>
+
     <view class="{{mode === 'register' ? 'field-gap' : ''}}">
       <view class="field-label">邮箱</view>
-      <input class="input" type="text" placeholder="you@example.com" value="{{email}}" bindinput="onEmail" />
+      <input
+        class="input"
+        type="text"
+        placeholder="you@example.com"
+        placeholder-class="ph"
+        value="{{email}}"
+        bindinput="onEmail"
+      />
     </view>
+
     <view class="field-gap">
       <view class="field-label">密码</view>
-      <input class="input" password placeholder="至少 6 位" value="{{password}}" bindinput="onPassword" />
+      <input
+        class="input"
+        password
+        placeholder="至少 6 位"
+        placeholder-class="ph"
+        value="{{password}}"
+        bindinput="onPassword"
+      />
     </view>
+
     <view wx:if="{{mode === 'register'}}" class="field-gap">
       <view class="field-label">内测邀请码</view>
-      <input class="input" placeholder="向作者索取" value="{{inviteCode}}" bindinput="onInvite" />
+      <input
+        class="input"
+        placeholder="向作者索取"
+        placeholder-class="ph"
+        value="{{inviteCode}}"
+        bindinput="onInvite"
+      />
     </view>
 
     <view wx:if="{{error}}" class="login-error">{{error}}</view>
 
-    <button class="btn btn-primary btn-block login-btn {{busy ? 'disabled' : ''}}" bindtap="submit">
+    <button class="btn btn-ink btn-block login-btn {{busy ? 'disabled' : ''}}" bindtap="submit">
       {{busy ? "请稍候…" : (mode === "login" ? "登录" : "注册")}}
     </button>
-    <button class="btn btn-ghost btn-block" bindtap="switchMode">
+
+    <button class="btn btn-ghost btn-block" style="margin-top: 8rpx" bindtap="switchMode">
       {{mode === "login" ? "没有账号？用邀请码注册" : "已有账号，直接登录"}}
     </button>
   </view>
 
-  <view class="login-foot dim3 tiny">同一个账号：网页端的学习进度在这里实时同步</view>
+  <view class="login-foot">同一个账号，网页端的学习进度在这里实时同步</view>
 </view>

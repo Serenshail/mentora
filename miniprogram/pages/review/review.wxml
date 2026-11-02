@@ -1,71 +1,112 @@
+<nav-bar title="复习" />
+
 <view class="page">
+  <!-- ============ 待开始 ============ -->
   <view wx:if="{{phase === 'idle'}}">
-    <view class="page-head">
-      <view class="page-head-title">复习</view>
-      <view class="page-head-sub">到期 {{queueCount}} 条</view>
+    <view class="head">
+      <view class="head-greet">间隔复习</view>
+      <view class="head-title">{{queueCount > 0 ? queueCount + " 条到期" : "今天没有到期的"}}</view>
+      <view class="head-sub">复习官只从你的笔记原文出题；判卷必须引用原文，「感觉记住了」不算。</view>
     </view>
-    <view class="card">
-      <view class="sub" style="line-height: 1.75">
-        复习官只从你的笔记原文出题；判卷必须引用原文，「感觉记住了」不算。
+
+    <view wx:if="{{queueCount > 0}}" class="hero">
+      <view class="hero-glow"></view>
+      <view class="hero-kicker">
+        <view class="dot dot-accent"></view>
+        现在做这一件
       </view>
-      <button class="btn btn-accent btn-block {{queueCount ? '' : 'disabled'}}" style="margin-top: 28rpx" bindtap="{{queueCount ? 'start' : ''}}">开始这轮复习</button>
+      <view class="hero-title">合上笔记，凭记忆答</view>
+      <view class="hero-sub">回忆一次比重读十遍有用。答不出来不丢人，那是数据。</view>
+      <view class="hero-cta">
+        <text class="on-ink-dim" style="font-size: 24rpx">约 {{estimate}} 分钟</text>
+        <view class="hero-btn" bindtap="start">
+          开始这轮
+          <view class="hero-btn-chev"></view>
+        </view>
+      </view>
+    </view>
+
+    <view wx:else class="card empty">
+      <view class="empty-title">队列清空了</view>
+      <view class="empty-sub">到期时间由 FSRS 按你每次回忆的表现推算，到点会出现。</view>
     </view>
   </view>
 
-  <view wx:if="{{phase === 'ask'}}">
-    <view class="page-head">
-      <view class="page-head-sub num">{{total - queueCount + 1}} / {{total}}</view>
+  <!-- ============ 出题中 ============ -->
+  <view wx:if="{{phase === 'ask' || phase === 'answer'}}">
+    <view class="head">
+      <view class="row gap-12">
+        <text class="head-greet num">{{total - queueCount + 1}} / {{total}}</text>
+        <view class="badge badge-accent">{{noteTitle}}</view>
+      </view>
     </view>
     <view class="card">
-      <view class="badge badge-accent">{{noteTitle}}</view>
       <view class="q">{{question}}</view>
       <view wx:if="{{questionBusy}}" class="row gap-12">
         <view class="caret"></view>
         <text class="thinking">翻你的笔记出题…</text>
       </view>
     </view>
-  </view>
 
-  <view wx:if="{{phase === 'answer'}}">
-    <view class="page-head">
-      <view class="page-head-sub num">{{total - queueCount + 1}} / {{total}}</view>
-    </view>
-    <view class="card">
-      <view class="badge badge-accent">{{noteTitle}}</view>
-      <view class="q">{{question}}</view>
-      <textarea class="area" placeholder="合上笔记，凭记忆写" placeholder-class="ph" value="{{answer}}" bindinput="onAnswer" maxlength="4000" />
-      <button class="btn btn-accent btn-block {{answer && !gradeBusy ? '' : 'disabled'}}" style="margin-top: 24rpx" bindtap="{{answer && !gradeBusy ? 'submit' : ''}}">
+    <view wx:if="{{phase === 'answer'}}" style="margin-top: 20rpx">
+      <textarea
+        class="area"
+        placeholder="合上笔记，凭记忆写"
+        placeholder-class="ph"
+        value="{{answer}}"
+        bindinput="onAnswer"
+        maxlength="4000"
+      />
+      <button
+        class="btn btn-ink btn-block {{answer && !gradeBusy ? '' : 'disabled'}}"
+        style="margin-top: 24rpx"
+        bindtap="{{answer && !gradeBusy ? 'submit' : ''}}"
+      >
         {{gradeBusy ? "判卷中…" : "提交，判卷"}}
       </button>
     </view>
   </view>
 
+  <!-- ============ 已判分 ============ -->
   <view wx:if="{{phase === 'graded' && verdict}}">
-    <view class="page-head">
+    <view class="head">
       <view class="row gap-12">
-        <text class="page-head-title">{{noteTitle}}</text>
         <view class="badge {{verdict.verdict === 'pass' ? 'badge-ok' : 'badge-bad'}}">
-          {{verdict.verdict === 'pass' ? '通过' : '没过'}}
+          {{verdict.verdict === 'pass' ? '回忆成功' : '有遗忘'}}
         </view>
       </view>
+      <view class="head-title" style="margin-top: 14rpx; font-size: 38rpx">{{noteTitle}}</view>
     </view>
+
     <view class="card">
       <view class="body" style="line-height: 1.72">{{verdict.feedback}}</view>
       <view wx:if="{{verdict.evidence}}" class="evidence">依据 · {{verdict.evidence}}</view>
-      <button class="btn btn-ink btn-block" style="margin-top: 28rpx" bindtap="next">下一条</button>
     </view>
+
+    <button class="btn btn-ink btn-block" style="margin-top: 28rpx" bindtap="next">下一条</button>
   </view>
 
+  <!-- ============ 结束 ============ -->
   <view wx:if="{{phase === 'done'}}">
-    <view class="page-head"><view class="page-head-title">这轮完了</view></view>
+    <view class="head">
+      <view class="head-greet">这轮完了</view>
+      <view class="head-title">{{correct}}/{{total}} 条回忆成功</view>
+    </view>
+
     <view class="card">
       <view class="stats">
-        <view class="stat"><view class="stat-n num">{{total}}</view><view class="tiny">条</view></view>
-        <view class="stat"><view class="stat-n num ok-text">{{correct}}</view><view class="tiny">通过</view></view>
-        <view class="stat"><view class="stat-n num">{{minutes}}</view><view class="tiny">分钟</view></view>
+        <view class="stat"><view class="stat-n">{{total}}</view><view class="stat-l">条</view></view>
+        <view class="stat"><view class="stat-n ok-text">{{correct}}</view><view class="stat-l">通过</view></view>
+        <view class="stat"><view class="stat-n">{{minutes}}</view><view class="stat-l">分钟</view></view>
       </view>
-      <view class="sub" style="margin-top: 20rpx">{{nextDate ? "下次复习：" + nextDate : "队列清空了"}}</view>
-      <button class="btn btn-outline btn-block" style="margin-top: 28rpx" bindtap="back">返回</button>
+      <view class="sub" style="margin-top: 24rpx; line-height: 1.7">
+        {{correct === total ? "全对。记忆曲线正在给你复利。" : "记住的那部分已经存稳了，忘掉的部分会再来找你。"}}
+      </view>
+      <view wx:if="{{nextDate}}" class="meta" style="margin-top: 10rpx">下次到期：{{nextDate}}</view>
     </view>
+
+    <button class="btn btn-outline btn-block" style="margin-top: 28rpx" bindtap="back">返回</button>
   </view>
+
+  <view class="page-tail"></view>
 </view>

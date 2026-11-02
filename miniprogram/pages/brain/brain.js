@@ -61,6 +61,18 @@ Page({
     var q = this.data.query.trim().toLowerCase();
     var folder = this.data.activeFolder;
     var today = new Date().toISOString().slice(0, 10);
+
+    /* 摘要缓存：md.plain 是全正文正则清洗，几百篇笔记每次按键全跑一遍
+     * 是明显的输入卡顿源。缓存放页面实例上（跟着页面生命周期），键 = 笔记 id。 */
+    if (!this._excerptCache) this._excerptCache = {};
+    var cache = this._excerptCache;
+    function excerptOf(k) {
+      if (!cache[k.id]) {
+        cache[k.id] = md.plain((k.body || "").replace(/^#{1,6}\s+/gm, "")).slice(0, 80);
+      }
+      return cache[k.id];
+    }
+
     var notes = st.knowledge
       .filter(function (k) {
         if (folder && (k.domain || "").split("/")[0] !== folder) return false;
@@ -73,12 +85,11 @@ Page({
       })
       .slice(0, 300)
       .map(function (k) {
-        var excerpt = md.plain((k.body || "").replace(/^#{1,6}\s+/gm, "")).slice(0, 80);
         return {
           id: k.id,
           title: k.title,
           domain: k.domain || "",
-          excerpt: excerpt,
+          excerpt: excerptOf(k),
           due: Boolean(k.nextReviewAt && k.nextReviewAt <= today),
           unresolved: Boolean(k.unresolved)
         };
@@ -87,8 +98,20 @@ Page({
   },
 
   onQuery: function (e) {
+    var that = this;
     this.setData({ query: e.detail.value });
-    this.filter();
+    /* 搜索节流：输入法组合期每键都全表过滤（几百篇 × 3 字段 indexOf）
+     * 会卡输入。200ms 防抖对打字手感无感知。 */
+    if (this._queryTimer) clearTimeout(this._queryTimer);
+    this._queryTimer = setTimeout(function () {
+      that._queryTimer = null;
+      that.filter();
+    }, 200);
+  },
+
+  onUnload: function () {
+    if (this._queryTimer) clearTimeout(this._queryTimer);
+    this._excerptCache = null;
   },
 
   pickFolder: function (e) {

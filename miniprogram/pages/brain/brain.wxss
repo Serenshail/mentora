@@ -1,35 +1,43 @@
-.review { display: flex; align-items: center; gap: 20rpx; border-color: rgba(4, 120, 87, 0.22); }
-.folders { margin-top: 20rpx; white-space: nowrap; }
-.folder-row { display: inline-flex; gap: 12rpx; padding: 4rpx 0 8rpx; }
-.notes { padding: 0 32rpx; }
-.note {
-  display: flex;
-  align-items: center;
-  gap: 18rpx;
-  padding: 26rpx 0;
-  border-bottom: 1rpx solid var(--border);
+/* 大脑页（tab）：笔记网络 + 到期复习入口。
+ * 层级：到期复习是唯一带动作的主卡；搜索与目录是工具；笔记列表是内容。 */
+
+.due {
+  border-color: rgba(91, 84, 230, 0.22);
 }
-.note:last-child { border-bottom: none; }
+.due-num {
+  font-size: 52rpx;
+  font-weight: 700;
+  letter-spacing: -2rpx;
+  line-height: 1;
+  color: var(--accent);
+  flex-shrink: 0;
+  min-width: 76rpx;
+}
+
+/* 目录筛选 chip：横向滚动，选中态用墨色（与 tabBar 同语义） */
+.folders { margin-top: 20rpx; white-space: nowrap; }
+.folder-row { display: inline-flex; gap: 12rpx; padding: 2rpx 0 6rpx; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 60rpx;
+  padding: 0 24rpx;
+  border-radius: 999rpx;
+  background: var(--surface-2);
+  font-size: 24rpx;
+  font-weight: 600;
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+.chip-on {
+  background: #1a1a1a;
+  color: #fff;
+}
+
 .note-title {
   font-size: 30rpx;
   font-weight: 600;
   letter-spacing: -0.2rpx;
   color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 0;
-  max-width: 430rpx;
+  max-width: 400rpx;
 }
-.note-excerpt {
-  margin-top: 8rpx;
-  font-size: 24rpx;
-  line-height: 1.5;
-  color: var(--ink-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.chev { color: var(--faint); font-size: 30rpx; }

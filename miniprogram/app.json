@@ -8,12 +8,12 @@
     "pages/brain/brain",
     "pages/note/note",
     "pages/review/review",
-    "pages/read/read",
     "pages/book/book",
     "pages/council/council",
     "pages/profile/profile"
   ],
   "window": {
+    "navigationStyle": "custom",
     "navigationBarBackgroundColor": "#f5f5f7",
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "Mentora",
@@ -28,9 +28,9 @@
     "list": [
       {
         "pagePath": "pages/overview/overview",
-        "text": "总览",
-        "iconPath": "images/tab/home.png",
-        "selectedIconPath": "images/tab/home-on.png"
+        "text": "今天",
+        "iconPath": "images/tab/today.png",
+        "selectedIconPath": "images/tab/today-on.png"
       },
       {
         "pagePath": "pages/learn/learn",
@@ -39,14 +39,14 @@
         "selectedIconPath": "images/tab/learn-on.png"
       },
       {
-        "pagePath": "pages/read/read",
-        "text": "读书",
-        "iconPath": "images/tab/read.png",
-        "selectedIconPath": "images/tab/read-on.png"
+        "pagePath": "pages/brain/brain",
+        "text": "大脑",
+        "iconPath": "images/tab/brain.png",
+        "selectedIconPath": "images/tab/brain-on.png"
       },
       {
         "pagePath": "pages/council/council",
-        "text": "圆桌",
+        "text": "伙伴",
         "iconPath": "images/tab/council.png",
         "selectedIconPath": "images/tab/council-on.png"
       },

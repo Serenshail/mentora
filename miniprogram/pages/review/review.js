@@ -2,6 +2,7 @@ var store = require("../../utils/store.js");
 var chat = require("../../utils/chat.js");
 var grade = require("../../utils/grade.js");
 var util = require("../../utils/util.js");
+var streamView = require("../../utils/stream-view.js");
 
 Page({
   data: {
@@ -18,17 +19,20 @@ Page({
     gradeBusy: false,
     verdict: null, // {verdict, evidence, feedback}
     minutes: 0,
+    estimate: 1,
     nextDate: ""
   },
 
   onLoad: function () {
-    this.queue = store.dueReviews().map(function (k) {
+    var queue = store.dueReviews().map(function (k) {
       return k.id;
     });
+    this.queue = queue.slice(0, 20); // 每日上限 20 条：贪多必忘
     this.startedAt = 0;
     this.setData({
       queueCount: this.queue.length,
-      total: this.queue.length
+      total: this.queue.length,
+      estimate: Math.max(1, Math.round(this.queue.length * 0.7)) // 每条约 40 秒
     });
   },
 
@@ -82,19 +86,26 @@ Page({
       .map(function (k) {
         return { title: k.title, summary: (k.body || "").slice(0, 120), domain: k.domain };
       });
+    var qBuf = "";
+    var renderer = streamView.createStreamRenderer(function () {
+      that.setData({ question: qBuf });
+    }, 180);
     chat
       .streamChat({
         task: "review-ask",
         args: { items: JSON.stringify(items) },
         messages: [{ role: "user", content: "出题。" }],
         onDelta: function (d) {
-          that.setData({ question: that.data.question + d });
+          qBuf += d;
+          renderer.push();
         }
       })
       .then(function () {
+        renderer.flush();
         that.setData({ phase: "answer", questionBusy: false });
       })
       .catch(function () {
+        renderer.cancel();
         util.toast("复习出题失败，稍后再试");
         that.setData({ phase: "idle", questionBusy: false });
       });

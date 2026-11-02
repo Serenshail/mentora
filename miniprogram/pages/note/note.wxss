@@ -1,2 +1,2 @@
-.card-tight .card-row { padding-left: 32rpx; padding-right: 32rpx; }
-.chev { color: var(--faint); font-size: 30rpx; }
+/* 笔记详情：这是一页"读"的页面，不是"管"的页面。
+ * 所以正文优先、元信息收成一行 chips、出链/反链降到页面底部。 */

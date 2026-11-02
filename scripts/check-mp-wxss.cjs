@@ -55,7 +55,10 @@ for (const file of files) {
 
 
   // 4) 属性声明缺少分号（最后一条除外）：粗略检测"值后紧跟换行新属性"
-  const declBlocks = [...stripped.matchAll(/\{([^{}]*)\}/g)];
+  // 先把 url("...") 整体挖掉再按 ; 分割——data URL（base64 字体）里含分号，
+  // 直接分割会把 url 值切成碎片误报"非法声明"。
+  const declSource = stripped.replace(/url\([^)]*\)/g, "url()");
+  const declBlocks = [...declSource.matchAll(/\{([^{}]*)\}/g)];
   for (const b of declBlocks) {
     const body = b[1].trim();
     if (!body) continue;

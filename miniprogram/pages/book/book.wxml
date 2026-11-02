@@ -1,36 +1,52 @@
 <import src="../../wxml/md.wxml" />
 
-<view wx:if="{{book}}" class="book-page">
+<nav-bar title="{{book ? book.title : '读书'}}" />
+
+<view wx:if="{{book}}" class="book-page" style="--nav-h: {{navH || '64px'}}">
+  <!-- 当前章节 + 带读问题：一行上下文，不是一整块页头 -->
   <view class="book-head">
-    <view class="between">
-      <view class="flex-1">
-        <view class="page-head-title">{{book.title}}</view>
-        <view wx:if="{{book.author}}" class="page-head-sub">{{book.author}}</view>
+    <view class="between" bindtap="toggleChapters">
+      <view class="flex-1 min-w-0">
+        <view class="row gap-8">
+          <text class="meta num">{{chapter ? "第 " + chapter.index + " 章" : "全部读完"}}</text>
+          <text class="meta">·</text>
+          <text class="meta num">{{doneCount}}/{{chapters.length}}</text>
+        </view>
+        <view class="chap-cur ellipsis">{{chapter ? chapter.title : book.title}}</view>
       </view>
-      <text class="link" bindtap="toggleChapters">{{showChapters ? "收起" : "目录"}}</text>
+      <view class="chev chev-down">›</view>
     </view>
     <view wx:if="{{chapter}}" class="focus-q">
-      <text class="tiny">带读问题</text>
+      <text class="tiny">带着这个问题读</text>
       <view class="focus-q-text">{{chapter.focusQuestion}}</view>
     </view>
   </view>
 
+  <!-- 目录弹层 -->
   <block wx:if="{{showChapters}}">
     <view class="mask" bindtap="toggleChapters"></view>
     <view class="sheet">
       <view class="sheet-grip"></view>
+      <view class="sheet-title">目录</view>
       <scroll-view scroll-y class="sheet-scroll">
-        <view class="sheet-title">目录</view>
-        <view wx:for="{{chapters}}" wx:key="id" class="sheet-item {{item.status === 'done' ? 'chap-done' : ''}}" data-id="{{item.id}}" bindtap="pickChapter" hover-class="tap-dim">
+        <view
+          wx:for="{{chapters}}"
+          wx:key="id"
+          class="sheet-item {{item.status === 'done' ? 'chap-done' : ''}}"
+          data-id="{{item.id}}"
+          bindtap="pickChapter"
+        >
           <text class="chap-idx num">{{item.index}}</text>
           <text class="flex-1 chap-title">{{item.title}}</text>
-          <view class="dot {{item.status === 'done' ? 'dot-ok' : 'dot-idle'}}"></view>
+          <view wx:if="{{item.status === 'done'}}" class="badge badge-ok">已读</view>
+          <view wx:elif="{{chapter && chapter.id === item.id}}" class="badge badge-accent">在读</view>
         </view>
       </scroll-view>
     </view>
   </block>
 
-  <scroll-view scroll-y class="chat-scroll">
+  <!-- 对话 -->
+  <scroll-view scroll-y class="chat-scroll" scroll-into-view="{{toBottom}}" scroll-with-animation>
     <view class="chat">
       <view wx:if="{{chatView.length === 0 && !busy}}" class="empty">
         <view class="empty-title">开始读</view>
@@ -51,33 +67,48 @@
           </view>
         </view>
       </view>
+      <view id="chat-bottom" style="height: 2rpx"></view>
     </view>
   </scroll-view>
 
+  <!-- 读法选择 -->
   <block wx:if="{{showModes}}">
     <view class="mask" bindtap="toggleModes"></view>
     <view class="sheet">
       <view class="sheet-grip"></view>
       <view class="sheet-title">怎么读</view>
-      <view wx:for="{{modes}}" wx:key="id" class="sheet-item" data-id="{{item.id}}" bindtap="pickMode" hover-class="tap-dim">
-        <view class="flex-1">
-          <view class="row gap-12">
-            <text class="mode-name {{mode.id === item.id ? 'accent-text' : ''}}">{{item.label}}</text>
-            <view wx:if="{{mode.id === item.id}}" class="badge badge-accent">使用中</view>
+      <scroll-view scroll-y class="sheet-scroll">
+        <view wx:for="{{modes}}" wx:key="id" class="sheet-item" data-id="{{item.id}}" bindtap="pickMode">
+          <view class="flex-1">
+            <view class="row gap-12">
+              <text class="mode-name {{mode.id === item.id ? 'accent-text' : ''}}">{{item.label}}</text>
+              <view wx:if="{{mode.id === item.id}}" class="badge badge-accent">使用中</view>
+            </view>
+            <view class="mode-hint">{{item.hint}}</view>
           </view>
-          <view class="mode-hint">{{item.hint}}</view>
         </view>
-      </view>
+      </scroll-view>
     </view>
   </block>
 
   <view class="composer">
-    <view class="tool-btn" bindtap="toggleModes">{{mode.label}}</view>
-    <input class="composer-field" placeholder="说点什么" placeholder-class="ph" value="{{input}}" confirm-hold bindinput="onInput" bindconfirm="send" disabled="{{busy}}" />
+    <view class="mode-btn" bindtap="toggleModes">{{mode.label}}</view>
+    <input
+      class="composer-field"
+      placeholder="说说你的理解，或反驳"
+      placeholder-class="ph"
+      value="{{input}}"
+      confirm-hold
+      bindinput="onInput"
+      bindconfirm="send"
+      disabled="{{busy}}"
+    />
     <view class="composer-send {{input && !busy ? '' : 'disabled'}}" bindtap="{{input && !busy ? 'send' : ''}}">↑</view>
   </view>
 </view>
 
-<view wx:else class="empty">
-  <view class="empty-title">书不存在</view>
+<view wx:else class="page">
+  <view class="empty">
+    <view class="empty-title">书不存在</view>
+  </view>
 </view>
