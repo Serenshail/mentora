@@ -3,8 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  Badge, Button, Card, Modal,
-} from "@/components/ui";
+  Badge, Button, Card, Modal, Skeleton } from "@/components/ui";
 import { GraphView } from "@/components/brain/graph-view";
 import { ObsidianImport } from "@/components/brain/obsidian-import";
 import { NoteWorkspace } from "@/components/brain/note-workspace";
@@ -188,7 +187,7 @@ export default function BrainPage() {
     void askNext(rest);
   };
 
-  if (!hydrated) return <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />;
+  if (!hydrated) return <Skeleton className="h-40 rounded-2xl bg-surface/60" />;
 
   return (
     <div>

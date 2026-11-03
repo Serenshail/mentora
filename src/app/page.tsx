@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Badge, Button, Card, PageHeader, ProgressRing, StatusDot } from "@/components/ui";
+import { Badge, Button, Card, PageHeader, ProgressRing, StatusDot, Skeleton } from "@/components/ui";
 import { useAppStore, useDueReviews } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { useAuth } from "@/lib/auth-client";
@@ -47,7 +47,7 @@ function Dashboard() {
       })()
     : 0;
 
-  if (!hydrated) return <div className="h-64 animate-pulse rounded-2xl bg-surface/60" />;
+  if (!hydrated) return <Skeleton className="h-64 rounded-2xl bg-surface/60" />;
 
   const isEmpty = goals.length === 0 && books.length === 0 && knowledge.length === 0;
 

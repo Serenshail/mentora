@@ -364,3 +364,10 @@ export function StatusDot({ status }: { status: string }) {
   };
   return <span className={cn("inline-block size-2 rounded-full", map[status] ?? "bg-black/15")} />;
 }
+
+/* ---------- Skeleton（占位骨架，参照 shadcn/ui） ----------
+ * 规则：形状必须匹配真实内容（头像=圆、标题=短行、正文=多行、媒体=块），
+ * 加载完成时布局不得跳动。此前各页面用裸 animate-pulse 大方块，形状失真。 */
+export function Skeleton({ className }: { className?: string }) {
+  return <div aria-hidden className={cn("animate-pulse rounded-lg bg-black/[0.06]", className)} />;
+}

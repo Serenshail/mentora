@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Input, PageHeader } from "@/components/ui";
+import { Badge, Button, Card, Input, PageHeader, Skeleton } from "@/components/ui";
 import { useAppStore, DEFAULT_SETTINGS } from "@/lib/store";
 import { useShallow } from "zustand/react/shallow";
 import { useHydrated } from "@/lib/use-chat";
@@ -73,7 +73,7 @@ function AccountSection() {
     };
   }, [user, checking]);
 
-  if (checking) return <div className="h-64 animate-pulse rounded-2xl bg-surface/60" />;
+  if (checking) return <Skeleton className="h-64 rounded-2xl bg-surface/60" />;
 
   if (!user) {
     return (
@@ -430,7 +430,7 @@ function ModelSection() {
   const setSettings = useAppStore((s) => s.setSettings);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  if (!hydrated) return <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />;
+  if (!hydrated) return <Skeleton className="h-40 rounded-2xl bg-surface/60" />;
 
   const info = PROVIDERS[settings.provider];
   const showCustom = settings.provider === "custom";

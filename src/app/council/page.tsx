@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Input, Modal, PageHeader } from "@/components/ui";
+import { Badge, Button, Card, Input, Modal, PageHeader, Skeleton } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
@@ -493,7 +493,7 @@ export default function CouncilPage() {
     setForged(null);
   };
 
-  if (!hydrated) return <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />;
+  if (!hydrated) return <Skeleton className="h-40 rounded-2xl bg-surface/60" />;
 
   return (
     <div>

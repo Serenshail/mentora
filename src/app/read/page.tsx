@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Textarea } from "@/components/ui";
+import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Textarea, Skeleton } from "@/components/ui";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { extractJson, readingPlanSchema } from "@/lib/ai/client";
@@ -91,7 +91,7 @@ export default function ReadPage() {
       />
 
       {!hydrated ? (
-        <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />
+        <Skeleton className="h-40 rounded-2xl bg-surface/60" />
       ) : books.length === 0 ? (
         <Empty
           icon={<BookOpen className="size-7" />}

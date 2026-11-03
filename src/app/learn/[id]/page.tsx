@@ -4,9 +4,9 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { MASTERY_LABELS, MASTERY_ORDER } from "@/lib/types";
 import {
-  Badge, Button, Card, Input, Modal, PageHeader, ProgressRing, StatusDot, Textarea,
-} from "@/components/ui";
+  Badge, Button, Card, Input, Modal, PageHeader, ProgressRing, StatusDot, Textarea, Skeleton } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
+import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS } from "@/lib/types";
@@ -48,6 +48,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [streamText, setStreamText] = useState("");
+  const [phases, setPhases] = useState<TracePhase[]>([]);
   const qa = day.qa ?? [];
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -66,6 +67,9 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
         return plan;
       })(),
     });
+    /* UI 状态规范（R1/R2/R3）：首 token 前必须有可见阶段，不能黑屏等 */
+    const t0 = performance.now();
+    setPhases([{ label: "检索笔记", state: "running" }]);
     try {
       const { streamChat } = await import("@/lib/ai/client");
       const ctx = JSON.stringify({
@@ -78,6 +82,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
        * 用户问的多是老知识的延伸——把他自己记过的相关笔记当证据带上，回答才接得上。
        * 检索失败/为空则不加，绝不影响答疑本身。 */
       let ragCtx = "";
+      let ragFailed = false;
       try {
         const { retrieveEnhanced } = await import("@/lib/rag-pipeline");
         const notes = useAppStore
@@ -89,13 +94,27 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
           }));
         const r = await retrieveEnhanced(text, notes, 3, { context: day.title, rewrite: false });
         ragCtx = r.context;
-      } catch { /* 检索是增强项，失败不阻塞答疑 */ }
+      } catch { ragFailed = true; /* 检索是增强项，失败不阻塞答疑 */ }
+      const t1 = performance.now();
+      setPhases([
+        {
+          label: "检索笔记",
+          state: ragFailed ? "failed" : "done",
+          durationMs: t1 - t0,
+          detail: ragFailed ? "检索失败，改用通识回答" : ragCtx ? "已带上你的相关笔记" : "没有相关笔记",
+        },
+        { label: "思考回答", state: "running" },
+      ]);
       const full = await streamChat({
         task: "coach-qa",
         args: { ctx, ragCtx },
         messages: newQa.slice(-6).map((m) => ({ role: m.role, content: m.content })),
         onDelta: (d) => setStreamText((p) => p + d),
       });
+      const t2 = performance.now();
+      setPhases((prev) =>
+        prev.map((p) => (p.state === "running" ? { ...p, state: "done", durationMs: t2 - t1 } : p))
+      );
       const finalQa = [...newQa, { id: uid("m"), role: "assistant" as const, content: full || streamText, at: new Date().toISOString() }];
       updateGoal(goal.id, {
         plan: (() => {
@@ -105,6 +124,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
         })(),
       });
     } catch (e) {
+      setPhases((prev) => prev.map((p) => (p.state === "running" ? { ...p, state: "failed" } : p)));
       toast.error(e instanceof Error ? e.message : "答疑失败");
     } finally {
       setStreamText("");
@@ -145,6 +165,8 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
                 <span className="stream-cursor" />
               </div>
             )}
+            {/* 思考轨迹：首 token 前也有可见阶段（检索→思考），完成后折叠为耗时摘要 */}
+            <AgentTrace phases={phases} className="max-w-[92%]" />
           </div>
           <div className="mt-3 flex gap-2">
             <input
@@ -272,7 +294,7 @@ function GoalDetailInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只按 id/stub 变化驱动
   }, [hydrated, goal?.id, activePhase?.id, activePhaseStatus, catalogLen, activeDay?.id, activeDay?.stub]);
 
-  if (!hydrated) return <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />;
+  if (!hydrated) return <Skeleton className="h-40 rounded-2xl bg-surface/60" />;
   if (!goal) {
     return (
       <div className="py-20 text-center text-ink-dim">
@@ -433,7 +455,7 @@ function GoalDetailInner() {
 
 export default function GoalDetailPage() {
   return (
-    <Suspense fallback={<div className="h-40 animate-pulse rounded-2xl bg-surface/60" />}>
+    <Suspense fallback={<Skeleton className="h-40 rounded-2xl bg-surface/60" />}>
       <GoalDetailInner />
     </Suspense>
   );

@@ -2,8 +2,9 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Input, PageHeader, StatusDot } from "@/components/ui";
+import { Badge, Button, Card, Input, PageHeader, StatusDot, Skeleton } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
+import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
 import { extractJson, insightsSchema } from "@/lib/ai/client";
@@ -28,6 +29,7 @@ export default function BookPage() {
 
   const { messages, setMessages, pending, streaming, send } = useChat();
   const [input, setInput] = useState("");
+  const [phases, setPhases] = useState<TracePhase[]>([]);
   const [currentChapter, setCurrentChapter] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -57,7 +59,7 @@ export default function BookPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated]);
 
-  if (!hydrated) return <div className="h-40 animate-pulse rounded-2xl bg-surface/60" />;
+  if (!hydrated) return <Skeleton className="h-40 rounded-2xl bg-surface/60" />;
   if (!book) {
     return (
       <div className="py-20 text-center text-ink-dim">
@@ -98,6 +100,10 @@ export default function BookPage() {
     if (!text || streaming) return;
     setInput("");
     void (async () => {
+      /* UI 状态规范（R1/R2/R3）：检索增强在首 token 前要跑 1-3 次模型调用，
+       * 必须逐阶段可见，否则用户以为页面卡死。 */
+      const t0 = performance.now();
+      setPhases([{ label: "检索笔记", state: "running" }]);
       /* RAG 增强（2026-10-26）：基线图导航 → CRAG 自评 → 查询改写+多查询融合 → LLM 精排。
        * 任何一步失败都回退到原行为（wikiRetrieve top-3），对话不受影响。 */
       const notes = useAppStore
@@ -108,6 +114,7 @@ export default function BookPage() {
           links: k.links, version: k.version, updatedAt: k.updatedAt, tags: k.tags,
         }));
       let ragCtx = "";
+      let ragFailed = false;
       try {
         const enhanced = await retrieveEnhanced(
           text,
@@ -117,6 +124,7 @@ export default function BookPage() {
         );
         ragCtx = enhanced.context;
       } catch {
+        ragFailed = true;
         // 兜底：增强链路整体失败 → 原行为（纯 wikiRetrieve）
         ragCtx = ragContext(
           wikiRetrieve(
@@ -126,7 +134,17 @@ export default function BookPage() {
           )
         );
       }
-      void send({
+      const t1 = performance.now();
+      setPhases([
+        {
+          label: "检索笔记",
+          state: ragFailed ? "failed" : "done",
+          durationMs: t1 - t0,
+          detail: ragFailed ? "增强检索失败，已回退基础检索" : ragCtx ? "已带上你的相关笔记" : "没有相关笔记",
+        },
+        { label: "思考回答", state: "running" },
+      ]);
+      const p = send({
         args: { bookCtx: bookCtx(), ragCtx, mode: activeMode, modeSwitch: book.modeJustSwitched === true },
         userText: text,
         task: "reading-chat",
@@ -136,7 +154,14 @@ export default function BookPage() {
           if (book.modeJustSwitched) updateBook(book.id, { modeJustSwitched: false }); // 开场协议只触发一次
         },
       });
-    })();
+      await p;
+      const t2 = performance.now();
+      setPhases((prev) =>
+        prev.map((x) => (x.state === "running" ? { ...x, state: "done", durationMs: t2 - t1 } : x))
+      );
+    })().catch(() => {
+      setPhases((prev) => prev.map((x) => (x.state === "running" ? { ...x, state: "failed" } : x)));
+    });
   };
 
   /* ---- 三重验收（迁移自用户 CogniRead 项目：举例 30% + 迁移 30% + 贴合 40%） ---- */
@@ -568,6 +593,8 @@ export default function BookPage() {
                 <span className="stream-cursor" />
               </Card>
             )}
+            {/* 思考轨迹：检索与思考阶段可见，完成后折叠为耗时摘要 */}
+            <AgentTrace phases={phases} />
             <div ref={bottomRef} />
           </div>
 

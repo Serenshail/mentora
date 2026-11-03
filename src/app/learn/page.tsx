@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Empty, Input, PageHeader, ProgressRing, StatusDot } from "@/components/ui";
+import { Badge, Button, Card, Empty, Input, PageHeader, ProgressRing, StatusDot, Skeleton } from "@/components/ui";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS, type DomainKind } from "@/lib/types";
@@ -75,7 +75,7 @@ export default function LearnPage() {
       {!hydrated ? (
         <div className="space-y-3">
           {[1, 2].map((i) => (
-            <div key={i} className="h-28 animate-pulse rounded-2xl bg-surface/60" />
+            <Skeleton key={i} className="h-28 rounded-2xl bg-surface/60" />
           ))}
         </div>
       ) : goals.length === 0 ? (

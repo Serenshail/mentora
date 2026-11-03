@@ -5,7 +5,7 @@
  * 纯前端聚合现有数据，零新存储；AI 教练帖按需生成（每次进页可刷新一条）。 */
 
 import { useMemo, useState } from "react";
-import { Badge, Button, Card, PageHeader } from "@/components/ui";
+import { Badge, Button, Card, PageHeader, Skeleton } from "@/components/ui";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { extractJson } from "@/lib/ai/client";
@@ -96,7 +96,7 @@ export default function LifePage() {
     book: { label: "读书", cls: "text-ink-dim" },
   };
 
-  if (!hydrated) return <div className="h-64 animate-pulse rounded-2xl bg-surface/60" />;
+  if (!hydrated) return <Skeleton className="h-64 rounded-2xl bg-surface/60" />;
 
   return (
     <div>
