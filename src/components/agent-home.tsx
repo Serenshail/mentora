@@ -5,13 +5,13 @@
  * 只有用户明确说"想系统学 X"时才在回答末尾建议立目标（不启动引导）。
  * 思考轨迹复用 AgentTrace（检索笔记 → 思考回答 → 折叠耗时）。 */
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Eraser, ImagePlus, Sparkles, X } from "lucide-react";
-import { Card } from "@/components/ui";
+import { ArrowUp, Check, Circle, Eraser, ImagePlus, Loader2, Sparkles, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
-import { streamChat } from "@/lib/ai/client";
-import { retrieveEnhanced } from "@/lib/rag-pipeline";
+import { runAgent, type PendingWrite } from "@/lib/agent/runner";
+import { TOOLS, type PlanStep, type ToolCall } from "@/lib/agent/protocol";
 import { todayISO, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import type { ChatMsg } from "@/lib/types";
@@ -50,6 +50,11 @@ export function AgentHome() {
   const [busy, setBusy] = useState(false);
   const [phases, setPhases] = useState<TracePhase[]>([]);
   const [attach, setAttach] = useState<Attachment | null>(null);
+  const [plan, setPlan] = useState<PlanStep[]>([]);
+  const [tools, setTools] = useState<ToolCall[]>([]);
+  const [pendingWrite, setPendingWrite] = useState<PendingWrite | null>(null);
+  const [reasoning, setReasoning] = useState("");
+  const [runPhase, setRunPhase] = useState<"thinking" | "acting" | "answering" | "done" | "failed" | "cancelled">("thinking");
   const abortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -91,7 +96,7 @@ export function AgentHome() {
     }
   };
 
-  const buildCtx = () => {
+  const buildCtx = (ragCtx = "") => {
     const s = useAppStore.getState();
     const goal = s.goals.find((g) => g.status === "active");
     const activeDay = goal?.plan
@@ -105,6 +110,7 @@ export function AgentHome() {
         : null,
       dueReviews: due,
       knowledgeCount: s.knowledge.length,
+      notesEvidence: ragCtx || null,
     });
   };
 
@@ -126,67 +132,77 @@ export function AgentHome() {
     setAttach(null);
     const ac = new AbortController();
     abortRef.current = ac;
+    setPlan([]);
+    setTools([]);
+    setPendingWrite(null);
+    setReasoning("");
     try {
-      /* 检索增强只在有笔记时才值得跑；失败静默降级（对话不阻塞） */
-      let ragCtx = "";
-      let ragNote = "没有相关笔记";
-      try {
-        const notes = useAppStore
-          .getState()
-          .knowledge.filter((k) => !(k.tags ?? []).includes("MOC"))
-          .map((k) => ({
-            id: k.id, title: k.title, body: k.body, domain: k.domain,
-            links: k.links, version: k.version, updatedAt: k.updatedAt, tags: k.tags,
-          }));
-        if (notes.length > 0) {
-          const r = await retrieveEnhanced(q, notes, 3, { rewrite: false });
-          ragCtx = r.context;
-          ragNote = ragCtx ? "已带上你的相关笔记" : "没有相关笔记";
-        }
-      } catch {
-        ragNote = "检索失败，改用通识回答";
-      }
+      /* 不再预检索：检索是智能体的一个工具（search_brain），
+       * 由模型判断该不该用——预检索会让它"白拿证据"，永远学不会调用工具。 */
       const t1 = Date.now();
+      setPhases([
+        {
+          label: "思考",
+          state: "done",
+          durationMs: t1 - t0,
+          detail: "需要时会自己检索你的笔记",
+        },
+        { label: "回答中", state: "running" },
+      ]);
+
       const history = [...useAppStore.getState().agentChat].slice(-8).map((m) => ({
         role: m.role,
         content: m.content,
       }));
-      setPhases([
-        { label: "看看你的笔记", state: "done", durationMs: t1 - t0, detail: ragNote },
-        { label: "思考回答", state: "running" },
-      ]);
-      /* 深度讲解：带图片或用户明确要求讲解时启用教学协议（不受字数限制） */
       const { wantsDeepExplanation } = await import("@/lib/ai/prompts-lite");
       const deep = wantsDeepExplanation(q, !!imgForModel);
-      const wire = imgForModel
-        ? [
-            ...history.slice(0, -1),
-            {
-              role: "user" as const,
-              content: [
-                { type: "text" as const, text: q || "请讲讲这张图里的内容。" },
-                { type: "image_url" as const, image_url: { url: imgForModel } },
-              ],
-            },
-          ]
-        : history;
-      const full = await streamChat({
-        task: "agent",
-        args: { ctx: buildCtx(), ragCtx, deep, hasImage: !!imgForModel },
-        messages: wire,
-        temperature: deep ? 0.5 : 0.6,
+
+      /* 真正的工具循环（M3）：模型可反复要求检索/查看状态/存笔记/出题 */
+      const answer = await runAgent({
+        question: q || "请讲讲这张图里的内容。",
+        context: buildCtx(""),
+        imageUrl: imgForModel,
+        history,
+        deep,
         signal: ac.signal,
-        onDelta: (d) => setPending((p) => p + d),
+        cb: {
+          onPhase: (ph) => setRunPhase(ph),
+          onPlan: (pl) => setPlan(pl),
+          onTool: (tc) => {
+            setPending(""); // 该轮正文只是过渡语，清掉等最终答案
+            setTools((prev) => {
+            const i = prev.findIndex((x) => x.id === tc.id);
+            if (i < 0) return [...prev, tc];
+              const copy = [...prev];
+              copy[i] = tc;
+              return copy;
+            });
+          },
+          onReasoning: (r) => {
+            /* 思考流是模型的内部独白，只保留末段作"当前在想什么"的提示 */
+            setReasoning((prev) => (prev + r).slice(-48));
+          },
+          onDelta: (d) => {
+            /* 流式期间也剥掉 tool/plan 指令块：用户不该看到 JSON 协议 */
+            setPending((prev) => {
+              const merged = prev + d;
+              const stripped = merged.replace(/```(?:tool|plan)[\s\S]*?```/g, "").replace(/```(?:tool|plan)[\s\S]*$/, "");
+              return stripped;
+            });
+          },
+          onPendingWrite: (w) => setPendingWrite(w),
+        },
       });
+
       const t2 = Date.now();
       setPhases((prev) =>
         prev.map((p) => (p.state === "running" ? { ...p, state: "done", durationMs: t2 - t1 } : p))
       );
-      if (full.trim()) {
+      if (answer.trim()) {
         appendAgentMsg({
           id: uid("m"),
           role: "assistant",
-          content: full,
+          content: answer,
           at: new Date().toISOString(),
         });
       }
@@ -281,6 +297,130 @@ export function AgentHome() {
               <span className="stream-cursor" />
             </div>
           )}
+          {/* 思考摘要（Codex ReasoningItem 模型）：只给骨架，不给完整思维链 */}
+          {(reasoning || (busy && runPhase !== "answering")) && (
+            <div className="flex items-center gap-2 text-[11.5px] text-ink-dim">
+              {busy && runPhase !== "answering" ? (
+                <Loader2 className="size-3 animate-spin text-accent" />
+              ) : (
+                <Check className="size-3 text-ok/70" />
+              )}
+              <span className="line-clamp-2 leading-4">
+                {reasoning
+                  ? reasoning.replace(/\s+/g, " ").slice(-40)
+                  : runPhase === "thinking"
+                    ? "正在理解你的问题…"
+                    : runPhase === "acting"
+                      ? "正在调用工具…"
+                      : "准备回答"}
+              </span>
+            </div>
+          )}
+
+          {/* 外显计划（Codex PlanItem 模型）：每步三态可见 */}
+          {plan.length > 0 && (
+            <div className="rounded-xl border border-border bg-surface-2/50 px-3 py-2.5">
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+                计划
+              </p>
+              <ol className="space-y-1">
+                {plan.map((st) => (
+                  <li key={st.id} className="flex items-start gap-2 text-[12px]">
+                    <span className="mt-[3px] shrink-0">
+                      {st.status === "completed" ? (
+                        <Check className="size-3.5 text-ok" />
+                      ) : st.status === "in_progress" ? (
+                        <Loader2 className="size-3.5 animate-spin text-accent" />
+                      ) : st.status === "skipped" ? (
+                        <X className="size-3.5 text-ink-dim/40" />
+                      ) : (
+                        <Circle className="size-3.5 text-ink-dim/30" />
+                      )}
+                    </span>
+                    <span
+                      className={cn(
+                        st.status === "in_progress" ? "text-ink" : "text-ink-dim",
+                        st.status === "completed" && "line-through decoration-ink-dim/30"
+                      )}
+                    >
+                      {st.text}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {/* 工具调用（Codex CommandExecutionItem 模型）：状态 + 耗时 + 失败原文 */}
+          {tools.length > 0 && (
+            <div className="space-y-1.5">
+              {tools.map((t) => (
+                <div
+                  key={t.id}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11.5px]",
+                    t.status === "failed"
+                      ? "border-bad/30 bg-bad/[0.04] text-bad"
+                      : t.status === "in_progress"
+                        ? "border-accent/25 bg-accent/[0.04] text-ink-dim"
+                        : "border-border bg-white text-ink-dim"
+                  )}
+                >
+                  {t.status === "in_progress" ? (
+                    <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
+                  ) : t.status === "failed" ? (
+                    <X className="size-3 shrink-0" />
+                  ) : (
+                    <Check className="size-3 shrink-0 text-ok" />
+                  )}
+                  <span className="font-medium">{TOOLS[t.name]?.label ?? t.name}</span>
+                  {t.summary && <span className="truncate opacity-70">· {t.summary}</span>}
+                  {t.endedAt && (
+                    <span className="ml-auto shrink-0 tabular-nums opacity-50">
+                      {t.endedAt - t.startedAt}ms
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 写入确认卡（D4：智能体永不静默写入） */}
+          {pendingWrite && (
+            <div className="rounded-xl border border-accent/30 bg-accent/[0.04] p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-accent">
+                待确认 · 存入第二大脑
+              </p>
+              <p className="mt-1.5 text-[13px] font-bold text-ink">{pendingWrite.title}</p>
+              <p className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[11.5px] leading-relaxed text-ink-dim">
+                {pendingWrite.body.slice(0, 600)}
+              </p>
+              <div className="mt-2.5 flex gap-2">
+                <button
+                  onClick={() => {
+                    const { addKnowledge } = useAppStore.getState();
+                    addKnowledge(
+                      [{ title: pendingWrite.title, body: pendingWrite.body, domain: pendingWrite.domain }],
+                      "manual",
+                      "智能体对话"
+                    );
+                    toast.success(`已存入笔记库《${pendingWrite.title}》`);
+                    setPendingWrite(null);
+                  }}
+                  className="cursor-pointer rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-[11.5px] font-medium text-white transition hover:bg-black/80"
+                >
+                  确认保存
+                </button>
+                <button
+                  onClick={() => setPendingWrite(null)}
+                  className="cursor-pointer rounded-lg border border-border bg-white px-3 py-1.5 text-[11.5px] text-ink-dim transition hover:text-ink"
+                >
+                  不要了
+                </button>
+              </div>
+            </div>
+          )}
+
           <AgentTrace phases={phases} />
         </div>
       )}

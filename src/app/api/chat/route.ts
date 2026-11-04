@@ -8,6 +8,7 @@ import { checkAndCountServerKey } from "@/lib/server/quota";
 import { resolveByok, serverConfig } from "@/lib/server/ai-config";
 import { isDeployed } from "@/lib/server/deploy-env";
 import * as P from "@/lib/ai/prompts";
+import { agentToolsPrompt } from "@/lib/server/agent-tools-prompt";
 import { logEvent } from "@/lib/server/config";
 import {
   demoCouncil, demoGraduation, demoInsight, demoIntake, demoLesson, demoPlan, demoQuizGrade,
@@ -81,6 +82,7 @@ ${s("ragCtx")}
       return P.AGENT_CHAT(s("ctx"), s("ragCtx"), {
         deep: args.deep === true,
         hasImage: args.hasImage === true,
+        tools: args.noTools === true ? "" : agentToolsPrompt(),
       });
     case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
