@@ -1217,6 +1217,9 @@ function DayPanel({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [grade, setGrade] = useState<QuizGrade | null>(null);
   const [grading, setGrading] = useState(false);
+  /* UI 状态规范（§4.5）：最长等待的两处也要有可见阶段 */
+  const [lessonPhases, setLessonPhases] = useState<TracePhase[]>([]);
+  const [quizPhases, setQuizPhases] = useState<TracePhase[]>([]);
   const [skipConfirm, setSkipConfirm] = useState(false);
   const [skipText, setSkipText] = useState("");
   const [transferAnswer, setTransferAnswer] = useState<string | null>(null);
@@ -1230,6 +1233,8 @@ function DayPanel({
   /* 生成今日学习文档 */
   const genLesson = async () => {
     setLessonLoading(true);
+    const lessonT0 = performance.now();
+    setLessonPhases([{ label: "生成讲义", state: "running", detail: "按今日目标与教学模板撰写" }]);
     // 流式增量也留一份：长生成中途被刷新/断网打断时，至少把已生成的部分保住
     let buf = "";
     const saveLesson = async (text: string) => {
@@ -1287,11 +1292,16 @@ function DayPanel({
         },
       });
       if (full) await saveLesson(full);
+      setLessonPhases([{ label: "生成讲义", state: "done", durationMs: performance.now() - lessonT0 }]);
     } catch (e) {
       if (buf.trim().length > 200) {
         await saveLesson(buf);
+        setLessonPhases([
+          { label: "生成讲义", state: "cancelled", durationMs: performance.now() - lessonT0, detail: "中断，已保留已生成内容" },
+        ]);
         toast.error("生成中断，已保留已生成的内容（可点「重新生成」继续）。");
       } else {
+        setLessonPhases([{ label: "生成讲义", state: "failed", durationMs: performance.now() - lessonT0 }]);
         toast.error(e instanceof Error ? e.message : "生成失败");
       }
     } finally {
@@ -1307,6 +1317,8 @@ function DayPanel({
       return;
     }
     setGrading(true);
+    const gradeT0 = performance.now();
+    setQuizPhases([{ label: "逐条判分", state: "running", detail: "对照今日讲义核对你的依据" }]);
     try {
       const { streamChat } = await import("@/lib/ai/client");
       /* v17：判分必须带参照物——当日讲义原文与知识点随 ctx 上行，
@@ -1329,6 +1341,7 @@ function DayPanel({
        * overall 也随之重算。模型自己说 pass 不算，必须有可追溯的依据。 */
       const g = normalizeQuizGrade(quizGradeSchema.parse(extractJson(full)));
       setGrade(g);
+      setQuizPhases([{ label: "逐条判分", state: "done", durationMs: performance.now() - gradeT0 }]);
       setMode("result");
       store.getState().incrementAttempts(goal.id, day.id);
 
@@ -1393,6 +1406,7 @@ function DayPanel({
         toast.success(`验收判过了！回答下方的迁移题即解锁下一天（本天成绩已保存，不怕刷新）。本批掌握状态：${MASTERY_LABELS[mStatus]}`);
       }
     } catch (e) {
+      setQuizPhases([{ label: "逐条判分", state: "failed", durationMs: performance.now() - gradeT0 }]);
       toast.error(e instanceof Error ? e.message : "评分失败，请重试");
     } finally {
       setGrading(false);
@@ -1633,6 +1647,7 @@ function DayPanel({
               </p>
             )}
             {lessonLoading && lessonText && <span className="stream-cursor mt-2" />}
+            <AgentTrace phases={lessonPhases} className="mt-3" />
           </Card>
 
           {/* 项目例子 */}
@@ -1689,6 +1704,7 @@ function DayPanel({
               </div>
             ))}
           </div>
+          <AgentTrace phases={quizPhases} className="mt-4" />
           <div className="mt-5 flex items-center justify-between">
             <Button variant="ghost" size="sm" onClick={() => setMode("learn")}>
               返回学习
