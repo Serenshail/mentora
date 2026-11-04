@@ -2,9 +2,14 @@
 
 import { z } from "zod";
 
+export type WirePart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface WireMsg {
   role: "user" | "assistant";
-  content: string;
+  /** 字符串（历史行为）或 OpenAI 兼容多模态数组（图片输入，M2.1） */
+  content: string | WirePart[];
 }
 
 export type ChatTask =

@@ -18,10 +18,15 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+type Part =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 interface Body {
   system?: string; // 仅服务端内部使用；客户端不再发送
   args?: Record<string, unknown>; // 纯数据参数,服务端据此组装系统提示词
-  messages: { role: "user" | "assistant"; content: string }[];
+  /* content 允许字符串（历史行为）或 OpenAI 兼容的多模态数组（图片，M2.1） */
+  messages: { role: "user" | "assistant"; content: string | Part[] }[];
   temperature?: number;
   task?: string;
 }
@@ -72,7 +77,11 @@ ${s("ragCtx")}
     case "autolink": return P.AUTOLINK({ note: s("note"), candidates: s("candidates") });
     case "coach-qa": return P.ASK_COACH(s("ctx"), s("ragCtx"));
     /* 首页学习智能体（M2）：单点问答零引导，回答契约同 v21.4 */
-    case "agent": return P.AGENT_CHAT(s("ctx"), s("ragCtx"));
+    case "agent":
+      return P.AGENT_CHAT(s("ctx"), s("ragCtx"), {
+        deep: args.deep === true,
+        hasImage: args.hasImage === true,
+      });
     case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
     /* RAG 增强（2026-10-26）：查询改写与精排都只输出 JSON，检索质量由代码裁决 */
@@ -107,6 +116,17 @@ ${s("ragCtx")}
 
 /* 模型配置解析（envKeys/resolveByok/serverConfig）已抽至 @/lib/server/ai-config 以便单测 */
 
+/** Demo 只处理文本：多模态 content 数组拍平成文本（图片以占位说明代替） */
+function flatten(messages: Body["messages"]): { role: "user" | "assistant"; content: string }[] {
+  return messages.map((m) => {
+    if (typeof m.content === "string") return { role: m.role, content: m.content };
+    const content = m.content
+      .map((p) => (p.type === "text" ? p.text : "［用户上传了一张图片］"))
+      .join("\n");
+    return { role: m.role, content };
+  });
+}
+
 function demoTask(
   task: string | undefined,
   system: string,
@@ -114,8 +134,9 @@ function demoTask(
   args: Record<string, unknown> = {}
 ): AsyncGenerator<string> {
   const s = system || "";
+  const flat = flatten(messages);
   switch (task) {
-    case "intake": return demoIntake(messages);
+    case "intake": return demoIntake(flat);
     case "plan": return demoPlan(s);
     case "lesson": return demoLesson();
     case "quiz-grade": return demoQuizGrade(s);
@@ -126,7 +147,7 @@ function demoTask(
     case "insight": return demoInsight(s);
     case "graduation": return demoGraduation(s);
     case "reading-plan": return demoReadingPlan(s);
-    case "reading-chat": return demoReadingChat(messages);
+    case "reading-chat": return demoReadingChat(flat);
     case "autolink":
       return (async function* () {
         yield* (await import("@/lib/ai/demo")).demoAutolink();
@@ -145,24 +166,24 @@ function demoTask(
         yield* (await import("@/lib/ai/demo")).demoRagRerank(String(args.candidates ?? ""));
       })();
     case "coach-qa":
-      return demoCouncil(messages);
+      return demoCouncil(flat);
     case "agent":
       return (async function* () {
-        yield* (await import("@/lib/ai/demo")).demoAgent(messages);
+        yield* (await import("@/lib/ai/demo")).demoAgent(flat);
       })();
     case "council": {
       /* 圆桌 Demo 与真实模型同语义（R1）：take 按席位差异化发言、host 真综合，
        * 不再静默落进 demoCouncil 的单人回答 */
       const mode = String(args.mode ?? "");
       if (mode === "take")
-        return demoRoundtableTake(String(args.name ?? "与会者"), messages, String(args.personaId ?? ""));
+        return demoRoundtableTake(String(args.name ?? "与会者"), flat, String(args.personaId ?? ""));
       if (mode === "host")
         return demoRoundtableHost(
           String(args.names ?? ""),
           String(args.takes ?? ""),
           String(args.question ?? "")
         );
-      return demoCouncil(messages);
+      return demoCouncil(flat);
     }
     case "app-assistant":
       return (async function* () {
@@ -170,7 +191,7 @@ function demoTask(
           "**演示模式的助手只会照本宣科。**接上真模型后，我可以告诉你每个功能在哪、怎么用——比如 Obsidian 导入、三重验收、后台密码门。"
         );
       })();
-    default: return demoCouncil(messages);
+    default: return demoCouncil(flat);
   }
 }
 

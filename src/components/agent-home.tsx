@@ -4,8 +4,8 @@
  * 与学习教练的区别：单点问题直接答、零引导、零建档；
  * 只有用户明确说"想系统学 X"时才在回答末尾建议立目标（不启动引导）。
  * 思考轨迹复用 AgentTrace（检索笔记 → 思考回答 → 折叠耗时）。 */
-import { useRef, useState } from "react";
-import { ArrowUp, Eraser, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowUp, Eraser, ImagePlus, Sparkles, X } from "lucide-react";
 import { Card } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
@@ -18,6 +18,29 @@ import type { ChatMsg } from "@/lib/types";
 
 const CHIPS = ["协程和线程到底差在哪？", "帮我看下今天该学什么", "用一句话解释闭包"];
 
+/* 图片压缩：模型对超大图会拒绝且浪费 token；长边压到 1400、JPEG 0.82 足够读代码截图 */
+async function compressImage(file: File): Promise<{ dataUrl: string; w: number; h: number }> {
+  const bitmap = await createImageBitmap(file);
+  const maxSide = 1400;
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const w = Math.round(bitmap.width * scale);
+  const h = Math.round(bitmap.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("浏览器不支持图片处理");
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  return { dataUrl: canvas.toDataURL("image/jpeg", 0.82), w, h };
+}
+
+interface Attachment {
+  dataUrl: string;
+  name: string;
+  w: number;
+  h: number;
+}
+
 export function AgentHome() {
   const agentChat = useAppStore((s) => s.agentChat);
   const appendAgentMsg = useAppStore((s) => s.appendAgentMsg);
@@ -26,7 +49,47 @@ export function AgentHome() {
   const [pending, setPending] = useState("");
   const [busy, setBusy] = useState(false);
   const [phases, setPhases] = useState<TracePhase[]>([]);
+  const [attach, setAttach] = useState<Attachment | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /* 粘贴截图：全局监听 paste，有图片就收进附件（不打断输入框正常粘贴文字） */
+  useEffect(() => {
+    const onPaste = async (e: ClipboardEvent) => {
+      const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+      if (!item) return;
+      const file = item.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      try {
+        const img = await compressImage(file);
+        setAttach({ ...img, name: "粘贴的截图" });
+        toast.success("已读取截图，可以写你的问题");
+      } catch {
+        toast.error("图片读取失败");
+      }
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, []);
+
+  const pickFile = async (f: File | null | undefined) => {
+    if (!f) return;
+    if (!f.type.startsWith("image/")) {
+      toast.error("目前支持图片；文档请用「第二大脑 → 上传文档」");
+      return;
+    }
+    if (f.size > 12 * 1024 * 1024) {
+      toast.error("图片太大了（>12MB），请压缩后再传");
+      return;
+    }
+    try {
+      const img = await compressImage(f);
+      setAttach({ ...img, name: f.name });
+    } catch {
+      toast.error("图片读取失败");
+    }
+  };
 
   const buildCtx = () => {
     const s = useAppStore.getState();
@@ -49,14 +112,18 @@ export function AgentHome() {
    * 其中的 Date.now() 用于阶段耗时统计，不会在渲染期调用（编译器静态误判） */
   const send = async (text?: string) => {
     const q = (text ?? input).trim();
-    if (!q || busy) return;
+    /* 只有图片没有文字也允许（"讲讲这段代码"由图片内容本身承载） */
+    if ((!q && !attach) || busy) return;
     setInput("");
     setBusy(true);
     setPending("");
     const t0 = Date.now();
     setPhases([{ label: "看看你的笔记", state: "running" }]);
-    const userMsg: ChatMsg = { id: uid("m"), role: "user", content: q, at: new Date().toISOString() };
+    const shownText = attach ? `${q || "请看这张图"}（附图片）` : q;
+    const userMsg: ChatMsg = { id: uid("m"), role: "user", content: shownText, at: new Date().toISOString() };
     appendAgentMsg(userMsg);
+    const imgForModel = attach?.dataUrl ?? null;
+    setAttach(null);
     const ac = new AbortController();
     abortRef.current = ac;
     try {
@@ -88,11 +155,26 @@ export function AgentHome() {
         { label: "看看你的笔记", state: "done", durationMs: t1 - t0, detail: ragNote },
         { label: "思考回答", state: "running" },
       ]);
+      /* 深度讲解：带图片或用户明确要求讲解时启用教学协议（不受字数限制） */
+      const { wantsDeepExplanation } = await import("@/lib/ai/prompts-lite");
+      const deep = wantsDeepExplanation(q, !!imgForModel);
+      const wire = imgForModel
+        ? [
+            ...history.slice(0, -1),
+            {
+              role: "user" as const,
+              content: [
+                { type: "text" as const, text: q || "请讲讲这张图里的内容。" },
+                { type: "image_url" as const, image_url: { url: imgForModel } },
+              ],
+            },
+          ]
+        : history;
       const full = await streamChat({
         task: "agent",
-        args: { ctx: buildCtx(), ragCtx },
-        messages: history,
-        temperature: 0.6,
+        args: { ctx: buildCtx(), ragCtx, deep, hasImage: !!imgForModel },
+        messages: wire,
+        temperature: deep ? 0.5 : 0.6,
         signal: ac.signal,
         onDelta: (d) => setPending((p) => p + d),
       });
@@ -185,15 +267,59 @@ export function AgentHome() {
               {c}
             </button>
           ))}
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="cursor-pointer rounded-full border border-accent/30 bg-accent/[0.06] px-3 py-1.5 text-[11.5px] text-accent transition hover:bg-accent/[0.12]"
+          >
+            📎 传张截图 / 代码图，让它逐行讲
+          </button>
+        </div>
+      )}
+
+      {attach && (
+        <div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/25 bg-white p-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={attach.dataUrl} alt={attach.name} className="size-14 rounded-lg border border-border object-cover" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[11.5px] font-medium text-ink">{attach.name}</p>
+            <p className="text-[10.5px] text-ink-dim">
+              {attach.w}×{attach.h} · 会先读图再讲解
+            </p>
+          </div>
+          <button
+            onClick={() => setAttach(null)}
+            aria-label="移除图片"
+            className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-ink-dim transition hover:bg-black/[0.05] hover:text-ink"
+          >
+            <X className="size-4" />
+          </button>
         </div>
       )}
 
       <div className="mt-3 flex gap-2">
         <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            void pickFile(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+        <button
+          onClick={() => fileRef.current?.click()}
+          title="上传图片（也可以直接 Ctrl+V 粘贴截图）"
+          aria-label="上传图片"
+          className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-xl border border-border bg-white text-ink-dim transition hover:border-accent/40 hover:text-ink"
+        >
+          <ImagePlus className="size-4" />
+        </button>
+        <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void send()}
-          placeholder="问一个具体问题，比如：为什么 setTimeout 里拿到旧 state？"
+          placeholder="问一个具体问题，或贴截图让我逐行讲解（Ctrl+V 可粘贴）"
           disabled={busy}
           className="h-10 w-full rounded-xl border border-border bg-white px-3.5 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12] disabled:opacity-60"
         />
