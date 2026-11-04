@@ -128,6 +128,8 @@ src/
 
 **规划文档**：[Sidebar-First PRD](docs/PRD-2026-10-24.md)
 
+**学习智能体方向（v1.1，用户已确认）**：[Agent PRD](docs/PRD-AGENT-2026-10-26.md)——统一学习智能体（学习教练+读书伙伴同一智能体）、Codex/ZCode 式外显思维链、首页今日控制台+智能入口、计划简洁可调、以培养用户自己的学习系统为目标。
+
 **发布门禁**：[圆桌 MVP 对抗式验收](docs/ACCEPTANCE-FOUNDER-FIRST-2026-10-24.md)
 
 **今天就能开始**：[圆桌真实问题记录表](docs/DOGFOODING-7D.md)（不要求每天打开，只记录真实决策）
