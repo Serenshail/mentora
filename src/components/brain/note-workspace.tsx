@@ -285,6 +285,7 @@ export function NoteWorkspace({
   const knowledge = useAppStore((s) => s.knowledge);
   const createKnowledge = useAppStore((s) => s.createKnowledge);
   const updateKnowledge = useAppStore((s) => s.updateKnowledge);
+  const enableReview = useAppStore((s) => s.enableReview);
   const removeKnowledge = useAppStore((s) => s.removeKnowledge);
   const linkNotes = useAppStore((s) => s.linkNotes);
   const folders = useAppStore((s) => s.folders);
@@ -1281,6 +1282,18 @@ export function NoteWorkspace({
                       <b.icon className="size-4" />
                     </button>
                   ))}
+                  <button
+                    disabled={!note}
+                    title={note?.nextReviewAt ? "把这篇文章移出间隔复习队列" : "把这篇加入间隔复习队列（导入/手写笔记默认不进）"}
+                    onClick={() => {
+                      if (!note) return;
+                      enableReview(note.id, !note.nextReviewAt);
+                      toast.success(note.nextReviewAt ? "已移出复习队列" : "已加入复习队列");
+                    }}
+                    className="grid h-11 shrink-0 place-items-center rounded-md px-2.5 text-[11px] text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40 md:h-8"
+                  >
+                    {note?.nextReviewAt ? "移出复习" : "加入复习"}
+                  </button>
                   <button
                     disabled={aiBusy || !note}
                     title="AI 生成本篇要点摘要并追加到文末"

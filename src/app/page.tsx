@@ -143,7 +143,9 @@ function Dashboard() {
                 <Badge tone="warn">{due.length} 条待复习</Badge> 点此去刷
               </p>
             ) : (
-              <p className="mt-2 text-sm text-ink-dim">该刷的都刷完了。</p>
+              <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">
+                没有待复习。验收通过的知识点会自动进入复习；导入与手写笔记默认不进——可在笔记里点「加入复习」。
+              </p>
             )}
           </Card>
 

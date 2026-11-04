@@ -201,13 +201,15 @@ export default function BrainPage() {
         </h1>
         <span className="text-xs text-ink-dim">
           {knowledge.length} 篇 · 连接 {knowledge.reduce((a, k) => a + k.links.length, 0)}
-          {due.length > 0 && (
+          {due.length > 0 ? (
             <>
               {" "}· 待复习{" "}
               <button onClick={startReview} className="font-semibold text-accent hover:underline cursor-pointer">
                 {due.length}
               </button>
             </>
+          ) : (
+            <> · 待复习 0（验收通过的知识点自动进；导入/手写笔记可在笔记里手动加入）</>
           )}
         </span>
         <div className="ml-auto flex gap-1.5">

@@ -23,6 +23,7 @@ import type {
   Settings,
 } from "./types";
 import { todayISO, uid } from "./utils";
+import { backfillReviewDates, reviewPatch } from "./review";
 import { track } from "./track";
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -123,6 +124,8 @@ interface AppState {
   ) => { added: number; skipped: number };
   rebuildLinks: () => { touched: number; placeholders: number };
   updateKnowledge: (id: string, patch: Partial<KnowledgeItem>) => void;
+  /** 手动把一篇笔记加入/移出复习队列（导入与手写笔记默认不进） */
+  enableReview: (id: string, enabled: boolean) => void;
   removeKnowledge: (id: string) => void;
   recordReview: (id: string, ok: boolean) => void;
   linkNotes: (fromId: string, toId: string) => void;
@@ -754,6 +757,13 @@ export const useAppStore = create<AppState>()(
           if (patch.body !== undefined) knowledge = linkifyBodies(knowledge);
           return { knowledge };
         }),
+      enableReview: (id, enabled) =>
+        set((s) => ({
+          knowledge: s.knowledge.map((k) =>
+            k.id === id ? { ...k, ...reviewPatch(enabled, todayISO()) } : k
+          ),
+        })),
+
       removeKnowledge: (id) =>
         set((s) => {
           const target = s.knowledge.find((k) => k.id === id);
@@ -899,7 +909,7 @@ export const useAppStore = create<AppState>()(
       importData: (data) =>
         set((s) => ({
           goals: data.goals ?? s.goals,
-          knowledge: data.knowledge ?? s.knowledge,
+          knowledge: backfillReviewDates(data.knowledge ?? s.knowledge, todayISO()),
           books: data.books ?? s.books,
           sessions: data.sessions ?? s.sessions,
           customPersonas: data.customPersonas ?? s.customPersonas,
@@ -1122,7 +1132,7 @@ export function setStoreUser(userId: string | null) {
           return { ...g, plan };
         });
       }
-      loaded = { ...st, knowledge, goals };
+      loaded = { ...st, knowledge: backfillReviewDates(knowledge as KnowledgeItem[], todayISO()), goals };
     }
   } catch {
     /* 损坏的仓按空仓处理，绝不写入破坏 */
