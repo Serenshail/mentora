@@ -40,9 +40,27 @@ export const KIND_LABEL: Record<string, string> = {
   classic: "经典",
 };
 
+/* 客户端 id 生成。
+ * ⚠️ 不能用 crypto.randomUUID()：该 API 只在"安全上下文"（HTTPS / localhost）暴露，
+ * 自托管走 http://IP:3000 时 window.crypto.randomUUID 是 undefined →
+ * 所有客户端建对象（目标/笔记/书/会话）当场抛错，整个功能静默失效。
+ * 这里退回 getRandomValues（非安全上下文也可用），再不行用 Math.random 兜底。 */
 export function uid(prefix = ""): string {
-  const id = crypto.randomUUID().slice(0, 8);
+  const id = randomChars(8);
   return prefix ? `${prefix}_${id}` : id;
+}
+
+function randomChars(n: number): string {
+  const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+  const bytes = new Uint8Array(n);
+  try {
+    crypto.getRandomValues(bytes);
+  } catch {
+    for (let i = 0; i < n; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  let out = "";
+  for (let i = 0; i < n; i++) out += alphabet[bytes[i] % 36];
+  return out;
 }
 
 export function todayISO(): string {
@@ -97,4 +115,30 @@ export function downloadJson(filename: string, data: unknown) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** 复制到剪贴板。
+ * navigator.clipboard 只在安全上下文（HTTPS/localhost）存在——自托管 HTTP 下为 undefined，
+ * 旧实现直接 await 会抛错、按钮点了没反应。这里降级到 execCommand("copy")。 */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* 落到下面的降级路径 */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
 }

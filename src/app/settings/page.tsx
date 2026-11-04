@@ -757,11 +757,12 @@ function InviteSection() {
             variant="outline"
             size="sm"
             onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(origin);
+              const { copyText } = await import("@/lib/utils");
+              const ok = await copyText(origin);
+              if (ok) {
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
-              } catch {}
+              }
             }}
           >
             {copied ? "已复制" : "复制产品链接"}

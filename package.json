@@ -25,6 +25,7 @@
     "remark-gfm": "^4.0.1",
     "server-only": "^0.0.1",
     "sonner": "^2.0.8",
+    "ssh2": "^1.17.0",
     "ts-fsrs": "^5.4.2",
     "turndown": "^7.2.4",
     "web-push": "^3.6.7",

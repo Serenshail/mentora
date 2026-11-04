@@ -212,12 +212,25 @@ function onLogin(userId) {
 }
 
 /* 云端对齐。force=true（登录时）：云端空+本机有数据 → 反推修复；
- * 非 force（回前台）：本地有未推送改动时绝不拉取覆盖。 */
+ * 非 force（回前台）：本地有未推送改动时绝不拉取覆盖。
+ *
+ * 拉取节流：快照是**全量**的（目标+笔记+书+会话），知识库大时是 MB 级。
+ * 每个 tab 页 onShow 都调 pullIfSafe —— 之前每切一次 tab 就在当前
+ * （往往很慢的）网络通道上重拉一遍全量数据，这是"点 tab 特别卡"的
+ * 网络层来源。非 force 时 30s 内不重复拉；下拉刷新/登录不受限。 */
+var PULL_MIN_INTERVAL = 30 * 1000;
+var lastPullAt = 0;
+
 function pullIfSafe(force) {
   if (!state.userId) return Promise.resolve("skip");
+  var now = Date.now();
+  if (!force && now - lastPullAt < PULL_MIN_INTERVAL) {
+    return Promise.resolve("skip");
+  }
   return api
     .pullCloud()
     .then(function (cloud) {
+      lastPullAt = Date.now();
       if (!cloud) {
         if (force && hasLocalData()) {
           return pushNow().then(function () {
