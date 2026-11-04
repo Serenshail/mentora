@@ -77,12 +77,13 @@ ${s("ragCtx")}
     case "insight": return P.INSIGHT_EXTRACT(s("text"));
     case "autolink": return P.AUTOLINK({ note: s("note"), candidates: s("candidates") });
     case "coach-qa": return P.ASK_COACH(s("ctx"), s("ragCtx"));
-    /* 首页学习智能体（M2）：单点问答零引导，回答契约同 v21.4 */
+    /* 首页学习智能体（M3.5）：单点问答零引导；mode 由 POST 侧用用户问题算好传入 */
     case "agent":
       return P.AGENT_CHAT(s("ctx"), s("ragCtx"), {
         deep: args.deep === true,
         hasImage: args.hasImage === true,
         tools: args.noTools === true ? "" : agentToolsPrompt(),
+        mode: s("mode"),
       });
     case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
@@ -398,6 +399,17 @@ export async function POST(req: NextRequest) {
   }
 
   // 双契约：客户端发 args(新,核心任务)→服务端组装提示词；发 system(旧,council)→沿用。
+  /* 学科路由：从最后一条用户消息提取文本，选教学方法论（编程/数学/语言/考试/人文/通用） */
+  if (body.task === "agent" && body.args) {
+    const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
+    const qText =
+      typeof lastUser?.content === "string"
+        ? lastUser.content
+        : Array.isArray(lastUser?.content)
+          ? lastUser.content.map((pp) => (pp.type === "text" ? pp.text : "")).join(" ")
+          : "";
+    body.args.mode = P.agentTeachingRoute(String(body.args.topic ?? ""), qText);
+  }
   const system =
     body.args && Object.keys(body.args).length > 0
       ? buildSystem(body.task, body.args)
