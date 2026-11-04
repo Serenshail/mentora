@@ -7,7 +7,7 @@ import { Badge, Button, Card, Empty, Input, PageHeader, ProgressRing, StatusDot,
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS, type DomainKind } from "@/lib/types";
-import { Compass, GraduationCap, Plus, Trash2 } from "lucide-react";
+import { Brain, Compass, GraduationCap, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function goalProgress(goals: ReturnType<typeof useAppStore.getState>["goals"][number]) {
@@ -45,8 +45,16 @@ export default function LearnPage() {
     <div>
       <PageHeader
         icon={<GraduationCap className="size-5" />}
-        title="学习教练"
-        desc="先聊几句摸清你的底细，再排计划。每天一课，验收不过不放行。"
+        title="学习"
+        desc="先聊几句摸清底细再排计划，每天一课不过不放行；学过的都沉淀进笔记库。"
+        right={
+          <Link
+            href="/brain"
+            className="inline-flex items-center gap-1.5 rounded-[10px] border border-border bg-white px-3 py-2 text-[13px] font-medium text-ink-dim transition hover:border-accent/40 hover:text-ink"
+          >
+            <Brain className="size-4" /> 笔记库
+          </Link>
+        }
       />
 
       {/* 方向迷茫：第一性原理引导对话 */}

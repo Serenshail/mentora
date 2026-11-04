@@ -207,15 +207,17 @@ export function AgentHome() {
   const shown = agentChat.slice(-10);
 
   return (
-    <Card className="border-accent/20 bg-accent/[0.025]">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="flex items-center gap-2 text-sm font-bold text-ink">
-            <Sparkles className="size-4 text-accent" /> 问 Mentora
-          </p>
-          <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">
-            单点问题直接答，不用先建目标。想系统学一门东西，再去「学习」排计划。
-          </p>
+    <div className="flex h-[calc(100dvh-150px)] min-h-[520px] flex-col">
+      {/* 极简头部：一个标识 + 清空（Codex 式的克制） */}
+      <div className="flex items-center justify-between px-1 pb-3">
+        <div className="flex items-center gap-2">
+          <span className="grid size-6 place-items-center rounded-lg bg-[#1d1d1f] text-white">
+            <Sparkles className="size-3.5" />
+          </span>
+          <p className="text-[13px] font-semibold text-ink">Mentora</p>
+          <span className="text-[11px] text-ink-dim/70">
+            {shown.length === 0 ? "问什么都可以：概念、代码、图片、书里的观点" : ""}
+          </span>
         </div>
         {agentChat.length > 0 && (
           <button
@@ -228,8 +230,35 @@ export function AgentHome() {
         )}
       </div>
 
+      {shown.length === 0 && (
+        <div className="flex flex-1 flex-col items-center justify-center px-4 text-center">
+          <p className="font-brand text-3xl text-ink">想弄明白什么？</p>
+          <p className="mt-2 max-w-md text-[12.5px] leading-relaxed text-ink-dim">
+            单独问一个问题，我直接答；贴一段代码或截图，我按行讲解。
+            想系统学一门东西，去「学习」排计划——这里不逼你建档。
+          </p>
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            {CHIPS.map((c) => (
+              <button
+                key={c}
+                onClick={() => void send(c)}
+                className="cursor-pointer rounded-full border border-border bg-white px-3.5 py-2 text-[12px] text-ink-dim transition hover:border-accent/40 hover:text-ink"
+              >
+                {c}
+              </button>
+            ))}
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="cursor-pointer rounded-full border border-accent/30 bg-accent/[0.06] px-3.5 py-2 text-[12px] text-accent transition hover:bg-accent/[0.12]"
+            >
+              📎 传张截图 / 代码图
+            </button>
+          </div>
+        </div>
+      )}
+
       {shown.length > 0 && (
-        <div className="mt-3 max-h-72 space-y-3 overflow-y-auto pr-1">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 pb-3">
           {shown.map((m) => (
             <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
               {m.role === "user" ? (
@@ -256,26 +285,6 @@ export function AgentHome() {
         </div>
       )}
 
-      {shown.length === 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {CHIPS.map((c) => (
-            <button
-              key={c}
-              onClick={() => void send(c)}
-              className="cursor-pointer rounded-full border border-border bg-white px-3 py-1.5 text-[11.5px] text-ink-dim transition hover:border-accent/40 hover:text-ink"
-            >
-              {c}
-            </button>
-          ))}
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="cursor-pointer rounded-full border border-accent/30 bg-accent/[0.06] px-3 py-1.5 text-[11.5px] text-accent transition hover:bg-accent/[0.12]"
-          >
-            📎 传张截图 / 代码图，让它逐行讲
-          </button>
-        </div>
-      )}
-
       {attach && (
         <div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/25 bg-white p-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -296,7 +305,7 @@ export function AgentHome() {
         </div>
       )}
 
-      <div className="mt-3 flex gap-2">
+      <div className="mt-auto flex gap-2 border-t border-border/60 pt-3">
         <input
           ref={fileRef}
           type="file"
@@ -340,6 +349,6 @@ export function AgentHome() {
           停止
         </button>
       )}
-    </Card>
+    </div>
   );
 }

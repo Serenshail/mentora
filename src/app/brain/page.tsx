@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   Badge, Button, Card, Modal, Skeleton } from "@/components/ui";
@@ -13,7 +14,7 @@ import { useHydrated } from "@/lib/use-chat";
 import { extractJson, normalizeReviewGrade, reviewGradeSchema } from "@/lib/ai/client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Brain, RefreshCcw } from "lucide-react";
+import { ArrowLeft, Brain, RefreshCcw } from "lucide-react";
 
 type Tab = "notes" | "graph";
 
@@ -197,7 +198,10 @@ export default function BrainPage() {
       {/* 紧凑顶栏：标题 + 统计 + 复习 + Tab */}
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
         <h1 className="flex items-center gap-2 text-[17px] font-bold tracking-[-0.01em] text-ink">
-          <Brain className="size-4.5 text-accent" /> 第二大脑
+          <Link href="/learn" className="flex items-center gap-1.5 text-ink-dim transition hover:text-ink">
+            <ArrowLeft className="size-4" />
+          </Link>
+          <Brain className="size-4.5 text-accent" /> 笔记库
         </h1>
         <span className="text-xs text-ink-dim">
           {knowledge.length} 篇 · 连接 {knowledge.reduce((a, k) => a + k.links.length, 0)}

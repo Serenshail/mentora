@@ -18,6 +18,7 @@ import {
   LogOut,
   ShieldCheck,
   Footprints,
+  Sparkles,
 } from "lucide-react";
 import { CmdK } from "@/components/cmdk";
 import { FeedbackWidget } from "@/components/feedback-widget";
@@ -31,18 +32,21 @@ import { useVisualViewportInset } from "@/lib/use-visual-viewport";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+/* 侧栏（v22.0 重构）：首页 = 智能体；学习教练与第二大脑合并为「学习」；
+ * 学习人生接管原首页的所有卡片（日历/学习进行时/复习/读书/人生伙伴）。
+ * 读书伙伴与人生伙伴保留独立入口（各有结构化工作台）。 */
 const NAV = [
-  { href: "/", label: "总览", icon: LayoutDashboard },
-  { href: "/learn", label: "学习教练", icon: GraduationCap },
-  { href: "/brain", label: "第二大脑", icon: Brain },
+  { href: "/", label: "Mentora", icon: Sparkles },
+  { href: "/learn", label: "学习", icon: GraduationCap },
+  { href: "/life", label: "学习人生", icon: Footprints },
   { href: "/read", label: "读书伙伴", icon: BookOpen },
   { href: "/council", label: "人生伙伴", icon: Compass },
-  { href: "/life", label: "学习人生", icon: Footprints },
   { href: "/settings", label: "设置", icon: Settings2 },
 ];
 
-/* 移动底栏：5 个主入口 +「更多」（PRD-2026-10-26-MOBILE-UI §3.1）。
- * 其余入口进更多抽屉；当前在隐藏路由时「更多」显示 active（M1-2）。 */
+/* 移动底栏（PRD-2026-10-26-MOBILE-UI §3.1）：5 个主入口 +「更多」抽屉。
+ * v22 侧栏重构后：Mentora/学习/学习人生/读书/人生伙伴 为主，设置进更多。
+ * 当前在隐藏路由时「更多」显示 active（M1-2）。 */
 const MOBILE_PRIMARY = NAV.slice(0, 5);
 const MOBILE_MORE = NAV.slice(5);
 
@@ -191,8 +195,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   /* 键盘 inset：挂在壳层一处，全站 fixed 层共享（§4.3） */
   useVisualViewportInset(!!user);
 
-  const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+  /* /brain 是学习教练的姊妹工作台（v22 合并后同属「学习」），高亮归到 /learn */
+  const isActive = (href: string) => {
+    if (href === "/") return pathname === "/";
+    if (href === "/learn") return pathname.startsWith("/learn") || pathname.startsWith("/brain");
+    return pathname.startsWith(href);
+  };
 
   /* 「更多」是否该亮：当前路由落在抽屉内的任一入口（含管理员后台） */
   const moreActive =
