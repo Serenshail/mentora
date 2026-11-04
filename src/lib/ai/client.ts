@@ -13,7 +13,8 @@ export type ChatTask =
   | "reading-plan" | "reading-chat" | "council"
   | "autolink" | "persona-distill" | "coach-qa"
   | "verify-score" | "app-assistant" | "insight" | "note-assist" | "wiki-compile" | "resource-fix" | "direction-guide" | "life-post" | "graduation"
-  /* RAG 增强（2026-10-26）：查询改写 / 结果精排 */ | "query-rewrite" | "rag-rerank";
+  /* RAG 增强（2026-10-26）：查询改写 / 结果精排 */ | "query-rewrite" | "rag-rerank"
+  /* 首页学习智能体（M2） */ | "agent";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：

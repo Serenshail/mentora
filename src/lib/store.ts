@@ -72,6 +72,8 @@ function stageOf(scheduled: number): number {
 }
 
 interface AppState {
+  /** 首页智能体对话（本地记忆，不参与云同步；跨设备不迁移，M2 范围） */
+  agentChat: ChatMsg[];
   goals: Goal[];
   knowledge: KnowledgeItem[];
   books: Book[];
@@ -142,6 +144,8 @@ interface AppState {
   updateSession: (id: string, patch: Partial<CouncilSession>) => void;
   removeSession: (id: string) => void;
   addSessionMsg: (id: string, msg: ChatMsg) => void;
+  appendAgentMsg: (msg: ChatMsg) => void;
+  clearAgentChat: () => void;
 
   addCustomPersona: (p: CustomPersona) => void;
   removeCustomPersona: (id: string) => void;
@@ -300,6 +304,7 @@ import { masteryFromReview } from "./mastery";
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
+      agentChat: [],
       goals: [],
       knowledge: [],
       books: [],
@@ -895,6 +900,8 @@ export const useAppStore = create<AppState>()(
             x.id === id ? { ...x, messages: [...x.messages, msg] } : x
           ),
         })),
+      appendAgentMsg: (msg) => set((s) => ({ agentChat: [...s.agentChat, msg] })),
+      clearAgentChat: () => set({ agentChat: [] }),
 
       addCustomPersona: (p) =>
         set((s) => ({ customPersonas: [p, ...s.customPersonas] })),
@@ -988,6 +995,7 @@ export const useAppStore = create<AppState>()(
       },
       resetAll: () =>
         set({
+          agentChat: [],
           goals: [],
           knowledge: [],
           books: [],
@@ -1000,13 +1008,14 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "mentora-store-anon",
-      version: 5,
+      version: 6,
       // 跳过 persist 的自动 rehydrate：水合完全由 setStoreUser() 同步掌控。
       // 否则刷新页面时 persist 会用 anon 仓异步覆盖内存,而此刻 setOptions 已换到用户仓——
       // 空状态随后被写进用户仓,goal 凭空消失(实测:导航后 3s goals 1→0,堆栈指向 persist setState)。
       skipHydration: true,
       storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({
+        agentChat: state.agentChat,
         goals: state.goals,
         knowledge: state.knowledge,
         books: state.books,
@@ -1056,6 +1065,10 @@ export const useAppStore = create<AppState>()(
           });
           return { ...state, goals } as AppState;
         }
+        // v6:首页智能体对话（新增字段，旧仓补空数组）
+        if (version < 6) {
+          return { ...state, agentChat: state.agentChat ?? [] } as AppState;
+        }
         return state as AppState;
       },
     }
@@ -1088,6 +1101,7 @@ export function setStoreUser(userId: string | null) {
   // rehydrate 是异步的，期间任何 clearLocalStore/写入都会把空状态写进刚切换的仓，
   // 曾导致用户本地快照被清空（数据"消失"事故）。localStorage 读取是同步的，无竞态。
   const defaults = {
+    agentChat: [] as ChatMsg[],
     goals: [] as Goal[],
     knowledge: [] as KnowledgeItem[],
     books: [] as Book[],

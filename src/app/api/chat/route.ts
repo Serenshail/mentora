@@ -71,6 +71,8 @@ ${s("ragCtx")}
     case "insight": return P.INSIGHT_EXTRACT(s("text"));
     case "autolink": return P.AUTOLINK({ note: s("note"), candidates: s("candidates") });
     case "coach-qa": return P.ASK_COACH(s("ctx"), s("ragCtx"));
+    /* 首页学习智能体（M2）：单点问答零引导，回答契约同 v21.4 */
+    case "agent": return P.AGENT_CHAT(s("ctx"), s("ragCtx"));
     case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
     /* RAG 增强（2026-10-26）：查询改写与精排都只输出 JSON，检索质量由代码裁决 */
@@ -144,6 +146,10 @@ function demoTask(
       })();
     case "coach-qa":
       return demoCouncil(messages);
+    case "agent":
+      return (async function* () {
+        yield* (await import("@/lib/ai/demo")).demoAgent(messages);
+      })();
     case "council": {
       /* 圆桌 Demo 与真实模型同语义（R1）：take 按席位差异化发言、host 真综合，
        * 不再静默落进 demoCouncil 的单人回答 */

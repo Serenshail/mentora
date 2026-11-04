@@ -695,3 +695,18 @@ export async function* demoRagRerank(candidates: string) {
   }));
   yield* chunked("```json\n" + JSON.stringify({ picked }) + "\n```");
 }
+
+
+/* ---------- 首页学习智能体（演示）：四段契约的最小样例 ---------- */
+export async function* demoAgent(messages: Msg[]) {
+  const q = [...messages].reverse().find((m) => m.role === "user")?.content ?? "这个问题";
+  yield* chunked(
+    `**先说结论：这是演示模式给的结构样例。**接上真模型后，我会按四段回答「${q.slice(0, 18)}」——但没有 API Key 时我只能展示格式。
+
+机制上：回答先给判断，再讲因果关系，然后一个最小例子，最后说清边界。
+
+例子：你问一个概念，我会先一句话给出它是什么，再说明它为什么这样工作，然后给一个能随手验证的小例子，最后指出最容易误解的地方。
+
+边界：演示内容不能替代真实讲解；在 设置 → 模型 填入 Key 后即可获得真实回答。`
+  );
+}

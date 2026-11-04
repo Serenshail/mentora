@@ -8,6 +8,7 @@ import { useHydrated } from "@/lib/use-chat";
 import { useAuth } from "@/lib/auth-client";
 import Landing from "@/components/landing";
 import { StudyHeatmap } from "@/components/learn/study-heatmap";
+import { AgentHome } from "@/components/agent-home";
 import { periodOf, PERIOD_GREETING } from "@/lib/period";
 import { cn, streakFrom } from "@/lib/utils";
 import {
@@ -57,6 +58,11 @@ function Dashboard() {
         title={userName ? `${userName}，继续。` : "继续。"}
         desc={`${PERIOD_GREETING[periodOf()]} 今天学什么、复习什么，都在这一页。`}
       />
+
+      {/* 智能入口：单点问题直接答，不用先建目标（PRD-AGENT M2） */}
+      <div className="mb-4">
+        <AgentHome />
+      </div>
 
       {isEmpty ? (
         <Card className="border-accent/25 bg-accent/[0.035]">
