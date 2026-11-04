@@ -1146,7 +1146,18 @@ export function setStoreUser(userId: string | null) {
           return { ...g, plan };
         });
       }
-      loaded = { ...st, knowledge: backfillReviewDates(knowledge as KnowledgeItem[], todayISO()), goals };
+      /* 脏数据自愈：早期引导路径可能把 topic 写成空串 → 列表卡片标题空白。
+       * 用 direction 兜底，再兜「未命名目标」。只补空值，不动正常数据。 */
+      const fixedGoals = (goals as Goal[]).map((g) =>
+        g.topic?.trim()
+          ? g
+          : { ...g, topic: g.direction?.trim()?.slice(0, 24) || "未命名目标" }
+      );
+      loaded = {
+        ...st,
+        knowledge: backfillReviewDates(knowledge as KnowledgeItem[], todayISO()),
+        goals: fixedGoals,
+      };
     }
   } catch {
     /* 损坏的仓按空仓处理，绝不写入破坏 */

@@ -10,6 +10,7 @@ import type { ChatMsg } from "@/lib/types";
 export function useChat(initial: ChatMsg[] = []) {
   const [messages, setMessages] = useState<ChatMsg[]>(initial);
   const [pending, setPending] = useState(""); // 正在生成的 assistant 消息
+  const [thinking, setThinking] = useState(""); // 推理模型思考期的骨架摘要（不进正文）
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -42,6 +43,7 @@ export function useChat(initial: ChatMsg[] = []) {
       setStreaming(true);
       setError(null);
       setPending("");
+      setThinking("");
       abortRef.current = new AbortController();
       try {
         const wire: WireMsg[] = next.map((m) => ({ role: m.role, content: m.content }));
@@ -53,6 +55,7 @@ export function useChat(initial: ChatMsg[] = []) {
           signal: abortRef.current.signal,
           task: opts.task,
           onDelta: (d) => setPending((p) => p + d),
+          onThink: (t) => setThinking((prev) => (prev + t).slice(-80)),
         });
         if (full) {
           const assistant: ChatMsg = {
@@ -64,6 +67,7 @@ export function useChat(initial: ChatMsg[] = []) {
           setMessages([...next, assistant]);
         }
         setPending("");
+        setThinking("");
         opts.onDone?.(full);
         return full;
       } catch (e) {
@@ -97,7 +101,7 @@ export function useChat(initial: ChatMsg[] = []) {
   // 否则旧组件的请求继续跑到上游，token 白烧，且新组件会再发一次 → 同一轮重复计费。
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  return { messages, setMessages, pending, streaming, error, setError, send, stop };
+  return { messages, setMessages, pending, thinking, streaming, error, setError, send, stop };
 }
 
 /** 等 store 数据就绪再渲染（防 SSR 水合不一致）。

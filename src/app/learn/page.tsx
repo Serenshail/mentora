@@ -9,6 +9,7 @@ import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS, type DomainKind } from "@/lib/types";
 import { Brain, Compass, GraduationCap, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 
 function goalProgress(goals: ReturnType<typeof useAppStore.getState>["goals"][number]) {
   if (!goals.plan) return { done: 0, total: 0, ratio: 0 };
@@ -115,7 +116,9 @@ export default function LearnPage() {
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-base font-bold text-ink">{g.topic}</h3>
+                        <h3 className="text-base font-bold text-ink">
+                          {g.topic?.trim() || g.direction?.trim()?.slice(0, 20) || "未命名目标"}
+                        </h3>
                         <Badge tone={DOMAIN_TONE[g.domainKind]}>{DOMAIN_LABELS[g.domainKind]}</Badge>
                         {g.status === "draft" && <Badge tone="warn">引导中 · 点击继续</Badge>}
                         {g.status === "done" && <Badge tone="ok">已完成</Badge>}
@@ -219,6 +222,8 @@ function DirectionGuideCard() {
   const [turns, setTurns] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState("");
+  const [phases, setPhases] = useState<TracePhase[]>([]);
   const boxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -232,19 +237,29 @@ function DirectionGuideCard() {
     const next = [...turns, { role: "user" as const, content: text }];
     setTurns(next);
     setBusy(true);
+    setPending("");
+    const t0 = Date.now();
+    setPhases([{ label: "理解你的处境", state: "running" }]);
     try {
       const { streamChat } = await import("@/lib/ai/client");
+      setPhases([{ label: "理解你的处境", state: "done", durationMs: Date.now() - t0 }, { label: "想下一步问什么", state: "running" }]);
+      const t1 = Date.now();
       const full = await streamChat({
         task: "direction-guide",
         args: { ctx: "" },
         messages: next.map((t) => ({ role: t.role, content: t.content })),
         temperature: 0.6,
-        onDelta: () => {},
+        /* 真正把增量显示出来（旧实现 onDelta 是空函数，用户只看到"想一下…"） */
+        onDelta: (d) => setPending((p) => p + d),
+        onThink: (t) => setPending((p) => p + t),
       });
-      setTurns([...next, { role: "assistant", content: full || "（没收到回复，再试一次）" }]);
+      setPhases((prev) => prev.map((p) => (p.state === "running" ? { ...p, state: "done", durationMs: Date.now() - t1 } : p)));
+      setTurns([...next, { role: "assistant", content: full || pending || "（没收到回复，再试一次）" }]);
     } catch {
+      setPhases((prev) => prev.map((p) => (p.state === "running" ? { ...p, state: "failed" } : p)));
       setTurns([...next, { role: "assistant", content: "网络出问题了，稍后再聊。" }]);
     } finally {
+      setPending("");
       setBusy(false);
     }
   };
@@ -292,11 +307,14 @@ function DirectionGuideCard() {
             </div>
           </div>
         ))}
-        {busy && (
-          <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-surface-2 px-3 py-2 text-[12.5px] text-ink-dim">
-            想一下…
+        {busy && pending && (
+          <div aria-live="polite" className="max-w-[92%] whitespace-pre-wrap rounded-2xl rounded-bl-md bg-surface-2 px-3 py-2 text-[12.5px] leading-relaxed text-ink">
+            {pending}
+            <span className="stream-cursor" />
           </div>
         )}
+        {busy && !pending && <AgentTrace phases={phases} className="max-w-[92%]" />}
+        {!busy && phases.length > 0 && <AgentTrace phases={phases} className="max-w-[92%]" />}
         {turns.length === 0 && !busy && (
           <p className="rounded-xl bg-surface-2 p-3 text-[12.5px] leading-relaxed text-ink-dim">
             先从一个小事实开始：抛开「应该学什么」，最近哪件事让你做起来忘记时间？或者哪个问题让你反复烦躁、想解决它？

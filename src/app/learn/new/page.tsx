@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Badge, Button, Card, Input, Textarea } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
+import { AgentTrace } from "@/components/agent-trace";
 import { useChat, useHydrated } from "@/lib/use-chat";
 import { extractJson, splitGoalReply, type GoalCard } from "@/lib/ai/client";
 import { useAppStore } from "@/lib/store";
@@ -29,7 +30,7 @@ function IntakeInner() {
   const resumeId = params.get("goal");
   const userName = useAppStore((s) => s.settings.userName);
 
-  const { messages, setMessages, pending, streaming, error, send } = useChat();
+  const { messages, setMessages, pending, thinking, streaming, error, send } = useChat();
   const [input, setInput] = useState("");
   const [card, setCard] = useState<GoalCard | null>(null);
   const [stage, setStage] = useState<"chat" | "confirm" | "planning">("chat");
@@ -46,7 +47,11 @@ function IntakeInner() {
         toast.error("这次没拿到完整目标卡——再点一次「不想再答了」让教练重新总结。");
       return;
     }
-    setCard({ ...parsed, deadline: parsed.deadline || undefined });
+    setCard({
+      ...parsed,
+      topic: parsed.topic?.trim() || topic?.trim() || "未命名目标",
+      deadline: parsed.deadline || undefined,
+    });
     setStage("confirm");
   };
 
@@ -206,7 +211,8 @@ function IntakeInner() {
     const beforeMessages = messages;
 
     useAppStore.getState().updateGoal(goalId, {
-      topic: finalCard.topic,
+      /* 防脏数据：模型可能返回空 topic，直接用会把列表卡片标题写空 */
+      topic: finalCard.topic?.trim() || topic?.trim() || "未命名目标",
       direction: finalCard.direction,
       domainKind: finalCard.domainKind,
       motivation: finalCard.motivation,
@@ -330,6 +336,16 @@ function IntakeInner() {
             <Markdown text={proseOnly(pending)} />
             <span className="stream-cursor" />
           </Card>
+        )}
+        {/* 首字之前的空白期：显示思考骨架，避免"点了没反应" */}
+        {streaming && !pending && stage !== "planning" && (
+          <div className="max-w-[92%]">
+            <AgentTrace
+              phases={[
+                { label: thinking ? "思考中" : "理解你的回答", state: "running", detail: thinking || undefined },
+              ]}
+            />
+          </div>
         )}
         {error && (
           <p className="text-sm text-bad">{error} —— 可在设置页检查 Key / 网络。</p>
