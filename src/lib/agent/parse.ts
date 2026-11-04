@@ -38,6 +38,8 @@ export function parseDirectives(text: string): {
 export function stripDirectives(text: string): string {
   const RULE_WORDS = "(?:不要说|不要寒暄|不要反问|不要附加|不要建议|不要输出|不要工具块|不要写|禁止|只输出|只给|长度短|中文口语|不写小标题|禁寒暄)";
   return text
+    /* 统一换行，避免上游 CRLF 残留进渲染 */
+    .replace(/\r\n?/g, "\n")
     /* 完整围栏 */
     .replace(/```(?:tool|plan)[\s\S]*?```/g, "")
     /* 流式未闭合的围栏尾巴 */
@@ -50,6 +52,8 @@ export function stripDirectives(text: string): string {
     )
     /* 末尾混入英文内部独白 → 截断到最后一个中文句末 */
     .replace(/([。！？])[^。！？]*[A-Za-z]{2,}[^。！？]*$/g, "$1")
+    /* 空围栏（``` 紧跟 ```，中间只有空白）渲染出来是一块黑条：清掉 */
+    .replace(/```[^\n]*\n?\s*```/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

@@ -58,6 +58,17 @@ describe("parseDirectives（工具/计划指令解析）", () => {
     expect(stripDirectives("```tool\n{broken\n```\n正常回答")).toBe("正常回答");
   });
 
+  it("空围栏被清掉（流式黑条根因）", () => {
+    expect(stripDirectives("第一段\n```\n```\n第二段")).toBe("第一段\n\n第二段");
+    expect(stripDirectives("正文\n```js\n\n```\n结尾")).toBe("正文\n\n结尾");
+    expect(stripDirectives("正文\r\n```json\r\n\r\n```\r\n结尾")).toBe("正文\n\n结尾");
+  });
+
+  it("有内容的代码块必须保留", () => {
+    const code = "解释：\n```js\nconst a = 1;\n```";
+    expect(stripDirectives(code)).toBe(code);
+  });
+
   it("普通回答不产生指令", () => {
     const d = parseDirectives("闭包就是函数加词法作用域。");
     expect(d.tool).toBeUndefined();

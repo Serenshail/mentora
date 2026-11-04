@@ -291,9 +291,9 @@ export function AgentHome() {
           {pending && (
             <div
               aria-live="polite"
-              className="max-w-[92%] rounded-2xl rounded-bl-md border border-border bg-white px-3.5 py-2.5"
+              className="max-w-[92%] whitespace-pre-wrap rounded-2xl rounded-bl-md border border-border bg-white px-3.5 py-2.5 text-[12.5px] leading-relaxed text-ink"
             >
-              <Markdown text={pending} className="text-[12.5px]" />
+              {pending}
               <span className="stream-cursor" />
             </div>
           )}
