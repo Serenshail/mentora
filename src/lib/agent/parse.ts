@@ -3,17 +3,26 @@ import { TOOLS, type ToolName } from "./protocol";
 
 export function parseDirectives(text: string): {
   tool?: { name: ToolName; args: Record<string, unknown> };
+  /** 多工具并行（Codex 式）：一次输出多个 tool 块时全部解析 */
+  tools?: { name: ToolName; args: Record<string, unknown> }[];
   plan?: string[];
 } {
   let tool: { name: ToolName; args: Record<string, unknown> } | undefined;
+  let tools: { name: ToolName; args: Record<string, unknown> }[] | undefined;
   let plan: string[] | undefined;
 
-  const toolMatch = text.match(/```tool\s*([\s\S]*?)```/);
-  if (toolMatch) {
+  /* 全部 tool 块（支持多个=并行调用；取第一个作兼容字段） */
+  const toolMatches = [...text.matchAll(/```tool\s*([\s\S]*?)```/g)];
+  for (const m of toolMatches) {
     try {
-      const j = JSON.parse(toolMatch[1].trim()) as { name?: string; args?: Record<string, unknown> };
-      if (j?.name && j.name in TOOLS) tool = { name: j.name as ToolName, args: j.args ?? {} };
-    } catch { /* 坏 JSON → 视为无工具调用 */ }
+      const j = JSON.parse(m[1].trim()) as { name?: string; args?: Record<string, unknown> };
+      if (j?.name && j.name in TOOLS) {
+        const call = { name: j.name as ToolName, args: j.args ?? {} };
+        if (!tools) tools = [];
+        tools.push(call);
+        if (!tool) tool = call;
+      }
+    } catch { /* 坏 JSON → 跳过这一个 */ }
   }
 
   const planMatch = text.match(/```plan\s*([\s\S]*?)```/);

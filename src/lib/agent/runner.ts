@@ -17,7 +17,6 @@ import { buildContext, wikiRetrieve } from "@/lib/rag";
 import { todayISO, uid } from "@/lib/utils";
 import {
   MAX_TOOL_ROUNDS,
-  TOOLS,
   advancePlan,
   type PlanStep,
   type ToolCall,
@@ -101,10 +100,33 @@ async function runTool(
   }
 
   if (name === "make_quiz") {
-    // 出题由模型自己在回答里完成；这个工具只标记「本轮要出题」
+    /* 真出题：从刚讲过的内容里取素材生成小题（选择/简答），
+     * 由调用方注入上文；这里组装题目文本返回给模型嵌入回答。
+     * 与 Codex 的差异：我们没有判分模型循环——判分走既有 quiz-grade，
+     * 由用户答完后自己再问一次（保持简单，不引入第二个状态机）。 */
     const topic = String(args.topic ?? "").trim() || "刚才讲的内容";
+    const count = Math.max(2, Math.min(Number(args.count ?? 3) || 3, 5));
+    /* 从检索到的笔记或当前学习日取真实素材；没有素材就按话题出通用题 */
+    const day = store.goals.find((g) => g.status === "active")?.plan
+      ? Object.values(store.goals.find((g) => g.status === "active")!.plan!.days).find((d) => d.status === "active")
+      : null;
+    const material = day?.knowledgePoints?.map((k) => k.text).slice(0, count) ?? [];
+    const quiz = [];
+    for (let i = 0; i < count; i++) {
+      const m = material[i];
+      quiz.push(
+        m
+          ? `${i + 1}. 关于「${m}」：用自己的话解释它是什么、为什么需要它，并举一个最小例子。`
+          : `${i + 1}. 关于「${topic}」：说出一个最容易被误解的点，并解释为什么误解是错的。`
+      );
+    }
+    const joined = quiz.join("\n");
     return {
-      result: { ok: true, content: `已记录：针对「${topic}」出题。`, summary: `出题：${topic}` },
+      result: {
+        ok: true,
+        content: `已为你生成了 ${count} 道自测题（基于${material.length > 0 ? "今日学习要点" : "刚讲的内容"}）：\n${joined}\n\n请把这 ${count} 道题原样放在回答末尾（不要附答案），并提示用户先自己想再看下一轮。`,
+        summary: `${count} 道题`,
+      },
     };
   }
 
@@ -144,7 +166,7 @@ export async function runAgent(opts: {
   cb: RunCallbacks;
 }): Promise<string> {
   const { question, imageUrl, history, deep, signal, cb } = opts;
-  let context: string = opts.context;
+  const context: string = opts.context;
 
   let plan: PlanStep[] = [];
   const toolsUsed: ToolCall[] = [];
@@ -208,7 +230,7 @@ export async function runAgent(opts: {
       return full || lastAnswer;
     }
 
-    const { tool, plan: planDraft } = parseDirectives(full);
+    const { tool, tools: toolBatch, plan: planDraft } = parseDirectives(full);
 
     /* 计划：首次出现时建立，之后只推进状态 */
     if (planDraft && plan.length === 0) {
@@ -221,7 +243,7 @@ export async function runAgent(opts: {
     }
 
     /* 没有工具调用 → 这就是最终回答；但正文为空时（模型只在思维链里想）要补一次 */
-    if (!tool) {
+    if (!tool && (!toolBatch || toolBatch.length === 0)) {
       const cleaned = stripDirectives(full);
       if (cleaned) {
         cb.onPhase("answering");
@@ -255,9 +277,9 @@ export async function runAgent(opts: {
       return txt || "（这次没能生成答案，请再问一次。）";
     }
 
-    /* 同一工具重复调用 = 模型在打转：切到「禁用工具」的收尾模式再问一次，
-     * 而不是直接把"我卡住了"甩给用户（用户体验优先）。 */
-    if (called.has(tool.name)) {
+    /* 批量去重：本批里只保留没调用过的（Codex 允许并行，但同一工具重复=打转） */
+    const batch = (toolBatch ?? (tool ? [tool] : [])).filter((t) => !called.has(t.name));
+    if (batch.length === 0) {
       cb.onPhase("answering");
       const stock = stripDirectives(full);
       const forced = await streamChat({
@@ -289,58 +311,83 @@ export async function runAgent(opts: {
       cb.onPhase("done");
       return finalText || "（这次没能给出答案，换个问法再试一次？）";
     }
-    called.add(tool.name);
+    for (const t of batch) called.add(t.name);
 
-    /* 有工具调用：推进计划、执行、回注 */
-    const call: ToolCall = {
-      id: uid("tc"),
-      name: tool.name,
-      args: tool.args,
-      status: "in_progress",
-      startedAt: Date.now(),
-    };
-    toolsUsed.push(call);
-    cb.onTool({ ...call });
-    cb.onReasoning(`调用 ${TOOLS[tool.name]?.label ?? tool.name}`);
+    /* 并行执行本批工具（Codex 式）：同时跑，逐一上报，结果一起回注 */
+    const batchResults = await Promise.all(
+      batch.map(async (t) => {
+        const call: ToolCall = {
+          id: uid("tc"),
+          name: t.name,
+          args: t.args,
+          status: "in_progress",
+          startedAt: Date.now(),
+        };
+        toolsUsed.push(call);
+        cb.onTool({ ...call });
+        let result: ToolResult;
+        let pendingOut: PendingWrite | undefined;
+        try {
+          const out = await runTool(t.name, t.args);
+          result = out.result;
+          pendingOut = out.pending;
+        } catch (e) {
+          result = {
+            ok: false,
+            content: `工具执行失败：${e instanceof Error ? e.message : "未知错误"}`,
+            summary: "执行失败",
+          };
+        }
+        const finished: ToolCall = {
+          ...call,
+          status: result.ok ? "completed" : "failed",
+          summary: result.summary,
+          endedAt: Date.now(),
+        };
+        const idx = toolsUsed.findIndex((x) => x.id === call.id);
+        if (idx >= 0) toolsUsed[idx] = finished;
+        cb.onTool(finished);
+        toolLog.push(`### 工具 ${t.name} 的真实返回
+${result.content}`);
+        return { result, pendingOut };
+      })
+    );
 
+    /* 任一工具产出写入草稿 → 交给用户确认（多工具时取第一个） */
+    const firstPending = batchResults.find((r) => r.pendingOut)?.pendingOut;
+    if (firstPending) {
+      cb.onPendingWrite(firstPending);
+      cb.onPhase("answering");
+      /* 流必须读完再返回：提前 return 会让 streamChat 的 reader 半途而废，
+       * 上游 controller 关闭时抛 "Controller is already closed"（真实事故日志）。
+       * full 已经是 streamChat 读完全流后的返回值，这里直接用即可。 */
+      return stripDirectives(full) || `我已整理好《${firstPending.title}》的草稿，确认后保存。`;
+    }
+
+    // 推进计划：本批工具全部完成后，当前步标 completed、下一步 in_progress
     if (plan.length > 0) {
-      // 把第一个未完成的步骤标为进行中
-      const next = plan.find((s) => s.status === "in_progress" || s.status === "pending");
-      if (next && next.status === "pending") plan = advancePlan(plan, next.id, "in_progress");
+      let cur = plan.find((x) => x.status === "in_progress");
+      while (cur) {
+        plan = advancePlan(plan, cur.id, "completed");
+        const nxt = plan.find((x) => x.status === "pending");
+        if (nxt) {
+          plan = advancePlan(plan, nxt.id, "in_progress");
+          break;
+        }
+        cur = undefined as unknown as PlanStep | undefined;
+      }
       cb.onPlan(plan);
     }
 
-    let result: ToolResult;
-    let pending: PendingWrite | undefined;
-    try {
-      const out = await runTool(tool.name, tool.args);
-      result = out.result;
-      pending = out.pending;
-    } catch (e) {
-      result = {
-        ok: false,
-        content: `工具执行失败：${e instanceof Error ? e.message : "未知错误"}`,
-        summary: "执行失败",
-      };
-    }
-    const finished: ToolCall = {
-      ...call,
-      status: result.ok ? "completed" : "failed",
-      summary: result.summary,
-      endedAt: Date.now(),
-    };
-    toolsUsed[toolsUsed.length - 1] = finished;
-    cb.onTool(finished);
-    /* 关键：把结果记进 toolLog，下一轮作为 system 上下文的一部分 */
-    toolLog.push(`### 工具 ${tool.name} 的真实返回
-${result.content}`);
-
-    if (pending) {
-      cb.onPendingWrite(pending);
-      cb.onPhase("answering");
-      // 写入类工具：不继续循环，把草稿交给用户确认
-      return stripDirectives(full) || `我已整理好《${pending.title}》的草稿，确认后保存。`;
-    }
+    // 回注（下一轮 ctx 已含全部工具结果），进入下一轮
+    lastAnswer = stripDirectives(full);
+    convo.push({ role: "assistant", content: full });
+    convo.push({
+      role: "user",
+      content:
+        "以上工具结果都在你的上下文里了。现在**直接**回答用户的问题。" +
+        "必须在本次回复给出最终答案，不要再输出任何 tool 代码块，也不要复述你要做什么。",
+    });
 
     // 计划步骤推进
     if (plan.length > 0) {
@@ -352,10 +399,6 @@ ${result.content}`);
         cb.onPlan(plan);
       }
     }
-
-    // 回注工具结果，进入下一轮
-    lastAnswer = stripDirectives(full);
-    context = `工具 ${tool.name} 返回：\n${result.content}\n\n请基于这个结果继续回答用户的问题。如果不需要再调用工具，直接给出最终回答（不要再输出 tool 块）。`;
 
     if (round === MAX_TOOL_ROUNDS) {
       cb.onPhase("failed");
