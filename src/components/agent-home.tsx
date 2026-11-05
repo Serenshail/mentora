@@ -109,16 +109,21 @@ export function AgentHome() {
   const [runPhase, setRunPhase] = useState<"thinking" | "acting" | "answering" | "done" | "failed" | "cancelled">("thinking");
   const abortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   /* 审批门：requestApproval 挂起 runAgent，直到用户对每张卡做出决定 */
   const approvalResolveRef = useRef<((d: ApprovalDecision[]) => void) | null>(null);
   const decisionsRef = useRef<Map<string, boolean>>(new Map());
   const abortHandlerRef = useRef<(() => void) | null>(null);
 
-  /* 粘贴截图：全局监听 paste，有图片就收进附件（不打断输入框正常粘贴文字） */
+  /* 粘贴截图：全局监听 paste，有图片就收进附件。不劫持其它可编辑区
+   * （焦点在助手输入框/笔记编辑器时照常粘贴，内容不静默丢失）；自家输入框内仍收图。 */
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent) => {
       const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
       if (!item) return;
+      const t = e.target as HTMLElement | null;
+      const inOwnInput = !!t && !!inputRef.current?.contains(t);
+      if (t && !inOwnInput && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       const file = item.getAsFile();
       if (!file) return;
       e.preventDefault();
@@ -273,8 +278,12 @@ export function AgentHome() {
       }
       setPending("");
     } catch (e) {
-      setPhases((prev) => prev.map((p) => (p.state === "running" ? { ...p, state: "failed" } : p)));
-      if (!(e instanceof DOMException && e.name === "AbortError")) {
+      // 用户主动「停止」= cancelled，不是失败：轨迹标中性，不伪装成红色失败
+      const aborted = e instanceof DOMException && e.name === "AbortError";
+      setPhases((prev) =>
+        prev.map((p) => (p.state === "running" ? { ...p, state: aborted ? "cancelled" : "failed" } : p))
+      );
+      if (!aborted) {
         toast.error(e instanceof Error ? e.message : "回答失败，请重试");
       }
       setPending("");
@@ -426,13 +435,13 @@ export function AgentHome() {
   );
 
   return (
-    <div className="flex h-[calc(100dvh-150px)] min-h-[520px] flex-col lg:flex-row lg:gap-5">
+    <div className="flex h-[calc(100dvh-150px)] min-h-[520px] flex-col max-md:h-[calc(100dvh-var(--mobile-content-bottom)-28px)] max-md:min-h-[480px] lg:flex-row lg:gap-5">
       {/* ===== Chat 主区（Trae SOLO 式左栏） ===== */}
       <section className="flex min-w-0 flex-1 flex-col">
       {/* 头部：标识 + 工作台(移动) + 新对话 + 清空 */}
       <div className="flex items-center justify-between px-1 pb-2">
         <div className="flex items-center gap-2">
-          <span className="grid size-6 place-items-center rounded-lg bg-[#1d1d1f] text-white">
+          <span className="grid size-6 place-items-center rounded-lg bg-ink text-white">
             <Sparkles className="size-3.5" />
           </span>
           <p className="text-[13px] font-semibold text-ink">Mentora</p>
@@ -522,10 +531,15 @@ export function AgentHome() {
 
       {shown.length > 0 && (
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 pb-3">
+          {(activeSession?.messages.length ?? 0) > shown.length && (
+            <p className="text-center text-[11px] text-ink-dim/60">
+              早期消息已折叠，仅显示最近 10 条（完整记录仍保存在会话里）
+            </p>
+          )}
           {shown.map((m) => (
             <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
               {m.role === "user" ? (
-                <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-3.5 py-2 text-[12.5px] text-white">
+                <div className="max-w-[85%] rounded-2xl rounded-br-md bg-ink px-3.5 py-2 text-[12.5px] text-white">
                   {m.content}
                 </div>
               ) : (
@@ -563,7 +577,7 @@ export function AgentHome() {
                 <div className="mt-2.5 flex gap-2">
                   <button
                     onClick={() => decide(a.id, true)}
-                    className="cursor-pointer rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-[11.5px] font-medium text-white transition hover:bg-black/80"
+                    className="cursor-pointer rounded-lg bg-ink px-3 py-1.5 text-[11.5px] font-medium text-white transition hover:bg-black/80"
                   >
                     批准执行
                   </button>
@@ -645,6 +659,7 @@ export function AgentHome() {
           <ImagePlus className="size-4" />
         </button>
         <input
+          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void send()}
@@ -656,7 +671,7 @@ export function AgentHome() {
           onClick={() => void send()}
           disabled={busy || !input.trim()}
           aria-label="发送"
-          className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-xl bg-[#1d1d1f] text-white transition hover:bg-black/80 disabled:opacity-40"
+          className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-xl bg-ink text-white transition hover:bg-black/80 disabled:opacity-40"
         >
           <ArrowUp className="size-4" />
         </button>
