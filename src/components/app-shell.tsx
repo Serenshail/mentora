@@ -52,6 +52,33 @@ const MOBILE_MORE = NAV.slice(5);
 
 /* 管理员邮箱（与 /admin 服务端鉴权同一份白名单）；非管理员不显示入口 */
 
+/* 新版本提醒（自托管关键 UX）：长驻标签页会一直跑部署时的旧 bundle（移动端
+ * 冻结标签页尤其明显——用户看到的永远是旧功能/旧 bug）。/api/health 返回构建
+ * sha，轮询发现变化就提示一键刷新。Vercel 上同样受益。 */
+function useNewBuildNotifier() {
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    let known: string | null = null;
+    let dead = false;
+    const check = async () => {
+      try {
+        const res = await fetch("/api/health", { cache: "no-store" });
+        const j = (await res.json()) as { build?: string };
+        if (!j.build || dead) return;
+        if (known === null) {
+          known = j.build; // 首次记录当前版本，不提示
+        } else if (j.build !== known) {
+          setStale(true);
+        }
+      } catch { /* 离线/失败静默 */ }
+    };
+    void check();
+    const t = setInterval(check, 5 * 60_000);
+    return () => { dead = true; clearInterval(t); };
+  }, []);
+  return stale;
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const provider = useAppStore((s) => s.settings.provider);
@@ -59,6 +86,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, logout, checking } = useAuth();
   const syncStatus = useSyncStatus((s) => s.status);
+  const buildStale = useNewBuildNotifier();
   useAutoPush(!!user);
   useFlushOnHide(!!user); // 关页/切后台前强制 flush,防数据没推上去就丢
 
@@ -222,6 +250,17 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen w-full">
+      {/* 新版本已发布：长驻标签页还在跑旧 bundle 时提示一键刷新（自托管部署的关键提醒） */}
+      {buildStale && (
+        <div className="fixed inset-x-0 top-0 z-[60] flex justify-center px-3 pt-2">
+          <button
+            onClick={() => window.location.reload()}
+            className="cursor-pointer rounded-full bg-[#1d1d1f] px-4 py-1.5 text-[12px] font-medium text-white shadow-lg transition hover:bg-black/80"
+          >
+            已发布新版本，点此刷新更新
+          </button>
+        </div>
+      )}
       {/* 侧边栏：Apple 玻璃配方（saturate 180% + blur 20px）——玻璃只用于真正层叠处 */}
       <aside
         className={cn(
