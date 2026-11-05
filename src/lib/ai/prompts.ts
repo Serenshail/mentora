@@ -1035,9 +1035,7 @@ export const ASK_COACH = (ctx: string, ragCtx = "") => `你是 Mentora 的学习
 
 ## 今日学习上下文
 ${ctx}
-${opts.personal ? `
-${opts.personal}
-` : ""}${ragCtx ? `
+${ragCtx ? `
 ## 用户第二大脑里检索到的相关笔记（**证据**，不是答案）
 ${ragCtx}
 
@@ -1372,7 +1370,9 @@ export const AGENT_CHAT = (
 
 ## 用户当前状态
 ${ctx || "（暂无学习目标，可能是新用户）"}
-${ragCtx ? `
+${opts.personal ? `
+${opts.personal}
+` : ""}${ragCtx ? `
 ## 用户第二大脑里检索到的相关笔记（**证据**，不是答案）
 ${ragCtx}
 
