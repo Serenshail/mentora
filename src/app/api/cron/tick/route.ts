@@ -31,13 +31,15 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "forbidden" }, { status: 403 });
   }
   const dryRun = req.nextUrl.searchParams.get("dry") === "1";
-  if (!hasSmtp() && !dryRun) {
-    return Response.json({ ok: false, error: "未配置发信服务", sent: 0 });
-  }
+  /* 投递通道解耦：配了发信服务就发邮件；没配也照样"触发"——标记 lastRunKey，
+   * 应用内横幅（/api/reminders 的 firedToday）会在用户打开应用时露出提醒。
+   * 这样自托管在没配邮件时自动化依然可用，配上 Key 后自动升级为邮件。 */
+  const mailReady = hasSmtp();
 
   let sent = 0;
   let scanned = 0;
   let failed = 0;
+  const byChannel = { email: 0, inapp: 0 };
   const users = await dbList("users").catch(() => []);
   for (const f of users) {
     if (sent >= MAX_SEND_PER_RUN) break;
@@ -56,26 +58,31 @@ export async function GET(req: NextRequest) {
           continue;
         }
         const site = (process.env.APP_URL || "").replace(/\/$/, "");
-        await sendEmail(
-          rec.email,
-          `Mentora 提醒：${r.title}`,
-          `<div style="font-family:system-ui,sans-serif;line-height:1.7">
-             <p style="font-size:15px"><b>${r.title}</b></p>
-             <p>${r.prompt.replace(/\n/g, "<br/>")}</p>
-             ${site ? `<p style="color:#888;font-size:12px"><a href="${site}">打开 Mentora</a></p>` : ""}
-           </div>`
-        );
+        let via: "email" | "inapp" = "inapp";
+        if (mailReady) {
+          await sendEmail(
+            rec.email,
+            `Mentora 提醒：${r.title}`,
+            `<div style="font-family:system-ui,sans-serif;line-height:1.7">
+               <p style="font-size:15px"><b>${r.title}</b></p>
+               <p>${r.prompt.replace(/\n/g, "<br/>")}</p>
+               ${site ? `<p style="color:#888;font-size:12px"><a href="${site}">打开 Mentora</a></p>` : ""}
+             </div>`
+          );
+          via = "email";
+        }
         await dbPut(
           `automations/${rec.userId}/${r.id}.json`,
-          { ...r, lastRunKey: key, lastRunAt: new Date().toISOString() },
+          { ...r, lastRunKey: key, lastRunAt: new Date().toISOString(), lastDeliveredVia: via },
           { encrypted: true }
         );
         sent += 1;
-        logEvent({ route: "cron-tick", reminder: r.id, title: r.title.slice(0, 40) });
+        byChannel[via] += 1;
+        logEvent({ route: "cron-tick", reminder: r.id, title: r.title.slice(0, 40), via });
       }
     } catch {
       failed += 1; // 单用户失败不中断
     }
   }
-  return Response.json({ ok: true, sent, scanned, failed, dryRun });
+  return Response.json({ ok: true, sent, scanned, failed, dryRun, mailReady, byChannel });
 }
