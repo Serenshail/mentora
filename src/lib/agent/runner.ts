@@ -208,7 +208,7 @@ export async function runAgent(opts: {
 
     /* 没有工具调用 → 这就是最终回答；正文为空时补一次（模型只在思维链里想） */
     if (calls.length === 0) {
-      const cleaned = stripDirectives(full);
+      const cleaned = trimMetaEdges(stripDirectives(full));
       if (cleaned) {
         cb.onPhase("answering");
         lastAnswer = cleaned;
@@ -282,9 +282,9 @@ export async function runAgent(opts: {
 
     /* 本轮实质正文入列（工具轮次不等于过渡语：深讲骨架的正文常在这里产生）。
      * 短寒暄（"我查一下"）不入列；与上一段相同不重复入列；
-     * 私有独白（"先调用工具…确认卡""Fine. Now report…"）不入列——
-     * 判据：提到确认卡/调用工具的元话语，或整段没有汉字（最终回答必须是中文）。 */
-    const cleanedThisRound = stripDirectives(full);
+     * 私有独白不入列——判据：提到确认卡/调用工具的元话语，或整段没有汉字。
+     * 另外修剪段落首尾的无汉字行（见模块级 trimMetaEdges）。 */
+    const cleanedThisRound = trimMetaEdges(stripDirectives(full));
     const isPrivateMeta =
       /确认卡|调用工具|先调用|批准后|等待用户|report the|call the tool|user (will see|approved)/i.test(cleanedThisRound) ||
       !/[\u4e00-\u9fff]/.test(cleanedThisRound);
@@ -434,5 +434,16 @@ export async function runAgent(opts: {
   return answer();
 }
 
+/** 修剪段落首尾的无汉字行：模型常以英文私语起头/收尾（"Fine. Give final answer briefly."），
+ *  它们混在有中文的段落里，整段过滤会误伤内容。 */
+function trimMetaEdges(text: string): string {
+  const lines = text.split("\n");
+  const hasCjk = (l: string) => /[\u4e00-\u9fff]/.test(l);
+  let a = 0;
+  let b = lines.length;
+  while (a < b && !hasCjk(lines[a])) a++;
+  while (b > a && !hasCjk(lines[b - 1])) b--;
+  return lines.slice(a, b).join("\n").trim();
+}
 /* 保留给老引用：parse/strip 仍可从 runner 导入（向后兼容） */
 export { parseDirectives, stripDirectives } from "./parse";
