@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
-import { dbList, dbGet, dbPut } from "@/lib/server/db";
+import { dbPut } from "@/lib/server/db";
 import { sendEmail, hasSmtp } from "@/lib/server/mail";
 import { logEvent } from "@/lib/server/config";
-import { isDue, listReminders, type Reminder } from "@/lib/server/personal";
+import { isDue, listAutomationOwners, listReminders, type Reminder } from "@/lib/server/personal";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -10,19 +10,14 @@ export const maxDuration = 60;
 /* ============================================================
  * 定时提醒派发（v24.0 二期）
  *
- * 触发源：腾讯云 systemd timer 每分钟（主力）/ Vercel Cron 每日（兜底）。
- * 幂等：每条提醒写 lastRunKey（"YYYY-MM-DD HH:mm"），同一时刻只发一次；
- *       只补发"当天已到点但未发"的，跨天错过的不追（防重启后轰炸）。
- * 单次最多处理 N 条，避免一次跑太久被平台掐断。
+ * 触发源：腾讯云 systemd timer 每分钟（主力）/ Vercel Cron 每日兜底。
+ * 只扫 automations/_index.json 里的用户（全量遍历 users/ 实测 46s，会超 Vercel 60s 上限）。
+ * 幂等：lastRunKey（"YYYY-MM-DD HH:mm"）——同一时刻只触发一次；跨天错过的不追发。
+ * 投递与触发解耦：配了邮件就发信；没配也标记触发，应用内横幅（firedToday）兜底。
  * ============================================================ */
 
 const MAX_SEND_PER_RUN = 20;
-
-interface UserRecord {
-  userId: string;
-  email: string;
-  name?: string;
-}
+const BUDGET_MS = 20_000;
 
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET || "";
@@ -31,37 +26,34 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "forbidden" }, { status: 403 });
   }
   const dryRun = req.nextUrl.searchParams.get("dry") === "1";
-  /* 投递通道解耦：配了发信服务就发邮件；没配也照样"触发"——标记 lastRunKey，
-   * 应用内横幅（/api/reminders 的 firedToday）会在用户打开应用时露出提醒。
-   * 这样自托管在没配邮件时自动化依然可用，配上 Key 后自动升级为邮件。 */
   const mailReady = hasSmtp();
+  const site = (process.env.APP_URL || "").replace(/\/$/, "");
+  const deadline = Date.now() + BUDGET_MS;
 
   let sent = 0;
   let scanned = 0;
   let failed = 0;
   const byChannel = { email: 0, inapp: 0 };
-  const users = await dbList("users").catch(() => []);
-  for (const f of users) {
-    if (sent >= MAX_SEND_PER_RUN) break;
+
+  const owners = await listAutomationOwners().catch(() => []);
+  for (const owner of owners) {
+    if (sent >= MAX_SEND_PER_RUN || Date.now() > deadline) break;
     try {
-      const rec = await dbGet<UserRecord>(`users/${f.name}`, { encrypted: true });
-      if (!rec?.userId || !rec.email) continue;
-      const reminders = await listReminders(rec.userId).catch(() => [] as Reminder[]);
+      const reminders = await listReminders(owner.userId).catch(() => [] as Reminder[]);
       if (reminders.length === 0) continue;
       scanned += reminders.length;
       for (const r of reminders) {
-        if (sent >= MAX_SEND_PER_RUN) break;
+        if (sent >= MAX_SEND_PER_RUN || Date.now() > deadline) break;
         const { due, key } = isDue(r);
         if (!due) continue;
         if (dryRun) {
           sent += 1;
           continue;
         }
-        const site = (process.env.APP_URL || "").replace(/\/$/, "");
         let via: "email" | "inapp" = "inapp";
         if (mailReady) {
           await sendEmail(
-            rec.email,
+            owner.email,
             `Mentora 提醒：${r.title}`,
             `<div style="font-family:system-ui,sans-serif;line-height:1.7">
                <p style="font-size:15px"><b>${r.title}</b></p>
@@ -72,7 +64,7 @@ export async function GET(req: NextRequest) {
           via = "email";
         }
         await dbPut(
-          `automations/${rec.userId}/${r.id}.json`,
+          `automations/${owner.userId}/${r.id}.json`,
           { ...r, lastRunKey: key, lastRunAt: new Date().toISOString(), lastDeliveredVia: via },
           { encrypted: true }
         );
@@ -84,5 +76,14 @@ export async function GET(req: NextRequest) {
       failed += 1; // 单用户失败不中断
     }
   }
-  return Response.json({ ok: true, sent, scanned, failed, dryRun, mailReady, byChannel });
+  return Response.json({
+    ok: true,
+    sent,
+    scanned,
+    failed,
+    owners: owners.length,
+    mailReady,
+    byChannel,
+    dryRun,
+  });
 }

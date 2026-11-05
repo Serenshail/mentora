@@ -217,3 +217,41 @@ export async function agentPersonalContext(userId: string): Promise<string> {
     return "";
   }
 }
+
+/* ---------------- 派发索引：谁有提醒（tick 只扫这些用户，避免全量遍历） ----------------
+ * 全量遍历 users/ 在自托管上实测 46s（每人多次 KV 往返），超 Vercel 60s 上限、也让每分钟定时器排队。
+ * 维护 automations/_index.json 后 tick 只需一次读取；索引里直接带 email，省掉按哈希反查用户档案。 */
+
+const INDEX_PATH = "automations/_index.json";
+
+export interface AutomationOwner {
+  userId: string;
+  email: string;
+}
+
+async function readIndex(): Promise<AutomationOwner[]> {
+  const j = await dbGet<{ owners?: AutomationOwner[] }>(INDEX_PATH, { encrypted: true }).catch(() => null);
+  return Array.isArray(j?.owners)
+    ? j!.owners.filter((o): o is AutomationOwner => Boolean(o?.userId && o?.email))
+    : [];
+}
+
+async function writeIndex(owners: AutomationOwner[]): Promise<void> {
+  const seen = new Set<string>();
+  const uniq = owners.filter((o) => (seen.has(o.userId) ? false : (seen.add(o.userId), true)));
+  await dbPut(INDEX_PATH, { owners: uniq.slice(0, 5000) }, { encrypted: true });
+}
+
+export async function listAutomationOwners(): Promise<AutomationOwner[]> {
+  return readIndex();
+}
+
+export async function registerAutomationOwner(userId: string, email: string): Promise<void> {
+  const owners = await readIndex();
+  if (!owners.some((o) => o.userId === userId)) await writeIndex([...owners, { userId, email }]);
+}
+
+export async function unregisterAutomationOwner(userId: string): Promise<void> {
+  const owners = await readIndex();
+  if (owners.some((o) => o.userId === userId)) await writeIndex(owners.filter((o) => o.userId !== userId));
+}

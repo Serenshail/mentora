@@ -6,6 +6,8 @@ import {
   deleteReminder,
   listReminders,
   localNow,
+  registerAutomationOwner,
+  unregisterAutomationOwner,
   sanitizeReminderInput,
   saveReminder,
 } from "@/lib/server/personal";
@@ -22,7 +24,7 @@ async function guard(bucket: string) {
   const ok = await rateLimitPersistent(`${bucket}:${session.userId}`, { capacity: 30, refillPerSec: 30 / 60 });
   if (!ok) return { error: Response.json({ error: "操作太频繁，稍后再试" }, { status: 429 }) };
   void isDeployed();
-  return { userId: session.userId };
+  return { userId: session.userId, email: session.email };
 }
 
 export async function GET() {
@@ -50,6 +52,8 @@ export async function POST(req: NextRequest) {
   if ("error" in clean) return Response.json({ error: clean.error }, { status: 400 });
   try {
     const reminder = await saveReminder(g.userId, clean, typeof body.id === "string" ? body.id : undefined);
+    /* 维护派发索引：让 tick 只扫"真有提醒"的用户（全量遍历在自托管上要 46s） */
+    await registerAutomationOwner(g.userId, g.email).catch(() => {});
     return Response.json({ reminder });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : "保存失败" }, { status: 400 });
@@ -62,5 +66,7 @@ export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id") || "";
   if (!id) return Response.json({ error: "缺少 id" }, { status: 400 });
   await deleteReminder(g.userId, id);
+  const rest = await listReminders(g.userId).catch(() => []);
+  if (rest.length === 0) await unregisterAutomationOwner(g.userId).catch(() => {});
   return Response.json({ ok: true });
 }
