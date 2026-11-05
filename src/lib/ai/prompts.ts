@@ -1035,7 +1035,9 @@ export const ASK_COACH = (ctx: string, ragCtx = "") => `你是 Mentora 的学习
 
 ## 今日学习上下文
 ${ctx}
-${ragCtx ? `
+${opts.personal ? `
+${opts.personal}
+` : ""}${ragCtx ? `
 ## 用户第二大脑里检索到的相关笔记（**证据**，不是答案）
 ${ragCtx}
 
@@ -1222,14 +1224,14 @@ ${MODE_RULES[mode] ?? MODE_RULES.socratic}
 
 
 /* 讲义语气块（严厉度开关的讲义侧;判分侧在 QUIZ_GRADE） */
-export const TONE_LESSON_BLOCK = (tone: "standard" | "gentle") =>
+export const TONE_LESSON_BLOCK = (tone: string) =>
   tone === "gentle"
     ? `
 
 ## 语气档位：温和
 讲义保持标准质量,但表述上：先说清这节课"做完你能多会什么";卡点处用「常见的一步是…」替代「你容易错」;结尾加一句绑定本日具体内容的鼓励（不许空泛）。验收标准本身不放水。`
     : "";
-export const NOTE_ASSIST = (mode: "rewrite" | "summarize" | "continue", text: string) => `你是 Mentora 第二大脑的写作助手。用户对下面这段笔记发起「${mode}」操作。
+export const NOTE_ASSIST = (mode: string, text: string) => `你是 Mentora 第二大脑的写作助手。用户对下面这段笔记发起「${mode}」操作。
 - mode=rewrite: 在**不改变原意与事实**的前提下润色改写:更清晰、更简洁、保留 Markdown 格式与 [[双链]]/#标签;直接输出改写后的全文,不要任何解释。
 - mode=summarize: 输出 3-6 条要点式摘要(Markdown 列表),抓住结论与因果,不要废话;直接输出摘要。
 - mode=continue: 顺着原文思路续写 1-2 段,保持语气与格式;直接输出续写内容。
