@@ -97,6 +97,8 @@ export async function runAgent(opts: {
   const toolsUsed: ToolCall[] = [];
   const citations: Citation[] = [];
   let lastAnswer = "";
+  /* 本轮流式正文累计：中途取消时把已流出的内容保留为部分回答（否则全丢） */
+  let streamed = "";
   /* 多轮回答的正文累积：带工具调用的轮次里，模型常先写出实质正文（深讲骨架的前几步）
    * 再发起工具调用（如出题）。这些正文是最终回答的一部分，不是"过渡语"——
    * 不累积的话，流式展示后会被清掉，用户看到的消息只剩最后一轮（实测丢整个讲解）。 */
@@ -118,6 +120,38 @@ export async function runAgent(opts: {
     return { answer: parts.filter(Boolean).join("\n\n"), meta: { plan, tools: toolsUsed, citations } };
   };
 
+  /** streamChat 包装：task/温度/signal 固定，onDelta 顺带累计 streamed。
+   *  中途 abort 返回 null（调用方走 cancelled 终态，不再让 AbortError 穿透成 failed），
+   *  其余错误原样抛出。 */
+  const chat = async (o: {
+    args: Record<string, unknown>;
+    messages: WireMsg[];
+    onThink?: (t: string) => void;
+    onToolCalls?: (calls: WireToolCall[]) => void;
+    onNativeOff?: () => void;
+  }): Promise<string | null> => {
+    streamed = "";
+    try {
+      return await streamChat({
+        task: "agent",
+        args: o.args,
+        messages: o.messages,
+        temperature: deep ? 0.5 : 0.6,
+        signal,
+        onDelta: (d) => {
+          streamed += d;
+          cb.onDelta(d);
+        },
+        onThink: (t) => o.onThink?.(t),
+        onToolCalls: (calls) => o.onToolCalls?.(calls),
+        onNativeOff: () => o.onNativeOff?.(),
+      });
+    } catch (e) {
+      if (signal.aborted || (e instanceof Error && e.name === "AbortError")) return null;
+      throw e;
+    }
+  };
+
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     if (signal.aborted) {
       cb.onPhase("cancelled");
@@ -125,28 +159,21 @@ export async function runAgent(opts: {
     }
     cb.onPhase(round === 0 ? "thinking" : "acting");
 
-    let turnMessages: WireMsg[];
     if (firstRound && imageUrl) {
-      /* 首轮且带图：把最后一条用户文本换成多模态数组 */
-      turnMessages = [
-        ...convo.slice(0, -1),
-        {
-          role: "user",
-          content: [
-            { type: "text", text: question || "请讲讲这张图。" },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ],
-        },
-      ];
-    } else {
-      turnMessages = convo;
+      /* 首轮且带图：把最后一条用户文本换成多模态数组。写回 convo（而非只挂本轮局部）：
+       * 工具后续轮、空正文重试、强制收尾的模型同样看得到图，不再凭空「讲解上面的图片」 */
+      convo[convo.length - 1] = {
+        role: "user",
+        content: [
+          { type: "text", text: question || "请讲讲这张图。" },
+          { type: "image_url", image_url: { url: imageUrl } },
+        ],
+      };
     }
     firstRound = false;
 
-    let buf = "";
     const native: WireToolCall[] = [];
-    const full = await streamChat({
-      task: "agent",
+    const full = await chat({
       args: {
         ctx: [context, ...toolLog].filter(Boolean).join("\n\n"),
         deep,
@@ -154,22 +181,16 @@ export async function runAgent(opts: {
         round,
         nativeTools: !nativeOff,
       },
-      messages: turnMessages,
-      temperature: deep ? 0.5 : 0.6,
-      signal,
-      onDelta: (d) => {
-        buf += d;
-        cb.onDelta(d);
-      },
+      messages: convo,
       onThink: (t) => cb.onReasoning(t),
       onToolCalls: (calls) => native.push(...calls),
       onNativeOff: () => {
         nativeOff = true;
       },
     });
-    if (signal.aborted) {
+    if (full === null || signal.aborted) {
       cb.onPhase("cancelled");
-      lastAnswer = stripDirectives(full) || lastAnswer;
+      lastAnswer = stripDirectives(full ?? streamed) || lastAnswer;
       return answer();
     }
 
@@ -194,8 +215,7 @@ export async function runAgent(opts: {
         return answer();
       }
       cb.onPhase("answering");
-      const retry = await streamChat({
-        task: "agent",
+      const retry = await chat({
         args: {
           ctx: [context, ...toolLog].filter(Boolean).join("\n\n"),
           deep,
@@ -210,10 +230,12 @@ export async function runAgent(opts: {
             content: "只输出最终答案（自然语言，不要任何代码块、不要解释你在做什么）。用户问的是：" + (question || "请讲解上面的图片"),
           },
         ],
-        temperature: deep ? 0.5 : 0.6,
-        signal,
-        onDelta: (d) => cb.onDelta(d),
       });
+      if (retry === null || signal.aborted) {
+        cb.onPhase("cancelled");
+        lastAnswer = stripDirectives(retry ?? streamed) || lastAnswer;
+        return answer();
+      }
       const txt = stripDirectives(retry);
       lastAnswer = txt || "（这次没能生成答案，请再问一次。）";
       cb.onPhase("done");
@@ -226,8 +248,7 @@ export async function runAgent(opts: {
     if (isStuck) {
       cb.onPhase("answering");
       const stock = stripDirectives(full);
-      const forced = await streamChat({
-        task: "agent",
+      const forced = await chat({
         args: {
           ctx: [context, ...toolLog].filter(Boolean).join("\n\n"),
           deep,
@@ -246,11 +267,13 @@ export async function runAgent(opts: {
               "。",
           },
         ],
-        temperature: deep ? 0.5 : 0.6,
-        signal,
-        onDelta: (d) => cb.onDelta(d),
         onThink: (t) => cb.onReasoning(t),
       });
+      if (forced === null || signal.aborted) {
+        cb.onPhase("cancelled");
+        lastAnswer = stripDirectives(forced ?? streamed) || stock || lastAnswer;
+        return answer();
+      }
       lastAnswer = stripDirectives(forced) || stock;
       cb.onPhase("done");
       return answer();
@@ -258,9 +281,19 @@ export async function runAgent(opts: {
     lastRoundSigs = new Set(sigs);
 
     /* 本轮实质正文入列（工具轮次不等于过渡语：深讲骨架的正文常在这里产生）。
-     * 短寒暄（"我查一下"）不入列；与上一段相同不重复入列。 */
+     * 短寒暄（"我查一下"）不入列；与上一段相同不重复入列；
+     * 私有独白（"先调用工具…确认卡""Fine. Now report…"）不入列——
+     * 判据：提到确认卡/调用工具的元话语，或整段没有汉字（最终回答必须是中文）。 */
     const cleanedThisRound = stripDirectives(full);
-    if (cleanedThisRound && cleanedThisRound.length > 60 && cleanedThisRound !== answerParts[answerParts.length - 1]) {
+    const isPrivateMeta =
+      /确认卡|调用工具|先调用|批准后|等待用户|report the|call the tool|user (will see|approved)/i.test(cleanedThisRound) ||
+      !/[\u4e00-\u9fff]/.test(cleanedThisRound);
+    if (
+      cleanedThisRound &&
+      cleanedThisRound.length > 60 &&
+      !isPrivateMeta &&
+      cleanedThisRound !== answerParts[answerParts.length - 1]
+    ) {
       answerParts.push(cleanedThisRound);
     }
 
