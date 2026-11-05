@@ -435,7 +435,7 @@ export function AgentHome() {
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:gap-5">
+    <div className="flex max-md:h-[calc(100dvh-var(--mobile-topbar-h)-var(--mobile-content-bottom)-36px)] max-md:min-h-[460px] md:h-[calc(100dvh-150px)] md:min-h-[520px] flex-col lg:flex-row lg:gap-5">
       {/* ===== Chat 主区（Trae SOLO 式左栏） ===== */}
       <section className="flex min-w-0 flex-1 flex-col">
       {/* 头部：标识 + 工作台(移动) + 新对话 + 清空 */}
