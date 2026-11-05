@@ -285,6 +285,12 @@ export async function runAgent(opts: {
      * 私有独白不入列——判据：提到确认卡/调用工具的元话语，或整段没有汉字。
      * 另外修剪段落首尾的无汉字行（见模块级 trimMetaEdges）。 */
     const cleanedThisRound = trimMetaEdges(stripDirectives(full));
+    /* 写入类工具的轮次：批准后模型会给正式汇报，这里的过渡语（常是私语）
+     * 一律不并入最终回答；读工具轮次保留（深讲正文常在那里产生）。 */
+    const hasWriteCall = calls.some((c) => TOOLS[c.name]?.risk === "write");
+    const looksLikeSelfTalk =
+      cleanedThisRound.length < 200 &&
+      /确认|批准|汇报|简洁|纪律|report|briefly|final answer|confirm/i.test(cleanedThisRound);
     const isPrivateMeta =
       /确认卡|调用工具|先调用|批准后|等待用户|report the|call the tool|user (will see|approved)/i.test(cleanedThisRound) ||
       !/[\u4e00-\u9fff]/.test(cleanedThisRound);
