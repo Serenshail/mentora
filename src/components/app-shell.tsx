@@ -54,10 +54,18 @@ const MOBILE_MORE = NAV.slice(5);
 /* 管理员邮箱（与 /admin 服务端鉴权同一份白名单）；非管理员不显示入口 */
 
 /* 会员到期提示：到期不把人关在门外——只停 AI，笔记与导出照常。
- * 所以这里是一条可关闭前不可忽视的横幅，而不是拦截页。 */
+ * 所以这里是一条可关闭前不可忽视的横幅，而不是拦截页。
+ * entitlement 由 /api/auth/me 返回；此处本地声明结构，避免依赖 auth-client 的类型版本。 */
+interface EntitlementLike {
+  status: "legacy" | "active" | "expiring" | "expired";
+  plan: string | null;
+  expiresAt: string | null;
+  daysLeft: number | null;
+}
+
 function MembershipBanner() {
   const { user } = useAuth();
-  const ent = user?.entitlement;
+  const ent = (user as { entitlement?: EntitlementLike } | null | undefined)?.entitlement;
   if (!ent || (ent.status !== "expired" && ent.status !== "expiring")) return null;
   const expired = ent.status === "expired";
   return (
