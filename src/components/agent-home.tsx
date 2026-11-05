@@ -1,22 +1,23 @@
 "use client";
 
-/* 首页学习智能体入口（M2）
- * 与学习教练的区别：单点问题直接答、零引导、零建档；
- * 只有用户明确说"想系统学 X"时才在回答末尾建议立目标（不启动引导）。
- * 思考轨迹复用 AgentTrace（检索笔记 → 思考回答 → 折叠耗时）。 */
+/* 首页主对话框（v2，通用智能体 harness）
+ * 内核：runAgent 工具循环（原生 tool_calls + 围栏降级、审批门、打转守卫）。
+ * UI：消息流（含过程产物 meta）+ 流式正文 + 审批卡队列 + 引用来源。
+ * 页面关系：对话是主入口；学习/读书/圆桌/笔记库保留为工作台，Agent 的写入
+ * 最终都落到这些工作台的数据里。 */
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Check, Circle, Eraser, ImagePlus, Loader2, Sparkles, X } from "lucide-react";
+import { ArrowUp, Check, Circle, Eraser, ImagePlus, Link2, Loader2, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
-import { runAgent, type PendingWrite } from "@/lib/agent/runner";
-import { TOOLS, type PlanStep, type ToolCall } from "@/lib/agent/protocol";
-import { todayISO, uid } from "@/lib/utils";
+import { runAgent, type PendingAction } from "@/lib/agent/runner";
+import { TOOLS, type ApprovalDecision, type PlanStep, type ToolCall } from "@/lib/agent/protocol";
+import { uid } from "@/lib/utils";
 import { toast } from "sonner";
 import type { ChatMsg } from "@/lib/types";
 
-const CHIPS = ["协程和线程到底差在哪？", "帮我看下今天该学什么", "用一句话解释闭包"];
+const CHIPS = ["帮我查一下最新的 Next.js 15 有什么新特性", "协程和线程到底差在哪？", "把「间隔重复的原理」整理成一篇笔记存起来"];
 
 /* 图片压缩：模型对超大图会拒绝且浪费 token；长边压到 1400、JPEG 0.82 足够读代码截图 */
 async function compressImage(file: File): Promise<{ dataUrl: string; w: number; h: number }> {
@@ -41,6 +42,37 @@ interface Attachment {
   h: number;
 }
 
+function buildCtx(): string {
+  const s = useAppStore.getState();
+  const goal = s.goals.find((g) => g.status === "active");
+  const today = new Date().toISOString().slice(0, 10);
+  const due = s.knowledge.filter((k) => k.nextReviewAt && k.nextReviewAt <= today).length;
+  return JSON.stringify({
+    today,
+    activeGoal: goal ? { topic: goal.topic, direction: goal.direction } : null,
+    knowledgeCount: s.knowledge.length,
+    dueReviews: due,
+    books: s.books.length,
+    userName: s.settings.userName || null,
+  });
+}
+
+/** 审批卡内容预览（按动作类型取关键字段） */
+function actionPreview(a: PendingAction): string | null {
+  const p = a.payload as Record<string, unknown>;
+  if (a.kind === "save_note" || a.kind === "update_note") {
+    const body = typeof p.body === "string" ? p.body : "";
+    return body ? body.slice(0, 400) : null;
+  }
+  if (a.kind === "create_goal") {
+    const criteria = Array.isArray(p.successCriteria) ? p.successCriteria.join("；") : "";
+    return [p.direction, p.motivation, criteria].filter((x) => typeof x === "string" && x).join("\n") || null;
+  }
+  if (a.kind === "add_book") return [p.author, p.brief].filter((x) => typeof x === "string" && x).join(" · ") || null;
+  if (a.kind === "update_settings") return a.summary;
+  return null;
+}
+
 export function AgentHome() {
   const agentChat = useAppStore((s) => s.agentChat);
   const appendAgentMsg = useAppStore((s) => s.appendAgentMsg);
@@ -52,11 +84,15 @@ export function AgentHome() {
   const [attach, setAttach] = useState<Attachment | null>(null);
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [tools, setTools] = useState<ToolCall[]>([]);
-  const [pendingWrite, setPendingWrite] = useState<PendingWrite | null>(null);
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const [reasoning, setReasoning] = useState("");
   const [runPhase, setRunPhase] = useState<"thinking" | "acting" | "answering" | "done" | "failed" | "cancelled">("thinking");
   const abortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  /* 审批门：requestApproval 挂起 runAgent，直到用户对每张卡做出决定 */
+  const approvalResolveRef = useRef<((d: ApprovalDecision[]) => void) | null>(null);
+  const decisionsRef = useRef<Map<string, boolean>>(new Map());
+  const abortHandlerRef = useRef<(() => void) | null>(null);
 
   /* 粘贴截图：全局监听 paste，有图片就收进附件（不打断输入框正常粘贴文字） */
   useEffect(() => {
@@ -78,89 +114,81 @@ export function AgentHome() {
     return () => document.removeEventListener("paste", onPaste);
   }, []);
 
-  const pickFile = async (f: File | null | undefined) => {
-    if (!f) return;
-    if (!f.type.startsWith("image/")) {
-      toast.error("目前支持图片；文档请用「第二大脑 → 上传文档」");
-      return;
-    }
-    if (f.size > 12 * 1024 * 1024) {
-      toast.error("图片太大了（>12MB），请压缩后再传");
-      return;
-    }
-    try {
-      const img = await compressImage(f);
-      setAttach({ ...img, name: f.name });
-    } catch {
-      toast.error("图片读取失败");
-    }
-  };
-
-  const buildCtx = (ragCtx = "") => {
-    const s = useAppStore.getState();
-    const goal = s.goals.find((g) => g.status === "active");
-    const activeDay = goal?.plan
-      ? Object.values(goal.plan.days).find((d) => d.status === "active")
-      : null;
-    const today = todayISO();
-    const due = s.knowledge.filter((k) => k.nextReviewAt && k.nextReviewAt <= today).length;
-    return JSON.stringify({
-      activeGoal: goal
-        ? { topic: goal.topic, direction: goal.direction, currentDay: activeDay?.title ?? null }
-        : null,
-      dueReviews: due,
-      knowledgeCount: s.knowledge.length,
-      notesEvidence: ragCtx || null,
+  const requestApproval = (actions: PendingAction[]): Promise<ApprovalDecision[]> => {
+    decisionsRef.current = new Map();
+    setPendingActions(actions);
+    return new Promise((resolve) => {
+      const finish = (d: ApprovalDecision[]) => {
+        if (abortHandlerRef.current && abortRef.current) {
+          abortRef.current.signal.removeEventListener("abort", abortHandlerRef.current);
+          abortHandlerRef.current = null;
+        }
+        approvalResolveRef.current = null;
+        setPendingActions([]);
+        resolve(d);
+      };
+      approvalResolveRef.current = finish;
+      /* 等待审批期间用户点「停止」→ 全部拒绝并继续（模型会收到拒绝并收尾） */
+      const onAbort = () => finish(actions.map((a) => ({ actionId: a.id, approved: false })));
+      abortHandlerRef.current = onAbort;
+      abortRef.current?.signal.addEventListener("abort", onAbort);
     });
   };
 
-  /* eslint-disable react-hooks/purity -- send 只在事件/effect 回调里执行，
-   * 其中的 Date.now() 用于阶段耗时统计，不会在渲染期调用（编译器静态误判） */
-  const send = async (text?: string) => {
-    const q = (text ?? input).trim();
-    /* 只有图片没有文字也允许（"讲讲这段代码"由图片内容本身承载） */
+  const decide = (actionId: string, approved: boolean) => {
+    decisionsRef.current.set(actionId, approved);
+    setPendingActions((prev) => {
+      const rest = prev.filter((a) => a.id !== actionId);
+      if (rest.length === 0) {
+        approvalResolveRef.current?.(
+          [...decisionsRef.current].map(([id, ok]) => ({ actionId: id, approved: ok }))
+        );
+      }
+      return rest;
+    });
+  };
+
+  /* eslint-disable react-hooks/purity */
+  const send = async (preset?: string) => {
+    const q = (preset ?? input).trim();
     if ((!q && !attach) || busy) return;
     setInput("");
     setBusy(true);
     setPending("");
-    const t0 = Date.now();
-    setPhases([{ label: "看看你的笔记", state: "running" }]);
-    const shownText = attach ? `${q || "请看这张图"}（附图片）` : q;
-    const userMsg: ChatMsg = { id: uid("m"), role: "user", content: shownText, at: new Date().toISOString() };
-    appendAgentMsg(userMsg);
-    const imgForModel = attach?.dataUrl ?? null;
-    setAttach(null);
-    const ac = new AbortController();
-    abortRef.current = ac;
     setPlan([]);
     setTools([]);
-    setPendingWrite(null);
+    setPendingActions([]);
     setReasoning("");
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const imgForModel = attach?.dataUrl ?? null;
+    setAttach(null);
+
+    const t0 = Date.now();
+    setPhases([
+      { label: "思考", state: "running" },
+      { label: "回答中", state: "pending" },
+    ]);
+
+    const userMsg: ChatMsg = { id: uid("m"), role: "user", content: q || "（图片）", at: new Date().toISOString() };
+    appendAgentMsg(userMsg);
+
     try {
-      /* 不再预检索：检索是智能体的一个工具（search_brain），
-       * 由模型判断该不该用——预检索会让它"白拿证据"，永远学不会调用工具。 */
-      const t1 = Date.now();
       setPhases([
-        {
-          label: "思考",
-          state: "done",
-          durationMs: t1 - t0,
-          detail: "需要时会自己检索你的笔记",
-        },
+        { label: "思考", state: "done", durationMs: Date.now() - t0 },
         { label: "回答中", state: "running" },
       ]);
-
-      const history = [...useAppStore.getState().agentChat].slice(-8).map((m) => ({
+      const history = [...useAppStore.getState().agentChat].slice(-9).map((m) => ({
         role: m.role,
         content: m.content,
       }));
+
       const { wantsDeepExplanation } = await import("@/lib/ai/prompts-lite");
       const deep = wantsDeepExplanation(q, !!imgForModel);
 
-      /* 真正的工具循环（M3）：模型可反复要求检索/查看状态/存笔记/出题 */
-      const answer = await runAgent({
+      const { answer, meta } = await runAgent({
         question: q || "请讲讲这张图里的内容。",
-        context: buildCtx(""),
+        context: buildCtx(),
         imageUrl: imgForModel,
         history,
         deep,
@@ -171,39 +199,48 @@ export function AgentHome() {
           onTool: (tc) => {
             setPending(""); // 该轮正文只是过渡语，清掉等最终答案
             setTools((prev) => {
-            const i = prev.findIndex((x) => x.id === tc.id);
-            if (i < 0) return [...prev, tc];
+              const i = prev.findIndex((x) => x.id === tc.id);
+              if (i < 0) return [...prev, tc];
               const copy = [...prev];
               copy[i] = tc;
               return copy;
             });
           },
-          onReasoning: (r) => {
-            /* 思考流是模型的内部独白，只保留末段作"当前在想什么"的提示 */
-            setReasoning((prev) => (prev + r).slice(-48));
-          },
+          onReasoning: (r) => setReasoning((prev) => (prev + r).slice(-48)),
           onDelta: (d) => {
-            /* 流式期间也剥掉 tool/plan 指令块：用户不该看到 JSON 协议 */
+            /* 流式期间剥掉 tool/plan 指令块：用户不该看到 JSON 协议 */
             setPending((prev) => {
               const merged = prev + d;
-              const stripped = merged.replace(/```(?:tool|plan)[\s\S]*?```/g, "").replace(/```(?:tool|plan)[\s\S]*$/, "");
-              return stripped;
+              return merged.replace(/```(?:tool|plan)[\s\S]*?```/g, "").replace(/```(?:tool|plan)[\s\S]*$/, "");
             });
           },
-          onPendingWrite: (w) => setPendingWrite(w),
+          requestApproval,
         },
       });
 
       const t2 = Date.now();
       setPhases((prev) =>
-        prev.map((p) => (p.state === "running" ? { ...p, state: "done", durationMs: t2 - t1 } : p))
+        prev.map((p) => (p.state === "running" ? { ...p, state: "done", durationMs: t2 - t0 } : p))
       );
-      if (answer.trim()) {
+      if (answer.trim() || meta.tools.length > 0 || meta.citations.length > 0) {
         appendAgentMsg({
           id: uid("m"),
           role: "assistant",
           content: answer,
           at: new Date().toISOString(),
+          meta: {
+            plan: meta.plan.length ? meta.plan : undefined,
+            tools: meta.tools.length
+              ? meta.tools.map((t) => ({
+                  id: t.id,
+                  name: t.name,
+                  status: t.status,
+                  summary: t.summary,
+                  durationMs: t.endedAt ? t.endedAt - t.startedAt : undefined,
+                }))
+              : undefined,
+            citations: meta.citations.length ? meta.citations.slice(0, 8) : undefined,
+          },
         });
       }
       setPending("");
@@ -232,7 +269,7 @@ export function AgentHome() {
           </span>
           <p className="text-[13px] font-semibold text-ink">Mentora</p>
           <span className="text-[11px] text-ink-dim/70">
-            {shown.length === 0 ? "问什么都可以：概念、代码、图片、书里的观点" : ""}
+            {shown.length === 0 ? "问什么都可以：搜索、讲解、建笔记、改设置" : ""}
           </span>
         </div>
         {agentChat.length > 0 && (
@@ -248,10 +285,10 @@ export function AgentHome() {
 
       {shown.length === 0 && (
         <div className="flex flex-1 flex-col items-center justify-center px-4 text-center">
-          <p className="font-brand text-3xl text-ink">想弄明白什么？</p>
+          <p className="font-brand text-3xl text-ink">想做什么？</p>
           <p className="mt-2 max-w-md text-[12.5px] leading-relaxed text-ink-dim">
-            单独问一个问题，我直接答；贴一段代码或截图，我按行讲解。
-            想系统学一门东西，去「学习」排计划——这里不逼你建档。
+            提问、联网搜索、建笔记、加书、开目标、改设置——说一声就行。
+            写入操作会先给你确认，不会不打招呼就动你的数据。
           </p>
           <div className="mt-5 flex flex-wrap justify-center gap-2">
             {CHIPS.map((c) => (
@@ -284,6 +321,7 @@ export function AgentHome() {
               ) : (
                 <div className="max-w-[92%] rounded-2xl rounded-bl-md border border-border bg-white px-3.5 py-2.5">
                   <Markdown text={m.content} className="text-[12.5px]" />
+                  <MsgMetaView meta={m.meta} />
                 </div>
               )}
             </div>
@@ -297,6 +335,39 @@ export function AgentHome() {
               <span className="stream-cursor" />
             </div>
           )}
+
+          {/* 审批卡队列：写入操作等待用户逐个决定 */}
+          {pendingActions.map((a) => {
+            const preview = actionPreview(a);
+            return (
+              <div key={a.id} className="rounded-xl border border-accent/30 bg-accent/[0.04] p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-accent">
+                  待确认 · {a.label}
+                </p>
+                <p className="mt-1.5 text-[13px] font-bold text-ink">{a.summary}</p>
+                {preview && (
+                  <p className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[11.5px] leading-relaxed text-ink-dim">
+                    {preview}
+                  </p>
+                )}
+                <div className="mt-2.5 flex gap-2">
+                  <button
+                    onClick={() => decide(a.id, true)}
+                    className="cursor-pointer rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-[11.5px] font-medium text-white transition hover:bg-black/80"
+                  >
+                    批准执行
+                  </button>
+                  <button
+                    onClick={() => decide(a.id, false)}
+                    className="cursor-pointer rounded-lg border border-border bg-white px-3 py-1.5 text-[11.5px] text-ink-dim transition hover:text-ink"
+                  >
+                    拒绝
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
           {/* 思考摘要（Codex ReasoningItem 模型）：只给骨架，不给完整思维链 */}
           {(reasoning || (busy && runPhase !== "answering")) && (
             <div className="flex items-center gap-2 text-[11.5px] text-ink-dim">
@@ -351,7 +422,7 @@ export function AgentHome() {
             </div>
           )}
 
-          {/* 工具调用（Codex CommandExecutionItem 模型）：状态 + 耗时 + 失败原文 */}
+          {/* 工具调用（Codex CommandExecutionItem 模型）：状态 + 耗时 + 失败/拒绝原文 */}
           {tools.length > 0 && (
             <div className="space-y-1.5">
               {tools.map((t) => (
@@ -361,14 +432,18 @@ export function AgentHome() {
                     "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11.5px]",
                     t.status === "failed"
                       ? "border-bad/30 bg-bad/[0.04] text-bad"
-                      : t.status === "in_progress"
-                        ? "border-accent/25 bg-accent/[0.04] text-ink-dim"
-                        : "border-border bg-white text-ink-dim"
+                      : t.status === "declined"
+                        ? "border-border bg-surface-2 text-ink-dim line-through decoration-ink-dim/40"
+                        : t.status === "in_progress"
+                          ? "border-accent/25 bg-accent/[0.04] text-ink-dim"
+                          : "border-border bg-white text-ink-dim"
                   )}
                 >
                   {t.status === "in_progress" ? (
                     <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
                   ) : t.status === "failed" ? (
+                    <X className="size-3 shrink-0" />
+                  ) : t.status === "declined" ? (
                     <X className="size-3 shrink-0" />
                   ) : (
                     <Check className="size-3 shrink-0 text-ok" />
@@ -382,42 +457,6 @@ export function AgentHome() {
                   )}
                 </div>
               ))}
-            </div>
-          )}
-
-          {/* 写入确认卡（D4：智能体永不静默写入） */}
-          {pendingWrite && (
-            <div className="rounded-xl border border-accent/30 bg-accent/[0.04] p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-accent">
-                待确认 · 存入第二大脑
-              </p>
-              <p className="mt-1.5 text-[13px] font-bold text-ink">{pendingWrite.title}</p>
-              <p className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[11.5px] leading-relaxed text-ink-dim">
-                {pendingWrite.body.slice(0, 600)}
-              </p>
-              <div className="mt-2.5 flex gap-2">
-                <button
-                  onClick={() => {
-                    const { addKnowledge } = useAppStore.getState();
-                    addKnowledge(
-                      [{ title: pendingWrite.title, body: pendingWrite.body, domain: pendingWrite.domain }],
-                      "manual",
-                      "智能体对话"
-                    );
-                    toast.success(`已存入笔记库《${pendingWrite.title}》`);
-                    setPendingWrite(null);
-                  }}
-                  className="cursor-pointer rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-[11.5px] font-medium text-white transition hover:bg-black/80"
-                >
-                  确认保存
-                </button>
-                <button
-                  onClick={() => setPendingWrite(null)}
-                  className="cursor-pointer rounded-lg border border-border bg-white px-3 py-1.5 text-[11.5px] text-ink-dim transition hover:text-ink"
-                >
-                  不要了
-                </button>
-              </div>
             </div>
           )}
 
@@ -452,7 +491,8 @@ export function AgentHome() {
           accept="image/*"
           className="hidden"
           onChange={(e) => {
-            void pickFile(e.target.files?.[0]);
+            const f = e.target.files?.[0];
+            if (f) void compressImage(f).then((img) => setAttach({ ...img, name: f.name })).catch(() => toast.error("图片读取失败"));
             e.target.value = "";
           }}
         />
@@ -468,7 +508,7 @@ export function AgentHome() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void send()}
-          placeholder="问一个具体问题，或贴截图让我逐行讲解（Ctrl+V 可粘贴）"
+          placeholder="提问、搜索、建笔记、改设置……（Ctrl+V 可粘贴截图）"
           disabled={busy}
           className="h-10 w-full rounded-xl border border-border bg-white px-3.5 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12] disabled:opacity-60"
         />
@@ -488,6 +528,59 @@ export function AgentHome() {
         >
           停止
         </button>
+      )}
+    </div>
+  );
+}
+
+/** 历史消息的过程产物渲染（计划/工具/引用来源，刷新后仍在） */
+function MsgMetaView({ meta }: { meta?: ChatMsg["meta"] }) {
+  if (!meta) return null;
+  const hasAny =
+    (meta.plan && meta.plan.length > 0) ||
+    (meta.tools && meta.tools.length > 0) ||
+    (meta.citations && meta.citations.length > 0);
+  if (!hasAny) return null;
+  return (
+    <div className="mt-2.5 space-y-2 border-t border-border/60 pt-2.5">
+      {meta.tools && meta.tools.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {meta.tools.map((t) => (
+            <span
+              key={t.id}
+              className={cn(
+                "rounded-md px-1.5 py-0.5 text-[10.5px]",
+                t.status === "failed"
+                  ? "bg-bad/[0.08] text-bad"
+                  : t.status === "declined"
+                    ? "bg-surface-2 text-ink-dim line-through"
+                    : "bg-surface-2 text-ink-dim"
+              )}
+              title={t.summary}
+            >
+              {TOOLS[t.name as keyof typeof TOOLS]?.label ?? t.name}
+              {t.durationMs != null && <span className="opacity-50"> {t.durationMs}ms</span>}
+            </span>
+          ))}
+        </div>
+      )}
+      {meta.citations && meta.citations.length > 0 && (
+        <div className="space-y-1">
+          <p className="flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim">
+            <Link2 className="size-3" /> 来源
+          </p>
+          {meta.citations.slice(0, 5).map((c, i) => (
+            <a
+              key={`${c.url}-${i}`}
+              href={c.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block truncate text-[11px] text-accent underline-offset-2 hover:underline"
+            >
+              [{i + 1}] {c.title || c.url}
+            </a>
+          ))}
+        </div>
       )}
     </div>
   );

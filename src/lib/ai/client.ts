@@ -6,10 +6,21 @@ export type WirePart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
 
+/** 原生工具调用（服务端聚合后的完整形态；argsRaw 需客户端 JSON.parse） */
+export interface WireToolCall {
+  id: string;
+  name: string;
+  argsRaw: string;
+}
+
 export interface WireMsg {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   /** 字符串（历史行为）或 OpenAI 兼容多模态数组（图片输入，M2.1） */
   content: string | WirePart[];
+  /** assistant 消息携带的原生工具调用（agent 原生通道回注用，仅 task=agent 放行） */
+  tool_calls?: { id: string; type: "function"; function: { name: string; arguments: string } }[];
+  /** role=tool 时的对应调用 id */
+  tool_call_id?: string;
 }
 
 export type ChatTask =
@@ -60,6 +71,10 @@ export async function streamChat(
     /** 推理模型思考心跳：正文产出前的 reasoning 摘要。用于长任务等待反馈（"模型思考中…"），
      *  不拼进返回正文。缺省时静默忽略（老调用点零改动）。 */
     onThink?: (text: string) => void;
+    /** 原生 tool_calls（t=tc，服务端已聚合完整）。仅 agent 任务会产生。 */
+    onToolCalls?: (calls: WireToolCall[]) => void;
+    /** 网关拒收原生 tools 已降级为围栏协议（t=n tools_off）：后续轮不必再声明 nativeTools */
+    onNativeOff?: () => void;
   }
 ): Promise<string> {
   const res = await fetch("/api/chat", {
@@ -104,6 +119,11 @@ export async function streamChat(
           opts.onDelta(ev.v);
         } else if (ev.t === "h") {
           opts.onThink?.(ev.v ?? "");
+        } else if (ev.t === "tc") {
+          const calls = ev.v as WireToolCall[];
+          if (Array.isArray(calls) && calls.length > 0) opts.onToolCalls?.(calls);
+        } else if (ev.t === "n" && ev.v === "tools_off") {
+          opts.onNativeOff?.();
         } else if (ev.t === "e") {
           throw new Error(ev.v || "模型返回错误");
         }

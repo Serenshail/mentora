@@ -1,14 +1,18 @@
-/* 指令解析（纯函数，可单测；不与 store/网络耦合） */
+/* 指令解析（纯函数，可单测；不与 store/网络耦合）
+ * v2：修复 tools 数组丢失（v1 并行工具是死代码）；作为原生 tool_calls 的降级通道。 */
 import { TOOLS, type ToolName } from "./protocol";
 
-export function parseDirectives(text: string): {
+export interface ParsedDirectives {
+  /** 兼容字段：第一个工具 */
   tool?: { name: ToolName; args: Record<string, unknown> };
-  /** 多工具并行（Codex 式）：一次输出多个 tool 块时全部解析 */
+  /** 全部工具（支持多个=并行调用） */
   tools?: { name: ToolName; args: Record<string, unknown> }[];
   plan?: string[];
-} {
-  let tool: { name: ToolName; args: Record<string, unknown> } | undefined;
-  let tools: { name: ToolName; args: Record<string, unknown> }[] | undefined;
+}
+
+export function parseDirectives(text: string): ParsedDirectives {
+  let tool: ParsedDirectives["tool"];
+  let tools: ParsedDirectives["tools"];
   let plan: string[] | undefined;
 
   /* 全部 tool 块（支持多个=并行调用；取第一个作兼容字段） */
@@ -32,7 +36,7 @@ export function parseDirectives(text: string): {
       if (Array.isArray(arr)) plan = arr.map((s) => String(s)).filter(Boolean).slice(0, 8);
     } catch { /* ignore */ }
   }
-  return { tool, plan };
+  return { tool, tools, plan };
 }
 
 export function stripDirectives(text: string): string {
@@ -56,4 +60,42 @@ export function stripDirectives(text: string): string {
     .replace(/```[^\n]*\n?\s*```/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/** 原生 tool_calls 聚合器：把 OpenAI 流式分片拼成完整调用（服务端/客户端共用逻辑） */
+export interface NativeToolCall {
+  id: string;
+  name: string;
+  /** 未解析的 arguments JSON 字符串 */
+  argsRaw: string;
+}
+
+export class ToolCallAggregator {
+  private parts = new Map<number, { id: string; name: string; argsRaw: string }>();
+
+  /** 喂入一个 delta.tool_calls 分片 */
+  feed(deltas: unknown): void {
+    if (!Array.isArray(deltas)) return;
+    for (const d of deltas) {
+      const idx = Number((d as { index?: unknown }).index ?? 0);
+      const cur = this.parts.get(idx) ?? { id: "", name: "", argsRaw: "" };
+      const piece = d as { id?: string; function?: { name?: string; arguments?: string } };
+      if (piece.id) cur.id = piece.id;
+      if (piece.function?.name) cur.name += piece.function.name;
+      if (piece.function?.arguments) cur.argsRaw += piece.function.arguments;
+      this.parts.set(idx, cur);
+    }
+  }
+
+  /** 输出全部聚合完成的调用（按 index 顺序） */
+  finish(): NativeToolCall[] {
+    return [...this.parts.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, p]) => ({ id: p.id || `call_${p.name}`, name: p.name, argsRaw: p.argsRaw }))
+      .filter((c) => c.name);
+  }
+
+  get isEmpty(): boolean {
+    return this.parts.size === 0;
+  }
 }

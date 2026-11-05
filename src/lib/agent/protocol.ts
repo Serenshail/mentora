@@ -1,29 +1,61 @@
-/* 智能体事件与工具协议（M3）
+/* 智能体事件与工具协议（v2，通用 harness）
  *
- * 参照 openai/codex（MIT）codex-rs/protocol/src/items.rs 的真实模型：
- *   TurnItem = UserMessage | AgentMessage | Plan | Reasoning | CommandExecution | McpToolCall …
+ * 参照 openai/codex（MIT）codex-rs/protocol/src/items.rs 的模型：
+ *   TurnItem = UserMessage | AgentMessage | Plan | Reasoning | CommandExecution | McpToolCall
  *   PlanItem     = { id, text }                      —— 计划是一条条 item
  *   ReasoningItem= { id, summaryText[], rawContent[] } —— 对外只给摘要
  *   Tool 状态    = InProgress | Completed | Failed | Declined
  *
- * 我们的纪律（与学习场景对齐）：
- *  1. 只读工具自动执行；写入工具必须先 Confirmation；
- *  2. 计划是「外显的」——每一步都要能看到状态流转，不允许只报结果；
- *  3. 任何工具失败都要如实标 Failed，回答继续（不阻塞）；
- *  4. 单轮最多 MAX_TOOL_ROUNDS 轮，超限强制收尾并说明。
+ * v2 纪律：
+ *  1. 只读工具自动执行；写入工具必须经用户确认（PendingAction 审批门）；
+ *  2. 计划外显，每步状态可见；
+ *  3. 工具失败如实标 failed，回答继续；
+ *  4. 单轮最多 MAX_TOOL_ROUNDS 轮；同一「工具+参数」连续重复视为打转，强制收尾；
+ *  5. 涉密参数（apiKey/baseUrl/密码/账号操作）不进注册表——模型无法调用不存在的东西。
  */
 
 export type ToolStatus = "in_progress" | "completed" | "failed" | "declined";
 
 export type ToolName =
+  /* ---- 检索与读取（只读） ---- */
   /** 检索第二大脑笔记（只读） */
   | "search_brain"
-  /** 读取当前学习上下文：目标/今日任务/待复习/当前书（只读） */
+  /** 读取当前学习/阅读/会话状态总览（只读） */
   | "read_context"
-  /** 把内容存为笔记（写入，需确认） */
-  | "save_note"
+  /** 按 id 或标题读取笔记全文（只读） */
+  | "get_note"
+  /** 列出学习目标（只读） */
+  | "list_goals"
+  /** 读取某个目标详情（只读） */
+  | "get_goal"
+  /** 列出书架（只读） */
+  | "list_books"
+  /** 列出人生伙伴会话（只读） */
+  | "list_sessions"
+  /** 读取公开设置（只读；绝不含 apiKey/baseUrl 值） */
+  | "get_settings_public"
   /** 出题检验（只读，不含判分） */
-  | "make_quiz";
+  | "make_quiz"
+  /* ---- 联网（只读，服务端守卫） ---- */
+  /** 联网搜索（/api/search） */
+  | "web_search"
+  /** 读取一个公网页面的正文（/api/fetch-page） */
+  | "read_url"
+  /* ---- 写入（必须用户确认） ---- */
+  /** 新建笔记 */
+  | "save_note"
+  /** 修改已有笔记（按 id 或标题） */
+  | "update_note"
+  /** 删除笔记 */
+  | "delete_note"
+  /** 新建学习目标草稿（完整计划在学习页生成） */
+  | "create_goal"
+  /** 新建书（自动拆阅读章节） */
+  | "add_book"
+  /** 新建人生伙伴会话 */
+  | "create_session"
+  /** 修改白名单设置（userName/coachTone/digestWeekly；provider/model 需确认） */
+  | "update_settings";
 
 export interface ToolSpec {
   name: ToolName;
@@ -40,29 +72,127 @@ export const TOOLS: Record<ToolName, ToolSpec> = {
     name: "search_brain",
     label: "检索笔记",
     risk: "read",
-    description: "按关键词在用户第二大脑里检索相关笔记，返回标题+摘要。",
-    params: 'query: string（检索词，2-30 字）',
+    description: "在用户第二大脑里检索相关笔记，返回标题与关键摘录。",
+    params: "query: string（检索词，2-30 字）",
   },
   read_context: {
     name: "read_context",
-    label: "查看学习状态",
+    label: "查看我的状态",
     risk: "read",
-    description: "读取用户当前的学习目标、今日任务、待复习数量、正在读的书。",
+    description: "读取当前学习目标、今日任务、待复习数、正在读的书、最近会话一览。",
     params: "（无参数）",
   },
-  save_note: {
-    name: "save_note",
-    label: "存为新笔记",
-    risk: "write",
-    description: "把一段内容整理成笔记存入第二大脑。必须先在正文里给出草稿，由用户确认后才会真正写入。",
-    params: "title: string, body: string, domain?: string",
+  get_note: {
+    name: "get_note",
+    label: "读笔记全文",
+    risk: "read",
+    description: "按标题或 id 读取一篇笔记的完整内容。",
+    params: "title?: string, id?: string（二选一）",
+  },
+  list_goals: {
+    name: "list_goals",
+    label: "列出学习目标",
+    risk: "read",
+    description: "列出所有学习目标及其进度概况。",
+    params: "（无参数）",
+  },
+  get_goal: {
+    name: "get_goal",
+    label: "看目标详情",
+    risk: "read",
+    description: "按主题关键词读取某个学习目标的计划与当前进度。",
+    params: "topic: string（主题关键词）",
+  },
+  list_books: {
+    name: "list_books",
+    label: "看书架",
+    risk: "read",
+    description: "列出书架上的书与阅读状态。",
+    params: "（无参数）",
+  },
+  list_sessions: {
+    name: "list_sessions",
+    label: "列出会话",
+    risk: "read",
+    description: "列出人生伙伴的会话（含圆桌）。",
+    params: "（无参数）",
+  },
+  get_settings_public: {
+    name: "get_settings_public",
+    label: "查看设置",
+    risk: "read",
+    description: "读取当前设置（模型选择、称呼、教练风格、周报开关）。不含 API Key 等敏感值。",
+    params: "（无参数）",
   },
   make_quiz: {
     name: "make_quiz",
     label: "出题检验",
     risk: "read",
-    description: "针对刚讲过的内容出 2-3 道小题（不含答案），帮助用户自检。",
+    description: "针对刚讲过的内容出 2-5 道小题（不含答案），帮助用户自检。",
     params: "topic: string, count?: number",
+  },
+  web_search: {
+    name: "web_search",
+    label: "联网搜索",
+    risk: "read",
+    description: "联网搜索公开网页，返回标题、链接与摘要。回答时注明来源。",
+    params: "query: string（搜索词，可用用户语言）",
+  },
+  read_url: {
+    name: "read_url",
+    label: "读网页正文",
+    risk: "read",
+    description: "读取一个公网 URL 的正文文本（搜索结果里挑值得细读的用）。",
+    params: "url: string（http/https 公网地址）",
+  },
+  save_note: {
+    name: "save_note",
+    label: "存为新笔记",
+    risk: "write",
+    description: "把一段内容整理成新笔记存入第二大脑。必须先在正文里给出草稿，由用户确认后才写入。",
+    params: "title: string, body: string, domain?: string",
+  },
+  update_note: {
+    name: "update_note",
+    label: "修改笔记",
+    risk: "write",
+    description: "修改一篇已有笔记的标题或正文（按标题或 id 定位）。",
+    params: "title?: string, id?: string, newTitle?: string, body?: string",
+  },
+  delete_note: {
+    name: "delete_note",
+    label: "删除笔记",
+    risk: "write",
+    description: "删除一篇笔记（按标题或 id 定位）。谨慎使用。",
+    params: "title?: string, id?: string",
+  },
+  create_goal: {
+    name: "create_goal",
+    label: "新建学习目标",
+    risk: "write",
+    description: "创建学习目标草稿（主题/方向/动机/验收标准）。完整计划需要用户去「学习」页生成。",
+    params: "topic: string, direction?: string, motivation?: string, successCriteria?: string[]",
+  },
+  add_book: {
+    name: "add_book",
+    label: "加书上架",
+    risk: "write",
+    description: "把一本书加入书架并自动生成阅读计划（拆章节）。耗时较长。",
+    params: "title: string, author?: string, brief?: string",
+  },
+  create_session: {
+    name: "create_session",
+    label: "新建会话",
+    risk: "write",
+    description: "在人生伙伴里新建一个会话（指定人物或圆桌席位）。",
+    params: "title: string, personaId?: string（人物 id，缺省为默认人物）",
+  },
+  update_settings: {
+    name: "update_settings",
+    label: "修改设置",
+    risk: "write",
+    description: "修改白名单内的设置：称呼、教练风格、周报开关、模型选择。API Key 与自定义端点不可通过此工具修改。",
+    params: "userName?: string, coachTone?: \"standard\"|\"gentle\", digestWeekly?: boolean, provider?: string, model?: string",
   },
 };
 
@@ -81,6 +211,24 @@ export interface PlanStep {
   id: string;
   text: string;
   status: "pending" | "in_progress" | "completed" | "skipped";
+}
+
+/** 写入类工具的确认草稿：UI 渲染审批卡，用户批准后才真正执行 */
+export interface PendingAction {
+  id: string;
+  /** 工具名，执行器按 kind 分发 */
+  kind: ToolName;
+  /** 卡片标题（如「新建笔记」） */
+  label: string;
+  /** 一句话摘要 */
+  summary: string;
+  /** 批准后交给执行器的参数 */
+  payload: Record<string, unknown>;
+}
+
+export interface ApprovalDecision {
+  actionId: string;
+  approved: boolean;
 }
 
 /** 一轮智能体运行的可观测状态（UI 直接渲染它） */
@@ -119,29 +267,28 @@ export function advancePlan(plan: PlanStep[], stepId: string, status: PlanStep["
   });
 }
 
-/** 工具提示词：告诉模型有哪些工具、怎么调用、什么时候别用 */
-export function toolsPrompt(): string {
-  const lines = Object.values(TOOLS).map(
-    (t) =>
-      `- \`${t.name}\`（${t.risk === "write" ? "写入，需用户确认" : "只读，自动执行"}）：${t.description} 参数：${t.params}`
-  );
-  return `## 你可以使用的工具
-${lines.join("\n")}
+/** 计划推进一步（修复 v1 双推进 bug：每批工具只推进「当前步完成 → 下一步开始」一次） */
+export function stepPlanForward(plan: PlanStep[]): PlanStep[] {
+  const cur = plan.find((s) => s.status === "in_progress");
+  if (!cur) return plan;
+  let next = advancePlan(plan, cur.id, "completed");
+  const nxt = next.find((s) => s.status === "pending");
+  if (nxt) next = advancePlan(next, nxt.id, "in_progress");
+  return next;
+}
 
-### 调用方式
-需要调用工具时，先输出一行纯文本说明你要做什么（用户会看到），然后输出一个 JSON 代码块：
-\`\`\`tool
-{"name": "search_brain", "args": {"query": "闭包"}}
-\`\`\`
-每次只调用一个工具；拿到结果后再决定下一步。
+/** 打转守卫：同一「工具名+参数」连续出现两次 → 视为模型在原地打转 */
+export function isLooping(lastSig: string | null, sig: string): boolean {
+  return lastSig === sig && sig !== "";
+}
 
-### 纪律
-- **只在真的有帮助时调用**。用户问"什么是协程"，不需要检索笔记；用户问"我之前记过什么关于 X"，才检索。
-- 计划（plan）只用于**多步任务**（≥3 步、有依赖）。单点问答不要建计划。
-- 需要多步时，先输出一个 plan 代码块：
-\`\`\`plan
-["检索你的笔记", "整理成三条要点", "存为新笔记"]
-\`\`\`
-- 工具返回失败时，如实告诉用户"检索失败"，不要编造结果。
-- 写入类工具（save_note）只在你已经把内容完整写进回答后调用；用户会看到确认卡。`;
+/** 工具调用签名（用于打转检测） */
+export function callSignature(name: ToolName, args: Record<string, unknown>): string {
+  let normalized: unknown;
+  try {
+    normalized = JSON.stringify(args, Object.keys(args).sort());
+  } catch {
+    normalized = JSON.stringify(args);
+  }
+  return `${name}:${normalized}`;
 }

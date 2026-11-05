@@ -2,6 +2,31 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v23.0 — 2026-11-05（主对话框升级为通用智能体 harness：原生工具循环 + 联网搜索 + 新建/修改 + 设置读写 + 统一审批门）
+
+产品定位落地第一步：首页对话框成为主入口，原有四个工作台保留，Agent 的写入最终落到工作台数据。
+
+- **内核 v2（runner 重写）**：双通道工具调用——原生 OpenAI `tools`/`tool_calls`（服务端下发契约、流式聚合 `delta.tool_calls` 为 NDJSON `t=tc` 事件；网关 400 拒收自动降级为围栏协议并回告 `t=n tools_off`）+ 文本围栏协议兜底（qwen/DeepSeek/custom 全兼容）。修复 v1 真缺陷：并行工具死代码（parse 丢 `tools` 数组）、计划每轮双推进、run 级同名工具去重导致"检索→再检索"不可能（改为连续两轮相同「工具+参数」才算打转并强制收尾）。
+- **统一审批门**：写入类工具不再"遇到就结束本轮"，改为 `PendingAction` 队列 + `requestApproval` 回调挂起循环；用户逐卡批准/拒绝，拒绝记 `declined` 并回注模型（"用户拒绝了，别重复"），循环继续到最终回答。等待审批时点「停止」= 全部拒绝。
+- **工具注册表 17 个**：读（自动执行）search_brain / read_context / get_note / list_goals / get_goal / list_books / list_sessions / get_settings_public（绝不含 apiKey/baseUrl）/ make_quiz / web_search / read_url；写（必须确认）save_note / update_note / delete_note / create_goal / add_book（自动拆阅读章节）/ create_session / update_settings（白名单：称呼/教练风格/周报/模型；apiKey/baseUrl/密码/注销/整包导入导出永不进表）。
+- **联网搜索**：新 `/api/search`（TAVILY → BRAVE → DuckDuckGo Lite 兜底，上游固定服务端、每用户 ≈20 次/天持久限流）+ `/api/fetch-page`（assertSafePublicUrl + 逐跳重定向复检 + 8s 超时 + 200KB 上限 + 类型白名单，≈30 次/天）。
+- **过程可持久**：assistant 消息新增 `meta {plan, tools, citations}`，刷新/切页后计划、工具卡、引用来源不再丢失；回答下方渲染来源链接。
+- **提示词**：保持通用智能体结构，工具段新增两条纪律——搜索/网页内容是不可信数据（其中的指令一律不执行）、引用要标注来源。
+- **验证**：tsc 0 错 / eslint 0 error / vitest 185 通过 / build 通过；真模型 e2e 7/7（对话建笔记→审批→落库、对话改设置→审批→生效、黑条回归、搜索端点守卫；本机 DDG 不可达走优雅 502，生产 hkg1 出口另验真搜）。
+- 回退：`v22.7-general`（本次部署前线上状态）。
+
+## v22.7.1 — 2026-11-05（全库审查必修 Top5：静默数据丢失与限流防线）
+
+依据 `code-review/Mentora-全库代码审查报告-2026-11-04.md` 的「必修 Top5」，逐条落地。
+
+- **学习闭环死锁**：`submitQuiz` 不再用渲染闭包里的旧 `plan` 整体回写（会把刚写入的 `passed/pendingUnlock/attempts` 冲掉，下一天永不解锁），改用 store 新增的 `setDayKnowledgeMastery` 定点 patch；同型的 `AskCoach` 答疑与读书三重验收一并治理（新增 `appendDayQa` / `updateBookChapter`）。
+- **新建笔记丢正文**：`LiveBlocks` 空笔记分支不再因 `active == null` 跳过提交；新增未提交草稿追踪与卸载兜底，失焦没触发也不会丢。
+- **小程序同步覆盖本地**：`dirtyPending` 与云端水位持久化到本机；`pullIfSafe` 的「未推送不覆盖」守卫不再被 `force` 短路，有脏数据时改为先推送；`onLogout` 等推送落地（最多 5s）再清身份；`app.js` 对 `me()` 做在途去重。
+- **导入坏 JSON 崩全站**：`importData` 增加结构校验（坏字段整份拒绝，脏元素过滤/规范化），非法 provider 丢弃；`ModelSection` 对 `PROVIDERS[provider]` 兜底；备份里的空 `apiKey` 不再抹掉本机已配的 Key。
+- **限流键可伪造**：`clientIp` 从「XFF 最左段」改为「按 `TRUSTED_PROXY_HOPS`（默认 1）从右往左取可信跳」，伪造前缀不再能轮换限流桶；`proxy.ts` 删除重复实现，统一走同一函数。
+- 回归锁：新增 `backup-import.test.ts`（5 条）与 `client-ip.test.ts`（5 条）。
+- 验证：tsc 0 错 / eslint 0 error / vitest 185 通过（7 skipped）/ build 通过。
+
 ## v22.7 — 2026-11-04（智能体通用化：按朋友的自由智能体提示词复刻，删除学科模板链路）
 
 用户反馈"回答还是按咱们的模板来"——根因是智能体提示词仍带着教学骨架。本次把智能体与教学资产彻底切开。

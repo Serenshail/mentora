@@ -301,6 +301,15 @@ export interface ChatMsg {
   role: "user" | "assistant";
   content: string;
   at: string;
+  /** 智能体消息的过程产物（v2）：计划/工具调用/引用来源，刷新后仍可见 */
+  meta?: MsgMeta;
+}
+
+/** 智能体过程产物（随消息持久化；结构轻量，只存展示所需字段） */
+export interface MsgMeta {
+  plan?: { id: string; text: string; status: "pending" | "in_progress" | "completed" | "skipped" }[];
+  tools?: { id: string; name: string; status: string; summary?: string; durationMs?: number }[];
+  citations?: { title: string; url: string }[];
 }
 
 export interface BookProfile {

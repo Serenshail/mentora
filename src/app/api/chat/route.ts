@@ -8,7 +8,8 @@ import { checkAndCountServerKey } from "@/lib/server/quota";
 import { resolveByok, serverConfig } from "@/lib/server/ai-config";
 import { isDeployed } from "@/lib/server/deploy-env";
 import * as P from "@/lib/ai/prompts";
-import { agentToolsPrompt } from "@/lib/server/agent-tools-prompt";
+import { agentToolsPrompt, agentToolsSchema } from "@/lib/server/agent-tools";
+import { ToolCallAggregator } from "@/lib/agent/parse";
 import { logEvent } from "@/lib/server/config";
 import {
   demoCouncil, demoGraduation, demoInsight, demoIntake, demoLesson, demoPlan, demoQuizGrade,
@@ -26,10 +27,37 @@ type Part =
 interface Body {
   system?: string; // 仅服务端内部使用；客户端不再发送
   args?: Record<string, unknown>; // 纯数据参数,服务端据此组装系统提示词
-  /* content 允许字符串（历史行为）或 OpenAI 兼容的多模态数组（图片，M2.1） */
-  messages: { role: "user" | "assistant"; content: string | Part[] }[];
+  /* content 允许字符串（历史行为）或 OpenAI 兼容的多模态数组（图片，M2.1）。
+   * v2 agent：assistant 可带 tool_calls、新增 role:"tool"（原生工具结果回注），
+   * 仅 task=agent 放行（见下方 sanitize）。 */
+  messages: Array<
+    | { role: "user" | "assistant"; content: string | Part[]; tool_calls?: unknown[] }
+    | { role: "tool"; tool_call_id?: string; content: string }
+  >;
   temperature?: number;
   task?: string;
+}
+
+/** 仅 agent 任务允许 tool 角色与 tool_calls；其余任务剥掉（防外来格式污染其他链路） */
+function sanitizeMessages(body: Body): void {
+  if (body.task === "agent") return;
+  body.messages = body.messages
+    .filter((m): m is { role: "user" | "assistant"; content: string | Part[] } => m.role !== "tool")
+    .map((m) => ({ role: m.role, content: m.content }));
+}
+
+/** Demo 只处理文本：多模态 content 数组拍平成文本（图片以占位说明代替）；tool 消息降级为 user 文本 */
+function flatten(messages: Body["messages"]): { role: "user" | "assistant"; content: string }[] {
+  return messages.map((m) => {
+    if (m.role === "tool") {
+      return { role: "user" as const, content: `[工具结果] ${m.content}` };
+    }
+    if (typeof m.content === "string") return { role: m.role, content: m.content };
+    const content = m.content
+      .map((p) => (p.type === "text" ? p.text : "［用户上传了一张图片］"))
+      .join("\n");
+    return { role: m.role, content };
+  });
 }
 
 /* IP 保护：系统提示词只在服务端组装。前端仅发 task+args(纯数据),
@@ -118,17 +146,6 @@ ${s("ragCtx")}
 
 /* 模型配置解析（envKeys/resolveByok/serverConfig）已抽至 @/lib/server/ai-config 以便单测 */
 
-/** Demo 只处理文本：多模态 content 数组拍平成文本（图片以占位说明代替） */
-function flatten(messages: Body["messages"]): { role: "user" | "assistant"; content: string }[] {
-  return messages.map((m) => {
-    if (typeof m.content === "string") return { role: m.role, content: m.content };
-    const content = m.content
-      .map((p) => (p.type === "text" ? p.text : "［用户上传了一张图片］"))
-      .join("\n");
-    return { role: m.role, content };
-  });
-}
-
 function demoTask(
   task: string | undefined,
   system: string,
@@ -211,21 +228,27 @@ class FatalUpstream extends Error { fatal = true; }
 interface UpstreamStats {
   promptTokens?: number;
   completionTokens?: number;
+  /** 网关不支持原生 tools（400）→ 已降级为围栏协议；通知客户端后续轮不再带 tools */
+  nativeToolsRejected?: boolean;
 }
 
 /** 带超时 + 指数退避重试的上游请求（仅在尚未产出任何增量前重试，保证幂等）。
- *  parentSignal：客户端断开时由流的 cancel() 触发，向上游传递中止，停止白烧 token。 */
+ *  parentSignal：客户端断开时由流的 cancel() 触发，向上游传递中止，停止白烧 token。
+ *  tools：原生 tool_calls 契约（仅 agent 任务）；网关 400 拒收时立即降级为无 tools 重试（不消耗重试预算）。 */
 async function fetchUpstream(
   cfg: AIConfig,
   body: Body,
   stats: UpstreamStats,
-  parentSignal?: AbortSignal
+  parentSignal?: AbortSignal,
+  tools?: ReturnType<typeof agentToolsSchema>
 ): Promise<Response> {
   const url = `${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`;
   // OpenAI 官方、DeepSeek、华为云 MaaS（OpenAI 兼容）支持流式回带 usage；其余 provider 保守不发（防 400）
   const wantsUsage = cfg.provider === "deepseek" || cfg.provider === "openai" || cfg.provider === "maas";
+  let useTools = Array.isArray(tools) && tools.length > 0;
   let lastErr = "";
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  let attempt = 0;
+  while (attempt < MAX_ATTEMPTS) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
     const onParentAbort = () => ctrl.abort();
@@ -244,6 +267,7 @@ async function fetchUpstream(
           stream: true,
           temperature: body.temperature ?? 0.7,
           ...(wantsUsage ? { stream_options: { include_usage: true } } : {}),
+          ...(useTools ? { tools, tool_choice: "auto" } : {}),
         }),
         signal: ctrl.signal,
       });
@@ -254,6 +278,13 @@ async function fetchUpstream(
       }
       const text = await res.text().catch(() => "");
       lastErr = `上游模型返回 ${res.status}：${text.slice(0, 300)}`;
+      /* 网关不认识 tools 参数 → 立即降级（围栏协议已在 system 里，模型仍能调工具）。
+       * 不消耗重试预算：这是一次确定性能力探测，不是故障。 */
+      if (res.status === 400 && useTools) {
+        useTools = false;
+        stats.nativeToolsRejected = true;
+        continue;
+      }
       if (!RETRYABLE.has(res.status)) throw new FatalUpstream(lastErr);
     } catch (e) {
       clearTimeout(timer);
@@ -266,8 +297,9 @@ async function fetchUpstream(
     } finally {
       parentSignal?.removeEventListener("abort", onParentAbort);
     }
-    if (attempt < MAX_ATTEMPTS - 1) {
-      await new Promise((r) => setTimeout(r, 500 * 2 ** attempt)); // 500ms → 1s
+    attempt++;
+    if (attempt < MAX_ATTEMPTS) {
+      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1))); // 500ms → 1s
     }
   }
   logEvent({ route: "chat-upstream", status: "fail", lastErr, attempts: MAX_ATTEMPTS });
@@ -278,12 +310,14 @@ async function* upstreamDeltas(
   cfg: AIConfig,
   body: Body,
   stats: UpstreamStats,
-  parentSignal?: AbortSignal
+  parentSignal?: AbortSignal,
+  tools?: ReturnType<typeof agentToolsSchema>
 ) {
-  const res = await fetchUpstream(cfg, body, stats, parentSignal);
+  const res = await fetchUpstream(cfg, body, stats, parentSignal, tools);
   const streamBody = res.body;
   if (!streamBody) return; // fetchUpstream 已保证 ok+body,此处仅为类型收窄
 
+  const agg = new ToolCallAggregator();
   const reader = streamBody.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -297,7 +331,10 @@ async function* upstreamDeltas(
       const t = line.trim();
       if (!t.startsWith("data:")) continue;
       const payload = t.slice(5).trim();
-      if (payload === "[DONE]") return;
+      if (payload === "[DONE]") {
+        if (!agg.isEmpty) yield { nativeToolCalls: agg.finish() };
+        return;
+      }
       try {
         const j = JSON.parse(payload);
         // usage 通常在最后一个不带 choices 的块里
@@ -312,9 +349,14 @@ async function* upstreamDeltas(
         if (think) yield { think: think.slice(0, 200) };
         const piece: string = delta?.content || "";
         if (piece) yield { piece };
+        /* 原生 tool_calls 分片：逐个喂进聚合器，流结束时一次性输出完整调用 */
+        if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
+          agg.feed(delta.tool_calls);
+        }
       } catch { /* 半包，忽略 */ }
     }
   }
+  if (!agg.isEmpty) yield { nativeToolCalls: agg.finish() };
 }
 
 export async function POST(req: NextRequest) {
@@ -347,6 +389,7 @@ export async function POST(req: NextRequest) {
   // 归一化：messages 必须是数组（上游拼装用展开运算符，undefined 会直接抛
   // "t.messages is not iterable"，还会被当成可重试错误白烧三次上游调用）
   if (!Array.isArray(body.messages)) body.messages = [];
+  sanitizeMessages(body);
 
   const byok = (req.headers.get("x-mentora-key") ?? "").trim();
   // 仅部署环境（production/preview）强制登录；本地开发（DEPLOY_ENV/VERCEL_ENV 未设）放行，保 e2e 冒烟链路
@@ -426,11 +469,19 @@ export async function POST(req: NextRequest) {
         } else if (!cfg.apiKey || !cfg.model) {
           push({ t: "e", v: "未配置模型：请在 设置 页填写 API Key，或使用演示模式" });
         } else {
-          for await (const piece of upstreamDeltas(cfg, body, stats, outer.signal)) {
+          /* 原生工具契约：仅 agent 任务且客户端声明 nativeTools 时携带；
+           * 网关拒收（400）会自动降级为围栏协议并回告客户端。 */
+          const tools =
+            body.task === "agent" && body.args?.nativeTools === true && body.args?.noTools !== true
+              ? agentToolsSchema()
+              : undefined;
+          for await (const piece of upstreamDeltas(cfg, body, stats, outer.signal, tools)) {
             if ("error" in piece) push({ t: "e", v: piece.error });
             else if ("think" in piece) push({ t: "h", v: piece.think });
+            else if ("nativeToolCalls" in piece) push({ t: "tc", v: piece.nativeToolCalls });
             else push({ t: "d", v: piece.piece });
           }
+          if (stats.nativeToolsRejected) push({ t: "n", v: "tools_off" });
         }
       } catch (e) {
         if (!(e instanceof DOMException && e.name === "AbortError" && outer.signal.aborted)) {
