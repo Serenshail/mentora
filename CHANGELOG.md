@@ -2,6 +2,15 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v24.0.1–v24.0.4 — 2026-11-05（二期上线修复串：构建自洽 + 派发索引化）
+
+- **v24.0.1 / v24.0.2**：master 构建自洽修复——v24.0 提交时误带了并发会话未提交的 prompts.ts 改动（NOTE_ASSIST 严格联合类型）与 chat/route.ts 的会员门禁依赖（lib/server/entitlement 未提交），导致 Vercel 与腾讯云构建失败。处理：`/api/chat/route.ts` 与 `prompts.ts` 均用 git 干净版 + 本会话的个人上下文改动拼出可部署版本（`git hash-object -w` + `update-index --cacheinfo` 入索引，**不覆盖并发会话的工作区文件**）；记忆注入锚点修正为只在 AGENT_CHAT 模板内插入（首版误插到 reading-chat 模板，构建报 `Cannot find name 'opts'`）。
+- **v24.0.3**：**触发与投递解耦**——自托管未配发信服务时，tick 不再直接失败，而是照常标记 lastRunKey 并记 `lastDeliveredVia: "inapp"`，应用内横幅（firedToday）兜底提醒；配好 RESEND_API_KEY/华为中继后自动升级为邮件。
+- **v24.0.4**：**派发索引化**——实测全量遍历 users/ 需 **46 秒**（每人多次 KV 往返），超 Vercel 60s 上限也让每分钟定时器排队。改为维护 `automations/_index.json`（owners 带 email），tick 只扫有提醒的用户：**实测降到 850ms**；另加 20s 时间预算与单次上限 20 条。
+- 定时器踩坑：systemd unit 里嵌套单双引号被吃掉（curl 把 secret 当主机名）——改为独立脚本 `/opt/mentora/scripts/tick.sh`，unit 只调用脚本。
+- 验证：三处生产 e2e 各 6/6（本地 / 腾讯云公网 / Vercel）；腾讯云端到端实测"建提醒 → 定时器触发 → firedToday=true → 删除后索引归零"；tsc 0 错 / eslint 0 error / vitest 206 通过 / build 通过。
+- 回退：`v24.0-memory`。
+
 ## v24.0 — 2026-11-05（二期：长期记忆 + 定时提醒，技能按用户裁定不做）
 
 主线：让智能体记住人、到点提醒人。技能（声明式指令安装）已按用户决定移除，代码零残留。
