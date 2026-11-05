@@ -148,6 +148,7 @@ ${s("ragCtx")}
         deep: args.deep === true,
         hasImage: args.hasImage === true,
         tools: args.noTools === true ? "" : agentToolsPrompt(),
+        personal: s("personal"),
       });
     case "note-assist": {
       const mode = s("mode");
@@ -614,6 +615,14 @@ export async function POST(req: NextRequest) {
       return { q: String(o.q ?? ""), a: String(o.a ?? "") };
     });
   }
+  /* 个人上下文（v24.0 二期）：长期记忆摘要，仅 agent 任务、登录态；
+   * 带 1.5s 硬预算——KV 变慢宁可不注入，也不能让首字节等超时。
+   * （v25.0 提交时此块曾被覆盖丢失，此处恢复接线。） */
+  if (body.task === "agent" && session) {
+    const personal = await withBudget(agentPersonalContext(session.userId), "", 1500);
+    body.args = { ...(body.args ?? {}), personal };
+  }
+
   const system =
     body.args && Object.keys(body.args).length > 0
       ? buildSystem(body.task, body.args)
