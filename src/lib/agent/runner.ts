@@ -97,6 +97,10 @@ export async function runAgent(opts: {
   const toolsUsed: ToolCall[] = [];
   const citations: Citation[] = [];
   let lastAnswer = "";
+  /* 多轮回答的正文累积：带工具调用的轮次里，模型常先写出实质正文（深讲骨架的前几步）
+   * 再发起工具调用（如出题）。这些正文是最终回答的一部分，不是"过渡语"——
+   * 不累积的话，流式展示后会被清掉，用户看到的消息只剩最后一轮（实测丢整个讲解）。 */
+  const answerParts: string[] = [];
 
   /* 显式维护对话：history 已包含本轮用户消息，首轮直接用它 */
   const convo: WireMsg[] = [...history];
@@ -108,10 +112,11 @@ export async function runAgent(opts: {
   /* 工具结果累积（围栏通道回注 ctx 用） */
   const toolLog: string[] = [];
 
-  const answer = async (): Promise<AgentRunResult> => ({
-    answer: lastAnswer,
-    meta: { plan, tools: toolsUsed, citations },
-  });
+  const answer = async (): Promise<AgentRunResult> => {
+    const parts = [...answerParts];
+    if (lastAnswer && parts[parts.length - 1] !== lastAnswer) parts.push(lastAnswer);
+    return { answer: parts.filter(Boolean).join("\n\n"), meta: { plan, tools: toolsUsed, citations } };
+  };
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     if (signal.aborted) {
@@ -252,6 +257,13 @@ export async function runAgent(opts: {
     }
     lastRoundSigs = new Set(sigs);
 
+    /* 本轮实质正文入列（工具轮次不等于过渡语：深讲骨架的正文常在这里产生）。
+     * 短寒暄（"我查一下"）不入列；与上一段相同不重复入列。 */
+    const cleanedThisRound = stripDirectives(full);
+    if (cleanedThisRound && cleanedThisRound.length > 60 && cleanedThisRound !== answerParts[answerParts.length - 1]) {
+      answerParts.push(cleanedThisRound);
+    }
+
     /* 执行本批工具（并行）：读工具直接跑，写工具产 PendingAction */
     const started = calls.map((c) => {
       const call: ToolCall = {
@@ -378,14 +390,10 @@ export async function runAgent(opts: {
       cb.onPlan(plan);
     }
 
-    lastAnswer = stripDirectives(full);
-
     if (round === MAX_TOOL_ROUNDS) {
       cb.onPhase("failed");
-      return {
-        answer: `${lastAnswer || ""}\n\n（已达到单轮工具调用上限 ${MAX_TOOL_ROUNDS} 次，先停在这里。需要继续可以再问一次。）`.trim(),
-        meta: { plan, tools: toolsUsed, citations },
-      };
+      lastAnswer = `（已达到单轮工具调用上限 ${MAX_TOOL_ROUNDS} 次，先停在这里。需要继续可以再问一次。）`;
+      return answer();
     }
   }
 
