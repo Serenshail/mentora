@@ -16,7 +16,17 @@ export const runtime = "nodejs";
 const TOTAL_TIMEOUT_MS = 8_000;
 const MAX_BYTES = 200_000;
 const MAX_REDIRECTS = 4;
-const UA = "Mozilla/5.0 (compatible; MentoraAgent/1.0; +https://mentora.app)";
+/* 浏览器伪装头（参考实现同款纪律）：很多站点对非浏览器 UA/缺 Accept-Language 直接 403。
+ * 仅用于读取公开网页。 */
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const BROWSER_HEADERS: Record<string, string> = {
+  "User-Agent": UA,
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
+  Referer: "https://www.google.com/",
+};
 const OK_TYPES = ["text/html", "application/xhtml+xml", "text/plain", "text/markdown"];
 
 function decodeEntities(s: string): string {
@@ -73,7 +83,7 @@ export async function POST(req: NextRequest) {
         return Response.json({ error: guard.reason || "地址不受支持" }, { status: 400 });
       }
       const res = await fetch(shaped.toString(), {
-        headers: { "User-Agent": UA, Accept: "text/html,text/plain,*/*;q=0.5" },
+        headers: BROWSER_HEADERS,
         redirect: "manual",
         signal: AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
       });

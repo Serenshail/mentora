@@ -4,24 +4,26 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { fsrs, generatorParameters, createEmptyCard, Rating, State } from "ts-fsrs";
 import { useShallow } from "zustand/react/shallow";
-import {
-  NodeStatus,
-  DayPlan,
-} from "@/lib/types";
+import { MASTERY_ORDER } from "./types";
 import type {
+  AgentSession,
   Book,
+  BookChapter,
   ChatMsg,
   CouncilSession,
   CustomPersona,
+  DayPlan,
   Goal,
   KnowledgeItem,
   MasteryStatus,
   KnowledgeSource,
   KnowledgeType,
+  NodeStatus,
   Plan,
   QuizResult,
   Settings,
 } from "./types";
+import { PROVIDERS } from "./ai/providers";
 import { todayISO, uid } from "./utils";
 import { backfillReviewDates, reviewPatch } from "./review";
 import { track } from "./track";
@@ -72,8 +74,12 @@ function stageOf(scheduled: number): number {
 }
 
 interface AppState {
-  /** 首页智能体对话（本地记忆，不参与云同步；跨设备不迁移，M2 范围） */
+  /** 首页智能体对话（本地记忆，不参与云同步；跨设备不迁移，M2 范围）
+   * v23.2 起由 agentSessions 承载（多会话）；agentChat 仅作 v6 迁移源 */
   agentChat: ChatMsg[];
+  /** 主对话框多会话（v23.2）：新建/切换/删除，标题=首问截断 */
+  agentSessions: AgentSession[];
+  agentActiveId: string | null;
   goals: Goal[];
   knowledge: KnowledgeItem[];
   books: Book[];
@@ -109,6 +115,10 @@ interface AppState {
   ) => void;
   completeTransfer: (goalId: string, dayId: string, answer: string) => void;
   incrementAttempts: (goalId: string, dayId: string) => void;
+  /** 定点写回某天知识点的掌握状态：只替换该天 knowledgePoints，不覆盖 plan 里其他并发更新 */
+  setDayKnowledgeMastery: (goalId: string, dayId: string, mastery: MasteryStatus) => void;
+  /** 定点追加当日答疑消息：只动 day.qa，不覆盖同期写入的 lesson/status 等字段 */
+  appendDayQa: (goalId: string, dayId: string, msg: ChatMsg) => void;
   logQuiz: (goalId: string, result: QuizResult) => void;
 
   addFolder: (name: string) => void;
@@ -135,6 +145,8 @@ interface AppState {
 
   addBook: (b: Book) => void;
   updateBook: (id: string, patch: Partial<Book>) => void;
+  /** 定点更新单个章节：避免用渲染闭包里的整本 chapters 回写，冲掉其他章节的并发改动 */
+  updateBookChapter: (bookId: string, chapterId: string, patch: Partial<BookChapter>) => void;
   removeBook: (id: string) => void;
   addBookMsg: (id: string, msg: ChatMsg) => void;
   addInsight: (bookId: string, text: string) => void;
@@ -146,12 +158,17 @@ interface AppState {
   addSessionMsg: (id: string, msg: ChatMsg) => void;
   appendAgentMsg: (msg: ChatMsg) => void;
   clearAgentChat: () => void;
+  /** v23.2 多会话：新建（返回新 id 并激活）、切换、删除；appendAgentMsg 写入当前激活会话 */
+  newAgentSession: () => string;
+  setAgentActive: (id: string | null) => void;
+  removeAgentSession: (id: string) => void;
 
   addCustomPersona: (p: CustomPersona) => void;
   removeCustomPersona: (id: string) => void;
 
   setSettings: (patch: Partial<Settings>) => void;
-  importData: (data: Partial<AppState>) => void;
+  /** 导入备份/云端快照。入参校验失败返回 false，且不写入任何状态。 */
+  importData: (data: unknown) => boolean;
   resetAll: () => void;
   seedSampleGoal: () => string;
 }
@@ -296,6 +313,100 @@ function linkifyBodies(knowledge: KnowledgeItem[]): KnowledgeItem[] {
   });
 }
 
+/* ========= 导入校验（备份文件 / 云端快照共用） =========
+ * 旧实现只做 JSON.parse 就整体合并：`{"goals":"x"}` 之类坏数据会直接进 store 并落盘，
+ * 刷新后 goals.map / PROVIDERS[provider] 抛 TypeError，全应用崩死且应用内无自救入口。
+ * 这里做结构校验：字段类型不对就整份拒绝（文件导入据此提示），单个脏元素则过滤掉。 */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** undefined = 未提供；null = 提供了但类型不对（调用方应拒绝整份数据） */
+function optionalRecords(v: unknown): Record<string, unknown>[] | undefined | null {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v)) return null;
+  return v.filter(isRecord);
+}
+
+/** 校验后的导入载荷：settings 允许只带部分字段（与现有设置合并） */
+type SanitizedBackup = Omit<Partial<AppState>, "settings"> & { settings?: Partial<Settings> };
+
+function sanitizeBackup(raw: unknown): SanitizedBackup | null {
+  if (!isRecord(raw)) return null;
+  const out: SanitizedBackup = {};
+
+  const goals = optionalRecords(raw.goals);
+  if (goals === null) return null;
+  if (goals) {
+    out.goals = goals.map((g) => ({
+      ...g,
+      id: typeof g.id === "string" ? g.id : uid("g"),
+      topic: typeof g.topic === "string" ? g.topic : "",
+      quizLog: Array.isArray(g.quizLog) ? g.quizLog : [],
+      intakeTranscript: Array.isArray(g.intakeTranscript) ? g.intakeTranscript : [],
+      plan: isRecord(g.plan) ? g.plan : undefined,
+    })) as unknown as Goal[];
+  }
+
+  const knowledge = optionalRecords(raw.knowledge);
+  if (knowledge === null) return null;
+  if (knowledge) {
+    out.knowledge = knowledge.map((k) => ({
+      ...k,
+      id: typeof k.id === "string" ? k.id : uid("k"),
+      title: typeof k.title === "string" ? k.title : "未命名笔记",
+      body: typeof k.body === "string" ? k.body : "",
+      links: Array.isArray(k.links) ? k.links.filter((x): x is string => typeof x === "string") : [],
+    })) as unknown as KnowledgeItem[];
+  }
+
+  const books = optionalRecords(raw.books);
+  if (books === null) return null;
+  if (books) {
+    out.books = books.map((b) => ({
+      ...b,
+      id: typeof b.id === "string" ? b.id : uid("b"),
+      chapters: Array.isArray(b.chapters) ? b.chapters : [],
+      insights: Array.isArray(b.insights) ? b.insights : [],
+      chat: Array.isArray(b.chat) ? b.chat : [],
+    })) as unknown as Book[];
+  }
+
+  const sessions = optionalRecords(raw.sessions);
+  if (sessions === null) return null;
+  if (sessions) {
+    out.sessions = sessions.map((s) => ({
+      ...s,
+      id: typeof s.id === "string" ? s.id : uid("s"),
+      messages: Array.isArray(s.messages) ? s.messages : [],
+    })) as unknown as CouncilSession[];
+  }
+
+  const personas = optionalRecords(raw.customPersonas);
+  if (personas === null) return null;
+  if (personas) out.customPersonas = personas as unknown as CustomPersona[];
+
+  if (raw.folders !== undefined && raw.folders !== null) {
+    if (!Array.isArray(raw.folders)) return null;
+    out.folders = raw.folders.filter((f): f is string => typeof f === "string");
+  }
+
+  if (raw.settings !== undefined && raw.settings !== null) {
+    if (!isRecord(raw.settings)) return null;
+    const settings = { ...raw.settings } as Partial<Settings>;
+    // 非法 provider 会让 ModelSection 的 PROVIDERS[provider].modelHints 直接 TypeError
+    if (settings.provider !== undefined && !Object.hasOwn(PROVIDERS, settings.provider)) {
+      delete settings.provider;
+    }
+    if (settings.apiKey !== undefined && typeof settings.apiKey !== "string") {
+      delete settings.apiKey;
+    }
+    out.settings = settings;
+  }
+
+  return out;
+}
+
 /* ========= 掌握状态推进（v17 拆至纯模块 mastery.ts，可单测） =========
  * store 内部与外部调用点都从这里拿：行为与原 store 内联版一致，新增复习接线与 apply 迁移证据。 */
 export { advanceMastery, masteryFromQuiz, masteryFromReview, maxStatus } from "./mastery";
@@ -305,6 +416,8 @@ export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
       agentChat: [],
+      agentSessions: [],
+      agentActiveId: null,
       goals: [],
       knowledge: [],
       books: [],
@@ -488,6 +601,44 @@ export const useAppStore = create<AppState>()(
             const day = plan.days[dayId];
             if (day) day.attempts += 1;
             return { ...g, plan };
+          }),
+        })),
+      setDayKnowledgeMastery: (goalId, dayId, mastery) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const day = g.plan.days[dayId];
+            if (!day) return g;
+            const knowledgePoints = day.knowledgePoints.map((k) => ({
+              ...k,
+              masteryStatus: mastery,
+              historicalHighest:
+                !k.historicalHighest ||
+                MASTERY_ORDER.indexOf(mastery) > MASTERY_ORDER.indexOf(k.historicalHighest)
+                  ? mastery
+                  : k.historicalHighest,
+            }));
+            /* 定点 patch：只替换这一天的知识点，其余字段沿用 store 最新状态。
+             * 旧实现用渲染闭包里的 plan 整体回写，会把并发写入的 passed/pendingUnlock/attempts 冲掉。 */
+            return {
+              ...g,
+              plan: { ...g.plan, days: { ...g.plan.days, [dayId]: { ...day, knowledgePoints } } },
+            };
+          }),
+        })),
+      appendDayQa: (goalId, dayId, msg) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const day = g.plan.days[dayId];
+            if (!day) return g;
+            return {
+              ...g,
+              plan: {
+                ...g.plan,
+                days: { ...g.plan.days, [dayId]: { ...day, qa: [...(day.qa ?? []), msg] } },
+              },
+            };
           }),
         })),
       logQuiz: (goalId, result) =>
@@ -848,6 +999,17 @@ export const useAppStore = create<AppState>()(
         set((s) => ({
           books: s.books.map((b) => (b.id === id ? { ...b, ...patch } : b)),
         })),
+      updateBookChapter: (bookId, chapterId, patch) =>
+        set((s) => ({
+          books: s.books.map((b) =>
+            b.id === bookId
+              ? {
+                  ...b,
+                  chapters: b.chapters.map((c) => (c.id === chapterId ? { ...c, ...patch } : c)),
+                }
+              : b
+          ),
+        })),
       removeBook: (id) =>
         set((s) => ({ books: s.books.filter((b) => b.id !== id) })),
       addBookMsg: (id, msg) =>
@@ -900,8 +1062,72 @@ export const useAppStore = create<AppState>()(
             x.id === id ? { ...x, messages: [...x.messages, msg] } : x
           ),
         })),
-      appendAgentMsg: (msg) => set((s) => ({ agentChat: [...s.agentChat, msg] })),
-      clearAgentChat: () => set({ agentChat: [] }),
+      appendAgentMsg: (msg) =>
+        set((s) => {
+          /* v23.2：写入当前激活会话；没有激活会话（或已失效）就自动建一个，
+           * 标题取首条用户消息截断——"新建对话框"由此实现 */
+          let sessions = s.agentSessions;
+          let activeId = s.agentActiveId;
+          const valid = sessions.find((x) => x.id === activeId);
+          if (!valid) {
+            const now = new Date().toISOString();
+            const fresh: AgentSession = {
+              id: uid("as"),
+              title: msg.role === "user" ? msg.content.slice(0, 24) || "新对话" : "新对话",
+              messages: [],
+              createdAt: now,
+              updatedAt: now,
+            };
+            sessions = [fresh, ...sessions];
+            activeId = fresh.id;
+          }
+          return {
+            agentSessions: sessions.map((x) =>
+              x.id === activeId
+                ? {
+                    ...x,
+                    messages: [...x.messages, msg],
+                    /* "新对话"占位标题在首条用户消息到达时替换成真实内容 */
+                    title:
+                      x.title === "新对话" && msg.role === "user"
+                        ? msg.content.slice(0, 24) || x.title
+                        : x.title,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : x
+            ),
+            agentActiveId: activeId,
+          };
+        }),
+      clearAgentChat: () =>
+        set((s) => ({
+          /* 语义跟随多会话：清空当前激活会话的消息；没有会话时清 legacy 字段 */
+          agentSessions: s.agentSessions.map((x) =>
+            x.id === s.agentActiveId ? { ...x, messages: [], updatedAt: new Date().toISOString() } : x
+          ),
+          ...(s.agentActiveId ? {} : { agentChat: [] }),
+        })),
+      newAgentSession: () => {
+        const now = new Date().toISOString();
+        const fresh: AgentSession = {
+          id: uid("as"),
+          title: "新对话",
+          messages: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        set((s) => ({ agentSessions: [fresh, ...s.agentSessions], agentActiveId: fresh.id }));
+        return fresh.id;
+      },
+      setAgentActive: (id) => set({ agentActiveId: id }),
+      removeAgentSession: (id) =>
+        set((s) => {
+          const rest = s.agentSessions.filter((x) => x.id !== id);
+          return {
+            agentSessions: rest,
+            agentActiveId: s.agentActiveId === id ? (rest[0]?.id ?? null) : s.agentActiveId,
+          };
+        }),
 
       addCustomPersona: (p) =>
         set((s) => ({ customPersonas: [p, ...s.customPersonas] })),
@@ -913,15 +1139,26 @@ export const useAppStore = create<AppState>()(
 
       setSettings: (patch) =>
         set((s) => ({ settings: { ...s.settings, ...patch } })),
-      importData: (data) =>
-        set((s) => ({
-          goals: data.goals ?? s.goals,
-          knowledge: backfillReviewDates(data.knowledge ?? s.knowledge, todayISO()),
-          books: data.books ?? s.books,
-          sessions: data.sessions ?? s.sessions,
-          customPersonas: data.customPersonas ?? s.customPersonas,
-          settings: { ...s.settings, ...(data.settings ?? {}) },
-        })),
+      importData: (data) => {
+        const clean = sanitizeBackup(data);
+        if (!clean) return false;
+        set((s) => {
+          const incoming: Partial<Settings> = clean.settings ?? {};
+          const settings = { ...s.settings, ...incoming };
+          /* 导出的备份恒带 apiKey:""——不能因为恢复/导入把本机已配的 Key 抹掉。 */
+          if (!incoming.apiKey) settings.apiKey = s.settings.apiKey;
+          return {
+            goals: clean.goals ?? s.goals,
+            knowledge: backfillReviewDates(clean.knowledge ?? s.knowledge, todayISO()),
+            books: clean.books ?? s.books,
+            sessions: clean.sessions ?? s.sessions,
+            customPersonas: clean.customPersonas ?? s.customPersonas,
+            ...(clean.folders ? { folders: clean.folders } : {}),
+            settings,
+          };
+        });
+        return true;
+      },
       seedSampleGoal: () => {
         const id = uid("g");
         const kp = (t: string, kt: KnowledgeType) => ({ id: uid("kp"), text: t, knowledgeType: kt });
@@ -996,6 +1233,8 @@ export const useAppStore = create<AppState>()(
       resetAll: () =>
         set({
           agentChat: [],
+          agentSessions: [],
+          agentActiveId: null,
           goals: [],
           knowledge: [],
           books: [],
@@ -1008,7 +1247,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "mentora-store-anon",
-      version: 6,
+      version: 7,
       // 跳过 persist 的自动 rehydrate：水合完全由 setStoreUser() 同步掌控。
       // 否则刷新页面时 persist 会用 anon 仓异步覆盖内存,而此刻 setOptions 已换到用户仓——
       // 空状态随后被写进用户仓,goal 凭空消失(实测:导航后 3s goals 1→0,堆栈指向 persist setState)。
@@ -1016,6 +1255,8 @@ export const useAppStore = create<AppState>()(
       storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({
         agentChat: state.agentChat,
+        agentSessions: state.agentSessions,
+        agentActiveId: state.agentActiveId,
         goals: state.goals,
         knowledge: state.knowledge,
         books: state.books,
@@ -1069,6 +1310,29 @@ export const useAppStore = create<AppState>()(
         if (version < 6) {
           return { ...state, agentChat: state.agentChat ?? [] } as AppState;
         }
+        // v7:主对话框多会话——把旧的单数组 agentChat 包装成一个历史会话，保留全部内容
+        if (version < 7) {
+          const legacy = ((state as { agentChat?: ChatMsg[] }).agentChat ?? []) as ChatMsg[];
+          const firstUser = legacy.find((m) => m.role === "user")?.content ?? "";
+          const wrapped: AgentSession[] =
+            legacy.length > 0
+              ? [
+                  {
+                    id: uid("as"),
+                    title: firstUser.slice(0, 24) || "历史对话",
+                    messages: legacy,
+                    createdAt: legacy[0]?.at ?? new Date().toISOString(),
+                    updatedAt: legacy[legacy.length - 1]?.at ?? new Date().toISOString(),
+                  },
+                ]
+              : [];
+          return {
+            ...state,
+            agentSessions: wrapped,
+            agentActiveId: wrapped[0]?.id ?? null,
+            agentChat: [],
+          } as AppState;
+        }
         return state as AppState;
       },
     }
@@ -1102,6 +1366,8 @@ export function setStoreUser(userId: string | null) {
   // 曾导致用户本地快照被清空（数据"消失"事故）。localStorage 读取是同步的，无竞态。
   const defaults = {
     agentChat: [] as ChatMsg[],
+    agentSessions: [] as AgentSession[],
+    agentActiveId: null as string | null,
     goals: [] as Goal[],
     knowledge: [] as KnowledgeItem[],
     books: [] as Book[],
@@ -1117,6 +1383,25 @@ export function setStoreUser(userId: string | null) {
       const parsed = JSON.parse(raw) as { state?: Record<string, unknown>; version?: number };
       const st = (parsed?.state ?? {}) as Partial<AppState> & { knowledge?: unknown[] };
       const ver = parsed?.version ?? 2;
+      // v7 手动装载迁移：旧仓（version<7）只有单数组 agentChat，包装成一个历史会话。
+      // persist.migrate 不会在这里跑（skipHydration + 直接读盘），必须手动同款迁移。
+      const stAgent = st as Partial<AppState> & { agentSessions?: AgentSession[] };
+      let legacySessions: AgentSession[] | null = null;
+      if (ver < 7 && !stAgent.agentSessions?.length) {
+        const legacy = (st.agentChat ?? []) as ChatMsg[];
+        if (legacy.length > 0) {
+          const firstUser = legacy.find((m) => m.role === "user")?.content ?? "";
+          legacySessions = [
+            {
+              id: uid("as"),
+              title: firstUser.slice(0, 24) || "历史对话",
+              messages: legacy,
+              createdAt: legacy[0]?.at ?? new Date().toISOString(),
+              updatedAt: legacy[legacy.length - 1]?.at ?? new Date().toISOString(),
+            },
+          ];
+        }
+      }
       // 与 persist.migrate 完全同一套迁移:同步加载路径也要跑(v2/v3 双链解析/v4 Day 前缀清洗/v5 天标题重编)。
       // 此前 v<2 分支只跑 migrateKnowledge 漏了 linkifyBodies——老用户图谱/反链为空。
       let knowledge = st.knowledge ?? [];
@@ -1158,6 +1443,10 @@ export function setStoreUser(userId: string | null) {
         knowledge: backfillReviewDates(knowledge as KnowledgeItem[], todayISO()),
         goals: fixedGoals,
       };
+      if (legacySessions) {
+        loaded.agentSessions = legacySessions;
+        loaded.agentActiveId = legacySessions[0].id;
+      }
     }
   } catch {
     /* 损坏的仓按空仓处理，绝不写入破坏 */

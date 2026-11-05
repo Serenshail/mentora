@@ -6,7 +6,7 @@
  * 页面关系：对话是主入口；学习/读书/圆桌/笔记库保留为工作台，Agent 的写入
  * 最终都落到这些工作台的数据里。 */
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Check, Circle, Eraser, ImagePlus, Link2, Loader2, Sparkles, X } from "lucide-react";
+import { ArrowUp, Check, Circle, Eraser, History, ImagePlus, Link2, Loader2, Plus, Sparkles, X, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
@@ -74,9 +74,16 @@ function actionPreview(a: PendingAction): string | null {
 }
 
 export function AgentHome() {
-  const agentChat = useAppStore((s) => s.agentChat);
+  /* v23.2 多会话：渲染与写入都走 agentSessions；agentChat 仅是 v6 迁移遗留 */
+  const activeId = useAppStore((s) => s.agentActiveId);
+  const sessions = useAppStore((s) => s.agentSessions);
   const appendAgentMsg = useAppStore((s) => s.appendAgentMsg);
   const clearAgentChat = useAppStore((s) => s.clearAgentChat);
+  const newAgentSession = useAppStore((s) => s.newAgentSession);
+  const setAgentActive = useAppStore((s) => s.setAgentActive);
+  const removeAgentSession = useAppStore((s) => s.removeAgentSession);
+  const activeSession = sessions.find((x) => x.id === activeId) ?? null;
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState("");
   const [busy, setBusy] = useState(false);
@@ -178,7 +185,10 @@ export function AgentHome() {
         { label: "思考", state: "done", durationMs: Date.now() - t0 },
         { label: "回答中", state: "running" },
       ]);
-      const history = [...useAppStore.getState().agentChat].slice(-9).map((m) => ({
+      /* 历史上下文：当前激活会话最近 9 条（appendAgentMsg 已把本轮用户消息落库） */
+      const stAfter = useAppStore.getState();
+      const activeNow = stAfter.agentSessions.find((x) => x.id === stAfter.agentActiveId);
+      const history = (activeNow?.messages ?? []).slice(-9).map((m) => ({
         role: m.role,
         content: m.content,
       }));
@@ -257,30 +267,96 @@ export function AgentHome() {
   };
   /* eslint-enable react-hooks/purity */
 
-  const shown = agentChat.slice(-10);
+  const shown = (activeSession?.messages ?? []).slice(-10);
 
   return (
     <div className="flex h-[calc(100dvh-150px)] min-h-[520px] flex-col">
-      {/* 极简头部：一个标识 + 清空（Codex 式的克制） */}
-      <div className="flex items-center justify-between px-1 pb-3">
+      {/* 头部：标识 + 新建对话 + 历史记录 + 清空当前 */}
+      <div className="relative flex items-center justify-between px-1 pb-3">
         <div className="flex items-center gap-2">
           <span className="grid size-6 place-items-center rounded-lg bg-[#1d1d1f] text-white">
             <Sparkles className="size-3.5" />
           </span>
           <p className="text-[13px] font-semibold text-ink">Mentora</p>
-          <span className="text-[11px] text-ink-dim/70">
-            {shown.length === 0 ? "问什么都可以：搜索、讲解、建笔记、改设置" : ""}
-          </span>
+          {activeSession && (
+            <span className="max-w-[220px] truncate text-[11px] text-ink-dim/70">
+              {activeSession.title}
+            </span>
+          )}
         </div>
-        {agentChat.length > 0 && (
+        <div className="flex items-center gap-1">
           <button
-            onClick={clearAgentChat}
-            className="flex shrink-0 cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink"
-            title="清空这段对话"
+            onClick={() => {
+              if (busy) return;
+              /* 已有空白新会话就不重复建 */
+              if (!activeSession || activeSession.messages.length > 0) newAgentSession();
+              setHistoryOpen(false);
+            }}
+            disabled={busy}
+            className="flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink disabled:opacity-40"
+            title="开始一段新对话"
           >
-            <Eraser className="size-3" /> 清空
+            <Plus className="size-3.5" /> 新对话
           </button>
-        )}
+          <div className="relative">
+            <button
+              onClick={() => setHistoryOpen((v) => !v)}
+              className="flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink"
+              title="历史对话"
+            >
+              <History className="size-3.5" /> 历史{sessions.length > 0 ? ` ${sessions.length}` : ""}
+            </button>
+            {historyOpen && (
+              <div className="absolute right-0 top-full z-20 mt-1 max-h-[320px] w-72 overflow-y-auto rounded-xl border border-border bg-white p-1.5 shadow-xl">
+                {sessions.length === 0 && (
+                  <p className="px-2 py-3 text-center text-[11.5px] text-ink-dim">还没有历史对话</p>
+                )}
+                {sessions.map((sess) => (
+                  <div
+                    key={sess.id}
+                    className={cn(
+                      "group flex items-center gap-1 rounded-lg px-2 py-1.5",
+                      sess.id === activeId ? "bg-surface-2" : "hover:bg-black/[0.04]"
+                    )}
+                  >
+                    <button
+                      onClick={() => {
+                        setAgentActive(sess.id);
+                        setHistoryOpen(false);
+                        setPending("");
+                        setPlan([]);
+                        setTools([]);
+                        setPendingActions([]);
+                      }}
+                      className="min-w-0 flex-1 cursor-pointer text-left"
+                    >
+                      <p className="truncate text-[12px] text-ink">{sess.title}</p>
+                      <p className="text-[10.5px] text-ink-dim/70">
+                        {sess.messages.length} 条 · {new Date(sess.updatedAt).toLocaleDateString("zh-CN")}
+                      </p>
+                    </button>
+                    <button
+                      onClick={() => removeAgentSession(sess.id)}
+                      aria-label="删除这段对话"
+                      className="cursor-pointer rounded-md p-1 text-ink-dim/50 opacity-0 transition hover:bg-bad/10 hover:text-bad group-hover:opacity-100"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {shown.length > 0 && (
+            <button
+              onClick={clearAgentChat}
+              className="flex shrink-0 cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink"
+              title="清空这段对话"
+            >
+              <Eraser className="size-3" /> 清空
+            </button>
+          )}
+        </div>
       </div>
 
       {shown.length === 0 && (

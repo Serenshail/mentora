@@ -37,10 +37,10 @@ import { useEffect, useState, type ReactNode } from "react";
  * 读书伙伴与人生伙伴保留独立入口（各有结构化工作台）。 */
 const NAV = [
   { href: "/", label: "Mentora", icon: Sparkles },
+  { href: "/council", label: "人生伙伴", icon: Compass },
   { href: "/learn", label: "学习", icon: GraduationCap },
   { href: "/life", label: "学习人生", icon: Footprints },
   { href: "/read", label: "读书伙伴", icon: BookOpen },
-  { href: "/council", label: "人生伙伴", icon: Compass },
   { href: "/settings", label: "设置", icon: Settings2 },
 ];
 

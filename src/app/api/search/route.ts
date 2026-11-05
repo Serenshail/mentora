@@ -50,10 +50,75 @@ async function searchBrave(query: string): Promise<SearchResult[]> {
     .map((r) => ({ title: r.title || r.url!, url: r.url!, snippet: (r.description || "").slice(0, 300) }));
 }
 
+/* 浏览器伪装头（抄自参考实现的核心纪律）：搜索引擎对非浏览器
+ * UA / 缺 Accept-Language 的请求直接 403；带上完整 Chrome 头可过基础反爬。 */
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const BROWSER_HEADERS: Record<string, string> = {
+  "User-Agent": BROWSER_UA,
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
+};
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&ensp;|&#8194;/g, " ")
+    .replace(/&middot;|&#0183;/g, "·")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)));
+}
+
+/** 无 Key 默认源：Bing 网页解析（cn.bing.com 国内外服务器均可达；
+ * DDG 对数据中心 IP 反爬封锁，实测 Vercel hkg1 与国内直连都不可用，仅作末位兜底）。 */
+async function searchBing(query: string): Promise<SearchResult[]> {
+  const hosts = ["https://cn.bing.com", "https://www.bing.com"];
+  let html = "";
+  for (const host of hosts) {
+    const url = `${host}/search?q=${encodeURIComponent(query)}&mkt=zh-CN&count=10`;
+    const res = await fetch(url, {
+      headers: { ...BROWSER_HEADERS, Referer: `${host}/` },
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`bing ${res.status}`);
+    html = await res.text();
+    if (html.includes('class="b_algo"')) break;
+  }
+  if (!html.includes('class="b_algo"')) throw new Error("bing 无结果页");
+
+  const out: SearchResult[] = [];
+  /* 每条结果是一个 <li class="b_algo"> 块：h2>a=标题+链接，第一个 <p>=摘要 */
+  for (const m of html.matchAll(/<li class="b_algo"[\s\S]*?<\/li>/g)) {
+    if (out.length >= MAX_RESULTS) break;
+    const block = m[0];
+    const a = /<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+    if (!a) continue;
+    let href = a[1];
+    /* bing 的跳转链接 /ck/a?...&u=a1<base64url> → 解出真实地址 */
+    const uParam = /[?&]u=a1([^&]+)/.exec(href);
+    if (uParam && /^https?:\/\//i.test(Buffer.from(uParam[1], "base64").toString("utf8"))) {
+      href = Buffer.from(uParam[1], "base64").toString("utf8");
+    }
+    if (!/^https?:\/\//i.test(href)) continue;
+    const title = decodeEntities(a[2].replace(/<[^>]+>/g, "")).trim();
+    const p = /<p[^>]*>([\s\S]*?)<\/p>/i.exec(block);
+    const snippet = p ? decodeEntities(p[1].replace(/<[^>]+>/g, "")).trim() : "";
+    out.push({ title: title || href, url: href, snippet: snippet.slice(0, 300) });
+  }
+  if (out.length === 0) throw new Error("bing 解析为空");
+  return out;
+}
+
 /** 无 Key 兜底：DuckDuckGo Lite 网页解析（尽力而为，被反爬时如实报错） */
 async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
   const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; MentoraAgent/1.0)" },
+    headers: { ...BROWSER_HEADERS, Referer: "https://www.google.com/" },
     signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`duckduckgo ${res.status}`);
@@ -100,6 +165,7 @@ export async function POST(req: NextRequest) {
   const providers: { name: string; run: () => Promise<SearchResult[]> }[] = [];
   if (process.env.TAVILY_API_KEY) providers.push({ name: "tavily", run: () => searchTavily(query) });
   if (process.env.BRAVE_API_KEY) providers.push({ name: "brave", run: () => searchBrave(query) });
+  providers.push({ name: "bing", run: () => searchBing(query) });
   providers.push({ name: "duckduckgo", run: () => searchDuckDuckGo(query) });
 
   let lastErr = "";

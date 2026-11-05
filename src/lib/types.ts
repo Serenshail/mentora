@@ -312,6 +312,15 @@ export interface MsgMeta {
   citations?: { title: string; url: string }[];
 }
 
+/** 主对话框会话（v23.2 多会话）：标题=首问截断；本地记忆，不参与云同步 */
+export interface AgentSession {
+  id: string;
+  title: string;
+  messages: ChatMsg[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BookProfile {
   positioning: string;
   author: string;
