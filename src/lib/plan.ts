@@ -112,10 +112,15 @@ export function phaseDraftToDay(
       if (typeof t === "string") return { id: uid("kp"), text: t };
       return { id: uid("kp"), text: t.text, knowledgeType: t.knowledgeType };
     }),
+    /* 与 draftToPlan 同一口径：schema 特意容错解析的 year/kind/evergreen 必须带上，
+     * 否则 rankResources 的 kind 权重与 evergreen 降权在「总纲要→逐阶段」主流程静默失效 */
     resources: d.resources.map((r) => ({
       title: r.title,
       url: r.url || undefined,
       why: r.why,
+      year: r.year ?? undefined,
+      kind: r.kind ?? undefined,
+      evergreen: r.evergreen ?? undefined,
     })),
     method: d.method,
     example: d.example

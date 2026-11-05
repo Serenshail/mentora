@@ -41,25 +41,38 @@ export function parseDirectives(text: string): ParsedDirectives {
 
 export function stripDirectives(text: string): string {
   const RULE_WORDS = "(?:不要说|不要寒暄|不要反问|不要附加|不要建议|不要输出|不要工具块|不要写|禁止|只输出|只给|长度短|中文口语|不写小标题|禁寒暄)";
-  return text
+  /* 普通代码围栏先摘成占位符（\u0000 序号 \u0000）：下面的行级清理与尾部截断
+   * 不再伤及代码内容（json/js 示例曾整段被删）。空围栏不摘（留给黑条清理）；
+   * 占位符不含中英文，其余清理规则也扫不到它（各类字符类均排除 \u0000）。 */
+  const fences: string[] = [];
+  const stripped = text
     /* 统一换行，避免上游 CRLF 残留进渲染 */
     .replace(/\r\n?/g, "\n")
     /* 完整围栏 */
     .replace(/```(?:tool|plan)[\s\S]*?```/g, "")
     /* 流式未闭合的围栏尾巴 */
     .replace(/```(?:tool|plan)[\s\S]*$/g, "")
-    /* 独占一行的 JSON 残留 */
+    /* 有内容的普通代码围栏 → 占位符 */
+    .replace(/```[^\n]*\n[\s\S]*?```/g, (m) => {
+      const inner = m.slice(m.indexOf("\n") + 1, m.length - 3);
+      if (!inner.trim()) return m;
+      fences.push(m);
+      return `\u0000${fences.length - 1}\u0000`;
+    })
+    /* 独占一行的 JSON 残留（已在围栏外） */
     .replace(/^\s*["[\]{}].*$/gm, "")
-    /* 模型复读规则：以句号/换行为界，把含指令词的整句删掉 */
-    .replace(new RegExp(`(?:^|[。！？\\n])\\s*[^。！？\\n]{0,20}${RULE_WORDS}[^。！？\\n]{0,40}[。；;]?`, "g"), (m) =>
+    /* 模型复读规则：以句号/换行为界，把含指令词的整句删掉（不跨占位符） */
+    .replace(new RegExp(`(?:^|[。！？\\n])\\s*[^。！？\\n\\u0000]{0,20}${RULE_WORDS}[^。！？\\n\\u0000]{0,40}[。；;]?`, "g"), (m) =>
       m.startsWith("\n") || m.startsWith("。") || m.startsWith("！") || m.startsWith("？") ? m[0] : ""
     )
-    /* 末尾混入英文内部独白 → 截断到最后一个中文句末 */
-    .replace(/([。！？])[^。！？]*[A-Za-z]{2,}[^。！？]*$/g, "$1")
+    /* 末尾混入英文内部独白 → 截断到最后一个中文句末（限单行：跨行会把收尾代码块整个删掉） */
+    .replace(/([。！？])[^\n。！？\u0000]*[A-Za-z]{2,}[^\n。！？\u0000]*$/g, "$1")
     /* 空围栏（``` 紧跟 ```，中间只有空白）渲染出来是一块黑条：清掉 */
     .replace(/```[^\n]*\n?\s*```/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+  /* 还原代码围栏 */
+  return stripped.replace(/\u0000(\d+)\u0000/g, (_, i: string) => fences[Number(i)] ?? "");
 }
 
 /** 原生 tool_calls 聚合器：把 OpenAI 流式分片拼成完整调用（服务端/客户端共用逻辑） */

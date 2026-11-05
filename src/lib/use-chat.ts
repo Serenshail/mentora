@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamChat, type WireMsg, type ChatTask } from "@/lib/ai/client";
 import { uid } from "@/lib/utils";
-import { useAppStore } from "@/lib/store";
 import type { ChatMsg } from "@/lib/types";
 
 /** 多页复用的流式聊天状态机：消息列表 + 正在流式输出的缓冲 */
@@ -14,6 +13,10 @@ export function useChat(initial: ChatMsg[] = []) {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /* 并发守卫：旧实现只覆盖 abortRef，第二个 send 不会中止第一个——
+   * 两条流交错 onDelta 灌 pending，各自用陈旧基线 setMessages 互相覆盖，
+   * 还会双倍计费。手动路径有 streaming 判断，挂载效应路径没有。 */
+  const busyRef = useRef(false);
 
   const send = useCallback(
     async (opts: {
@@ -27,6 +30,8 @@ export function useChat(initial: ChatMsg[] = []) {
       temperature?: number;
       task?: ChatTask;
     }) => {
+      if (busyRef.current) return "";
+      busyRef.current = true;
       const history = opts.history ?? messages;
       const next: ChatMsg[] = opts.userText
         ? [
@@ -65,6 +70,10 @@ export function useChat(initial: ChatMsg[] = []) {
             at: new Date().toISOString(),
           };
           setMessages([...next, assistant]);
+        } else {
+          // 模型 200 但正文为空（BYOK 自定义端点的现实场景）：旧实现既不追加也不报错，
+          // 用户对着转圈结束后一片空白。消息不落库（与 council 的 if(full) 守卫同口径），但必须显式报错。
+          setError("模型返回了空回复，请重试");
         }
         setPending("");
         setThinking("");
@@ -89,6 +98,7 @@ export function useChat(initial: ChatMsg[] = []) {
         setPending("");
         return "";
       } finally {
+        busyRef.current = false;
         setStreaming(false);
       }
     },
@@ -126,6 +136,11 @@ export function useHydrated() {
        * 放行后写入的新数据会被随后的 setStoreUser(用户仓) 整体覆盖——
        * 这正是"刚建的目标/对话刷新就没了"的根因。6s 覆盖慢网，且 auth 请求本身有 5s 超时。 */
       t = setTimeout(() => setH(true), 6000);
+    }).catch(() => {
+      /* 部署后旧页面去加载已不存在的 chunk 时，动态 import 会 reject——
+       * 旧实现既没有 .catch 也没创建 6s 兜底（计时器写在 .then 里），
+       * 该 hook 门控的页面就永远停在骨架，只能手动刷新。放行即可，数据由各页兜底。 */
+      if (!disposed) setH(true);
     });
     return () => {
       disposed = true;

@@ -18,7 +18,7 @@ function masteryBucket(m?: string): MasteryStatus {
 function buildGraduationCtx(goal: Goal) {
   const days = goal.plan ? Object.values(goal.plan.days) : [];
   const done = days.filter((d) => d.status === "passed" || d.status === "skipped");
-  const points = days.flatMap((d) =>
+  const pointsAll = days.flatMap((d) =>
     (d.knowledgePoints || []).map((k) => ({
       text: k.text,
       mastery: masteryBucket(k.masteryStatus),
@@ -26,6 +26,10 @@ function buildGraduationCtx(goal: Goal) {
       day: d.title,
     }))
   );
+  /* 结业上下文必须截断：failures 早截了 8 条，知识点却全量带上——数百天长目标
+   * 可有上万条，提示词能到几十万 token：小上下文模型直接 400，而 graduatedAt 只在
+   * 成功后写入，用户每次重试都完整重放一遍巨型提示词（BYOK 真金白银 / 服务端占配额）。 */
+  const points = pointsAll.slice(-200);
   const failures = (goal.quizLog || [])
     .filter((q) => !q.passed)
     .slice(0, 8)
@@ -69,6 +73,8 @@ export async function runGraduation(goalId: string): Promise<{
       args: { ctx: JSON.stringify(ctx, null, 1) },
       messages: [{ role: "user", content: "生成结业总结与下一步建议。" }],
       temperature: 0.4,
+      /* 流中段上游挂起时 UI 会永久 busy（服务端 45s 超时只覆盖到响应头） */
+      signal: AbortSignal.timeout(60_000),
       onDelta: () => {},
     });
     parsed = graduationSchema.parse(extractJson(full));
@@ -76,7 +82,8 @@ export async function runGraduation(goalId: string): Promise<{
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 
-  const masterLine = `- 掌握分布：${(["durable", "transferable", "independent", "guided", "exposed", "unknown"] as MasteryStatus[])
+  /* 掌握分布展示顺序 = MASTERY_ORDER 倒序（最强在前），不再手抄一份等级表 */
+  const masterLine = `- 掌握分布：${[...MASTERY_ORDER].reverse()
     .map((m) => {
       const n = ctx.knowledgePoints.filter((k) => k.historicalHighest === m).length;
       return n ? `${MASTERY_LABELS[m]} ${n}` : "";
@@ -97,20 +104,46 @@ export async function runGraduation(goalId: string): Promise<{
     ...parsed.nextSteps.map((s, i) => `${i + 1}. ${s}`),
   ].join("\n");
 
-  /* 写进第二大脑：source=learn，带目标标题方便回溯；不自动排复习（结业笔记是"索引型"内容） */
-  const note = useAppStore.getState().knowledge.find(
-    (k) => k.title === `结业 · ${goal.topic}` && k.sourceTitle === goal.topic
-  );
-  let noteId = note?.id;
-  if (!noteId) {
-    useAppStore.getState().addKnowledge(
-      [{ title: `结业 · ${goal.topic}`, body, domain: `${goal.topic}/结业`, masteryStatus: "durable" }],
-      "learn",
-      goal.topic
-    );
-    noteId = useAppStore
-      .getState()
-      .knowledge.find((k) => k.title === `结业 · ${goal.topic}` && k.sourceTitle === goal.topic)?.id;
+  /* 写进第二大脑：source=learn，带目标标题方便回溯；不自动排复习（结业笔记是"索引型"内容）。
+   * 笔记按 goal.id（tag）关联而非 topic 字符串：topic 是自由文本，两个目标同 topic 时
+   * 按标题查找会指错笔记，且 addKnowledge 按标题去重会静默丢弃第二份新生成的正文。 */
+  const goalTag = `goal:${goal.id}`;
+  const state = useAppStore.getState();
+  const owned = state.knowledge.find((k) => (k.tags ?? []).includes(goalTag));
+  let noteId = owned?.id;
+  if (noteId) {
+    useAppStore.getState().updateKnowledge(noteId, { body });
+  } else {
+    const title = `结业 · ${goal.topic}`;
+    const clash = state.knowledge.some((k) => k.title === title);
+    if (clash) {
+      /* 同名结业笔记属于别的目标（删目标重建/双同 topic）：createKnowledge 的标题
+       * 自动唯一，不会被 addKnowledge 的标题去重吞掉。 */
+      const id = useAppStore.getState().createKnowledge({ title, domain: `${goal.topic}/结业` });
+      useAppStore.getState().updateKnowledge(id, {
+        body,
+        source: "learn",
+        sourceTitle: goal.topic,
+        masteryStatus: "durable",
+        tags: [goalTag],
+      });
+      noteId = id;
+    } else {
+      useAppStore.getState().addKnowledge(
+        [{ title, body, domain: `${goal.topic}/结业`, masteryStatus: "durable" }],
+        "learn",
+        goal.topic
+      );
+      const created = useAppStore
+        .getState()
+        .knowledge.find((k) => k.title === title && k.sourceTitle === goal.topic);
+      if (created) {
+        useAppStore.getState().updateKnowledge(created.id, {
+          tags: [...(created.tags ?? []), goalTag],
+        });
+      }
+      noteId = created?.id;
+    }
   }
 
   useAppStore.getState().updateGoal(goal.id, {
@@ -122,5 +155,3 @@ export async function runGraduation(goalId: string): Promise<{
 
   return { ok: true, noteId, nextSteps: parsed.nextSteps };
 }
-
-export { MASTERY_ORDER };

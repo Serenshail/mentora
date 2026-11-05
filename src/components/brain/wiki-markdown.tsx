@@ -21,65 +21,58 @@ export function WikiMarkdown({
 }) {
   const byTitle = new Map(notes.map((n) => [n.title.toLowerCase(), n]));
 
-  // [[...]] → markdown 链接（已存在）或占位（未创建）
+  // [[...]] → markdown 链接（已存在）或占位链接（未创建）。
+  // 未解析双链也走内联 markdown 链接：此前按占位符 split 后逐段独立渲染，
+  // 句中一个 [[X]] 会把段落撕成多块、按钮独占一行，与已解析双链排版不一致。
   const processed = body.replace(/\[\[([^\[\]]+)\]\]/g, (_m, raw: string) => {
     const title = raw.trim();
     const target = byTitle.get(title.toLowerCase());
     if (target) return `[${title}](#wiki-${target.id})`;
-    return `\u2063wikilink-new:${title}\u2063`; // 不可见分隔符占位
+    return `[${title}](<#wiki-new:${encodeURIComponent(title)}>)`;
   });
-
-  const parts = processed.split(/\u2063(.*?)\u2063/);
 
   return (
     <div className={cn("prose-mentora", className)}>
-      {parts.map((part, i) => {
-        if (part.startsWith("wikilink-new:")) {
-          const title = part.slice("wikilink-new:".length);
-          return (
-            <button
-              key={i}
-              onClick={() => onCreate?.(title)}
-              className={cn(
-                "mx-0.5 inline-flex items-center rounded-md border border-dashed border-accent/35 bg-accent/[0.05] px-1.5 py-0.5 text-[0.85em] text-accent",
-                onCreate && "cursor-pointer hover:bg-accent/[0.12]"
-              )}
-              title={onCreate ? "笔记不存在，点击创建" : "该笔记还不存在"}
-            >
-              {title} ⋯
-            </button>
-          );
-        }
-        if (!part) return null;
-        return (
-          <ReactMarkdown
-            key={i}
-            remarkPlugins={[remarkGfm]}
-            components={{
-              a: ({ href, children }) => {
-                if (href?.startsWith("#wiki-")) {
-                  const id = href.slice(6);
-                  return (
-                    <button
-                      onClick={() => onOpen(id)}
-                      className="mx-0.5 inline-flex items-center rounded-md border border-accent/25 bg-accent/[0.06] px-1.5 py-0.5 text-[0.85em] font-medium text-accent hover:bg-accent/[0.12] cursor-pointer"
-                    >
-                      {children}
-                    </button>
-                  );
-                }
-                return (
-                  <a href={href} target="_blank" rel="noreferrer" className="text-accent underline">
-                    {children}
-                  </a>
-                );
-              },
-            }}
-          >
-            {part}
-          </ReactMarkdown>
-        );
-      })}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => {
+            if (href?.startsWith("#wiki-new:")) {
+              const title = decodeURIComponent(href.slice("#wiki-new:".length));
+              return (
+                <button
+                  onClick={() => onCreate?.(title)}
+                  className={cn(
+                    "mx-0.5 inline-flex items-center rounded-md border border-dashed border-accent/35 bg-accent/[0.05] px-1.5 py-0.5 text-[0.85em] text-accent",
+                    onCreate && "cursor-pointer hover:bg-accent/[0.12]"
+                  )}
+                  title={onCreate ? "笔记不存在，点击创建" : "该笔记还不存在"}
+                >
+                  {children} ⋯
+                </button>
+              );
+            }
+            if (href?.startsWith("#wiki-")) {
+              const id = href.slice(6);
+              return (
+                <button
+                  onClick={() => onOpen(id)}
+                  className="mx-0.5 inline-flex items-center rounded-md border border-accent/25 bg-accent/[0.06] px-1.5 py-0.5 text-[0.85em] font-medium text-accent hover:bg-accent/[0.12] cursor-pointer"
+                >
+                  {children}
+                </button>
+              );
+            }
+            return (
+              <a href={href} target="_blank" rel="noreferrer" className="text-accent underline">
+                {children}
+              </a>
+            );
+          },
+        }}
+      >
+        {processed}
+      </ReactMarkdown>
     </div>
   );
 }

@@ -22,19 +22,26 @@ var state = {
   customPersonas: [],
   folders: [],
   settings: {},
-  userId: null,
-  loaded: false
+  userId: null
 };
 
 var syncStatus = "idle"; // idle | saving | saved | error
 var statusListeners = [];
-var pushTimer = null;
 var pushing = false;
 var pendingPush = false;
+/* 等推送真正落地的调用方（登出流程要等它，否则清掉 userId 会把在途推送掐死） */
+var pushWaiters = [];
+/* 上次成功见到的云端快照时间（水位）：云端比它旧就不是"更新"，不该覆盖本地 */
+var lastCloudAt = "";
 
 function emitStatus(s) {
   syncStatus = s;
-  for (var i = 0; i < statusListeners.length; i++) statusListeners[i](s);
+  for (var i = 0; i < statusListeners.length; i++) {
+    /* 容错：一个监听器（比如对已销毁页面 setData）抛错不能中断广播 */
+    try {
+      statusListeners[i](s);
+    } catch (e) { /* 忽略单个监听器异常 */ }
+  }
 }
 
 function onSyncStatus(fn) {
@@ -50,6 +57,28 @@ function onSyncStatus(fn) {
 
 function cacheKey() {
   return state.userId ? "mentora-mp-store-" + state.userId : "mentora-mp-store-anon";
+}
+
+/* 脏标记与云端水位都要跨进程持久化：冷启动/切后台回来时，
+ * 内存里的 dirtyPending 已经归零，但本地改动其实还没推上去。 */
+function dirtyKey() {
+  return state.userId ? "mentora-mp-dirty-" + state.userId : "mentora-mp-dirty-anon";
+}
+function cloudAtKey() {
+  return state.userId ? "mentora-mp-cloud-at-" + state.userId : "mentora-mp-cloud-at-anon";
+}
+function readFlag(key) {
+  try {
+    return wx.getStorageSync(key);
+  } catch (e) {
+    return "";
+  }
+}
+function writeFlag(key, v) {
+  try {
+    if (v) wx.setStorageSync(key, v);
+    else wx.removeStorageSync(key);
+  } catch (e) { /* 配额满：标记丢失好过崩溃；本机缓存仍在 */ }
 }
 
 /* 本地快照：写盘走「脏标记 + 防抖」。
@@ -84,7 +113,10 @@ function saveLocal() {
         settings: state.settings
       })
     );
-  } catch (e) { /* 配额满：本机缓存跳过，云端仍是耐久存储 */ }
+  } catch (e) {
+    /* 配额满写不进本机：未登录/离线时本机缓存就是唯一副本，必须可见，不能静默丢 */
+    emitStatus("error");
+  }
 }
 
 function loadLocal() {
@@ -136,7 +168,8 @@ function hasLocalData() {
     state.goals.length +
       state.knowledge.length +
       state.books.length +
-      state.sessions.length > 0
+      state.sessions.length +
+      state.customPersonas.length > 0
   );
 }
 
@@ -157,28 +190,46 @@ function pushNow() {
   if (!state.userId) return Promise.resolve(false);
   if (pushing) {
     pendingPush = true;
-    return Promise.resolve(false);
+    /* 返回一个"等排空"的 promise，而不是立即 false——
+     * 登出/切后端要等它真正落地才能清空身份。 */
+    return new Promise(function (resolve) {
+      pushWaiters.push(resolve);
+    });
   }
   pushing = true;
   emitStatus("saving");
   return api
     .pushCloud(serialize())
-    .then(function () {
+    .then(function (res) {
       pushing = false;
+      if (res && res.updatedAt) {
+        lastCloudAt = res.updatedAt;
+        writeFlag(cloudAtKey(), lastCloudAt);
+      }
       if (pendingPush) {
         pendingPush = false;
-        return pushNow();
+        return pushNow(); // 排空后续推送；结束时由内层统一 settle waiters
       }
-      dirtyPending = false; // 已推上去：本地不再有未推送改动
+      dirtyPending = false;
+      writeFlag(dirtyKey(), "");
       emitStatus("saved");
+      settleWaiters(true);
       return true;
     })
     .catch(function () {
       pushing = false;
       pendingPush = false;
       emitStatus("error");
+      /* 推送失败时保留脏标记：下次登录/回前台还能补推，不把改动当"已同步" */
+      settleWaiters(false);
       return false;
     });
+}
+
+function settleWaiters(ok) {
+  var ws = pushWaiters;
+  pushWaiters = [];
+  for (var i = 0; i < ws.length; i++) ws[i](ok);
 }
 
 var pushDebounced = null;
@@ -192,6 +243,7 @@ var dirtyPending = false;
 
 function markDirty() {
   dirtyPending = true;
+  writeFlag(dirtyKey(), true);
   saveLocalSoon(); // 写盘防抖：高频路径上不再每次都做 MB 级 JSON 序列化
   if (!pushDebounced) {
     pushDebounced = util.debounce(function () {
@@ -201,13 +253,15 @@ function markDirty() {
   pushDebounced();
 }
 
-/* 登录后：先看本机缓存（秒开），再对齐云端（云端为准） */
+/* 登录后：先看本机缓存（秒开），再对齐云端（云端为准——但本地未推送改动优先） */
 function onLogin(userId) {
   state.userId = userId;
-  state.loaded = false;
-  dirtyPending = false;
   loadLocal();
-  state.loaded = true;
+  /* 关键：不能在这里把 dirtyPending 清零。
+   * 旧实现先清标记再 force 拉取，弱网/冷启动时云端旧快照会静默覆盖本地未推送编辑。
+   * 标记与水位都从本机持久化恢复，跨进程也守得住。 */
+  dirtyPending = readFlag(dirtyKey()) === true || readFlag(dirtyKey()) === "1";
+  lastCloudAt = readFlag(cloudAtKey()) || "";
   return pullIfSafe(true);
 }
 
@@ -231,21 +285,31 @@ function pullIfSafe(force) {
     .pullCloud()
     .then(function (cloud) {
       lastPullAt = Date.now();
-      if (!cloud) {
-        if (force && hasLocalData()) {
-          return pushNow().then(function () {
-            return "pushed";
+      /* 本地有未推送改动（含防抖窗口、在途推送、上次离线遗留）→ 绝不覆盖本地。
+       * 注意这条守卫不再被 force 短路：登录时的强拉也要让位给本地真实改动。 */
+      if (hasLocalData() && (dirtyPending || pushing || syncStatus === "saving")) {
+        return pushNow().then(function (ok) {
+          return ok ? "pushed" : "error";
+        });
+      }
+      if (!cloud || !cloudHasData(cloud.data)) {
+        if (hasLocalData()) {
+          return pushNow().then(function (ok) {
+            return ok ? "pushed" : "error";
           });
         }
         return "none";
       }
-      if (!cloudHasData(cloud.data)) {
-        if (force && hasLocalData()) return pushNow().then(function () { return "pushed"; });
+      /* 水位守卫：云端时间不比上次见到的更新，就不是"云端有更新"，
+       * 不采用（防并发回滚/服务端脏快照把本地降级）。 */
+      if (lastCloudAt && cloud.updatedAt && cloud.updatedAt < lastCloudAt) {
         return "none";
       }
-      // 有未推送改动（含防抖窗口内的）→ 绝不覆盖本地
-      if (!force && hasLocalData() && (dirtyPending || syncStatus === "saving")) return "skip";
       adoptCloud(cloud.data);
+      if (cloud.updatedAt) {
+        lastCloudAt = cloud.updatedAt;
+        writeFlag(cloudAtKey(), lastCloudAt);
+      }
       return "pulled";
     })
     .catch(function () {
@@ -258,17 +322,36 @@ function flushPush() {
     // 待写的本地快照立即落盘（切后台前保证本机缓存完整）
     saveLocal();
   }
-  if (pushTimer) {
-    clearTimeout(pushTimer);
-    pushTimer = null;
-  }
+  /* 撤掉挂起的推送防抖，下面立即推（旧 pushTimer 从未被赋值，防抖句柄其实没被取消） */
+  if (pushDebounced) pushDebounced.cancel();
   if (state.userId) pushNow();
 }
 
 function onLogout() {
-  flushPush();
+  var uid = state.userId;
+  if (!uid) {
+    resetState();
+    return Promise.resolve();
+  }
+  saveLocal(); // 退出前保证本机缓存完整
+  if (pushDebounced) pushDebounced.cancel(); // 登出后不再触发防抖推送
+  /* 等推送真正落地再清身份：旧实现直接清 userId，重入的 pushNow 在开头就放弃，
+   * 登出前最后几秒的改动永远上不了云，下次登录又被 force-pull 覆盖成永久丢失。
+   * 最多等 5s：网络卡死也不能把用户卡在登出页——脏标记还在，下次登录会补推。 */
+  var landed =
+    dirtyPending || pushing || pendingPush ? pushNow() : Promise.resolve(true);
+  var timeout = new Promise(function (resolve) {
+    setTimeout(function () {
+      resolve(false);
+    }, 5000);
+  });
+  return Promise.race([landed, timeout]).then(function () {
+    resetState();
+  });
+}
+
+function resetState() {
   state.userId = null;
-  state.loaded = false;
   state.goals = [];
   state.knowledge = [];
   state.books = [];
@@ -276,6 +359,7 @@ function onLogout() {
   state.customPersonas = [];
   state.folders = [];
   state.settings = {};
+  /* 不清 dirty/水位存储：它们按 userId 命名，推送失败时下次登录还要靠它补推 */
 }
 
 /* ---------------- 派生选择器 ---------------- */
@@ -410,10 +494,29 @@ function incrementAttempts(goalId, dayId) {
   markDirty();
 }
 
+/* 验收记录裁剪：全量快照同步 + >4.5MB 服务端硬拒，quizLog 无界增长最终会
+ * 让「推不上云」变成「本机缓存也静默停写」，丢掉此后的全部编辑。
+ * 只留最近 200 次，题干/答案/反馈各截 600 字（原记录仍能在当天视图回看）。 */
+var QUIZ_LOG_MAX = 200;
+var QUIZ_TEXT_MAX = 600;
+
+function trimQuizResult(r) {
+  if (!r || !Array.isArray(r.items)) return r;
+  return Object.assign({}, r, {
+    items: r.items.slice(0, 12).map(function (it) {
+      return Object.assign({}, it, {
+        question: String(it.question || "").slice(0, QUIZ_TEXT_MAX),
+        userAnswer: String(it.userAnswer || "").slice(0, QUIZ_TEXT_MAX),
+        feedback: String(it.feedback || "").slice(0, QUIZ_TEXT_MAX)
+      });
+    })
+  });
+}
+
 function logQuiz(goalId, result) {
   var goal = goalById(goalId);
   if (!goal) return;
-  goal.quizLog = [result].concat(goal.quizLog || []);
+  goal.quizLog = [trimQuizResult(result)].concat(goal.quizLog || []).slice(0, QUIZ_LOG_MAX);
   markDirty();
 }
 
@@ -563,6 +666,34 @@ function updatePlanKpMastery(goalId, dayId, mStatus) {
   markDirty();
 }
 
+/* 验收通过一次写全（day.js 用）：attempts+1、passed+迁移门、知识点掌握度。
+ * 此前三步各 util.clone 一份 plan 串行执行，大 plan 主线程可感卡顿——合并在一次 clone 里。 */
+function applyQuizPass(goalId, dayId, mStatus, transferQuestion) {
+  var goal = goalById(goalId);
+  if (!goal || !goal.plan || !goal.plan.days[dayId]) return;
+  var plan = util.clone(goal.plan);
+  var day = plan.days[dayId];
+  day.attempts = (day.attempts || 0) + 1;
+  day.status = "passed";
+  day.completedAt = util.todayISO();
+  day.pendingUnlock = true;
+  day.transferQuestion = transferQuestion || "";
+  var kps = (day.knowledgePoints || []).slice();
+  for (var i = 0; i < kps.length; i++) {
+    kps[i].masteryStatus = mStatus;
+    if (
+      !kps[i].historicalHighest ||
+      masteryMod.ORDER.indexOf(mStatus) >
+        masteryMod.ORDER.indexOf(kps[i].historicalHighest)
+    ) {
+      kps[i].historicalHighest = mStatus;
+    }
+  }
+  day.knowledgePoints = kps;
+  goal.plan = plan;
+  markDirty();
+}
+
 /* 复习完成：经典 1/3/7/15/30 档（不写 fsrs 字段，Web 端 FSRS 可无缝接管）。
  * 掌握推进与 Web masteryFromReview 同规则：passReps=通过轮次、stability=当前间隔。 */
 function recordReview(id, ok) {
@@ -637,9 +768,29 @@ function createBookFromPlan(title, author, pastedText, plan) {
     id: util.uid("b"),
     title: title,
     author: author || "",
-    profile: plan.bookProfile || undefined,
+    /* v25 阅读系统：新链路给 map（认知地图四区域）；旧输出只有 bookProfile——两代都接 */
+    map: plan.map
+      ? {
+          coreProblem: plan.map.coreProblem || "",
+          authorStance: plan.map.authorStance || "",
+          lineage: plan.map.lineage || "",
+          controversies: plan.map.controversies || "",
+          generatedAt: new Date().toISOString()
+        }
+      : undefined,
+    profile:
+      plan.bookProfile ||
+      (plan.map
+        ? {
+            positioning: plan.map.coreProblem || "",
+            author: plan.map.authorStance || "",
+            lineage: plan.map.lineage || "",
+            controversies: plan.map.controversies || ""
+          }
+        : undefined),
     pastedText: pastedText || "",
     status: "reading",
+    readStatus: "reading",
     planSummary: plan.planSummary || "",
     chapters: chapters,
     insights: [],
@@ -792,6 +943,7 @@ module.exports = {
   setDayStatus: setDayStatus,
   completeTransfer: completeTransfer,
   incrementAttempts: incrementAttempts,
+  applyQuizPass: applyQuizPass,
   logQuiz: logQuiz,
   addLearnKnowledge: addLearnKnowledge,
   updatePlanKpMastery: updatePlanKpMastery,

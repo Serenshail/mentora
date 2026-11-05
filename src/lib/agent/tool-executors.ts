@@ -578,6 +578,18 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
         title,
         author: author || undefined,
         status: "reading",
+        /* v25：新链路给 map（认知地图四区域）；旧输出没有 map 时从 bookProfile 转换，两代数据都接 */
+        map: plan.map
+          ? { ...plan.map, generatedAt: new Date().toISOString() }
+          : plan.bookProfile
+            ? {
+                coreProblem: plan.bookProfile.positioning,
+                authorStance: plan.bookProfile.author,
+                lineage: plan.bookProfile.lineage,
+                controversies: plan.bookProfile.controversies,
+                generatedAt: new Date().toISOString(),
+              }
+            : undefined,
         profile: plan.bookProfile || undefined,
         planSummary: plan.planSummary,
         chapters: plan.chapters.map((c) => ({
@@ -586,6 +598,10 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
           coreIdea: c.coreIdea || undefined,
           perspectives: c.perspectives || undefined,
           capture: c.capture || undefined,
+          keyConcepts: c.keyConcepts || undefined,
+          prerequisites: c.prerequisites || undefined,
+          expectedOutcome: c.expectedOutcome || undefined,
+          assessFocus: c.assessFocus || undefined,
           id: uid("ch"),
           status: "todo" as const,
         })),

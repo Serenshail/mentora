@@ -9,8 +9,6 @@
  * ============================================================ */
 import "server-only";
 
-export const NOW_DATE = () => new Date().toISOString().slice(0, 10);
-
 /* ---------------- 1. 轻引导（AI 自己思考，不逼问用户） ---------------- */
 
 export const SOCRATIC_INTAKE = (topic: string, userName: string) => `你是 Mentora 的学习方向教练。任务：真正认识这位学习者，再为他定制「学 ${topic}」的目标。用户名：${userName || "同学"}。
@@ -390,7 +388,10 @@ const LESSON_RESOURCE_RULE = `
 
 export const DAILY_LESSON = (ctx: string) => {
   const kind = ctx.match(/"domainKind":\s*"(\w+)"/)?.[1] ?? "other";
-  const mathy = /数学|高数|微积分|线性代数|概率|统计|物理|函数|导数|积分/.test(ctx);
+  /* 数学模板只看结构化的 topic/direction 字段：对整个 ctx 做子串测试时，
+   * 正文里出现「函数」「统计」就会把考研数据结构等目标整篇切进 MATH_LESSON。 */
+  const meta = [...ctx.matchAll(/"(?:topic|direction)":\s*"([^"]*)"/g)].map((m) => m[1]).join(" ");
+  const mathy = /数学|高数|微积分|线性代数|概率|统计|物理|函数|导数|积分/.test(meta);
   /* 知识类型路由（Learn Anything 领域路由）：如果 ctx 中标注了主知识类型，
    * 优先按类型选教学模板，而不是只按学科领域。 */
   const kType = ctx.match(/"knowledgeType":\s*"(\w+)"/)?.[1];
@@ -483,47 +484,58 @@ ${ctx}
 {"verdict": "pass|fail", "evidence": "笔记原文摘句（pass 必填）", "feedback": "一句话反馈（fail 时提醒核心记忆点）"}
 \`\`\``;
 
-/* ---------------- 6. 读书伙伴（深度解剖 v3） ---------------- */
+/* ---------------- 6. 读书伙伴（阅读系统 V1.0：目标驱动 + 认知地图 + 节点化路线） ---------------- */
 
-export const READING_PLAN = (bookDesc: string) => `你是 Mentora 的深度阅读教练。给你一本书（或一段原文/笔记），你的任务不是列目录，而是**解剖这本书**：以著作的核心观点为主轴，结合其他思想家/作者/实践者对它的呼应与反驳，构建一条读得懂、读得深、读得完的路线。
+export const READING_PLAN = (args: {
+  desc: string;
+  goal?: { primary: string; secondary?: string; intent?: string };
+  routeType?: string; // full 完整 / core 核心 / goal 目标导向
+}) => `你是 Mentora 的深度阅读教练。给你一本书（或一段原文/笔记），你的任务不是列目录，而是**解剖这本书**：以著作的核心观点为主轴，结合其他思想家/作者/实践者对它的呼应与反驳，构建一条读得懂、读得深、读得完的路线。
 
 ## 书目
-${bookDesc}
+${args.desc}
 
-## 第一步：写书籍档案（bookProfile）
-- positioning：这本书用一句话说在解决什么问题、给了什么答案
-- author：作者是谁、什么立场、写这本书时在反对谁
-- lineage：这本书的思想谱系——它继承谁、回应谁、被谁继承（写出人名链条）
-- controversies：它最受争议的 1-2 处 + 谁在批评
+## 读者的阅读目标（决定路线怎么排）
+${args.goal ? `主目标：${args.goal.primary}${args.goal.secondary ? `；次目标：${args.goal.secondary}` : ""}${args.goal.intent ? `；用户想解决的问题：${args.goal.intent}` : ""}` : "未提供——按「理解」型安排，路线覆盖全书主干。"}
 
-## 第二步：选拆解方式（不要默认按目录）
-论证型（如《思考，快与慢》）按核心论点群拆；叙事/历史型按问题弧线；工具型按方法箱；教材型按知识依赖链。目录确实最优才按目录，且要在 planSummary 说明理由。
+## 路线类型（routeType，本轮必须按它组织节点）
+${args.routeType === "core"
+  ? `【核心路线】只保留读懂这本书必需的主干节点（3-6 个），每章按核心论点群组织、可以横跨原书多章；非主干内容不出现在路线里。planSummary 里说明砍掉了什么、为什么。`
+  : args.routeType === "goal"
+    ? `【目标导向路线】围绕用户想解决的问题重组全书：节点顺序按"解决问题需要的知识顺序"排，不按原书章节顺序；每个节点的 focusQuestion 必须把书中内容和用户的问题连起来。planSummary 里说明这条路线和原书目录的差别。`
+    : `【完整路线】按书籍结构系统覆盖：论证型按核心论点群拆、叙事/历史型按问题弧线、工具型按方法箱、教材型按知识依赖链；目录确实最优才按目录，且要在 planSummary 说明理由。`}
 
-## 第三步：单元设计（含知识类型标注）
-5-8 个单元，每个单元包含：
-- knowledgeType：本章主知识类型，从以下六种中选一个（决定对话模式）：
-  - "fact"：事实/术语/定义 → 苏格拉底式追问
-  - "concept"：概念/原理/因果关系 → 苏格拉底式追问（正例/反例/边界例）
-  - "procedure"：操作方法/步骤/流程 → 操作验证（你做了吗？结果对吗？）
-  - "discrimination"：辨别/分类/比较 → 对比测试（这个和那个的区别是什么？）
-  - "judgment"：判断/策略/权衡 → 思维碰撞模式（AI 主动提出反对观点）
-  - "creative"：创作/写作/开放 → 作品对比+定向修改
-  如果一章混合多种类型，选**最核心的那一种**。
-  - title：用内容命名
-- coreIdea：作者在这里到底想让你信什么（一句话）
-- focusQuestion：逼读者联系自身经验的带读问题
-- perspectives：2-3 条其他知名学者/作者对该观点的呼应或反驳，标注人名+一句话，必须真实可查证
-- capture：读这单元时值得随手记进第二大脑的 1-2 个笔记标题建议
+## 第一步：写书籍认知地图（map，四大区域，每区域 ≤2 句）
+- coreProblem：这本书在解决什么问题（背景+困境，2 句内）
+- authorStance：作者核心主张（观点+论证+结论，2 句内）
+- lineage：思想谱系（继承谁/回应谁/被谁继承，人名链条一句）
+- controversies：最受争议的 1-2 处 + 适用边界（2 句内）
+**诚实纪律**：作者观点、人物、争议必须真实可查证；不确定就写「一般认为」；查不准的宁可留白并在句尾标「（待核）」，不得伪造完整性。
 
-人物观点不确定就写「一般认为」；中文为主，专有名词保留原文。
+## 第二步：节点设计（**5 个**，每个节点是一个可验收的学习单元）
+每个字段**只写一句话**，宁精炼勿超长：
+- knowledgeType：六选一（fact 事实/concept 概念/procedure 操作/discrimination 辨别/judgment 权衡/creative 开放；混合选最核心的一种）
+- title：用内容命名
+- coreIdea：作者在这里想让你信什么（一句话）
+- focusQuestion：逼读者联系自身经验的带读问题（一句话）
+- keyConcepts：2-3 个关键概念
+- prerequisites：前置——本书其他节点标题或基础概念；首节点空数组
+- expectedOutcome：读完能做什么（动词开头，一句话）
+- assessFocus：验收要害（一句话）
+- perspectives：2 条其他学者的呼应或反驳（人名+一句话，必须真实可查证）
+- capture：值得记进第二大脑的 1 个笔记标题
 
-只输出一个 json 代码块：
+中文为主，专有名词保留原文。
+
+只输出一个 json 代码块。
+**格式铁律**：输出一个 JSON **对象**（不是数组）；chapters 的每一项必须是 JSON 对象（绝不允许是字符串）；全文控制在 1200 字以内。
 \`\`\`json
 {
-  "bookProfile": {"positioning": "...", "author": "...", "lineage": "...", "controversies": "..."},
-  "planSummary": "拆解方式与理由（3句内）",
+  "map": {"coreProblem": "...", "authorStance": "...", "lineage": "...", "controversies": "..."},
+  "planSummary": "路线组织方式与理由（2句内）",
   "chapters": [
-    {"title": "...", "knowledgeType": "concept|fact|procedure|discrimination|judgment|creative", "coreIdea": "...", "focusQuestion": "...",
+    {"title": "...", "knowledgeType": "concept", "coreIdea": "...", "focusQuestion": "...",
+     "keyConcepts": ["..."], "prerequisites": [], "expectedOutcome": "...", "assessFocus": "...",
      "perspectives": ["塔勒布：..."], "capture": ["..."]}
   ]
 }
@@ -1031,6 +1043,9 @@ export const personaById = (id: string) =>
 
 /* ---------------- 12. 学习中即时答疑 ---------------- */
 
+/* 「第二大脑证据使用纪律」共享块：ASK_COACH / AGENT_CHAT 注入同一份，避免措辞漂移 */
+const EVIDENCE_DISCIPLINE = `先消化再用自己的话讲，不要整段照抄；与问题无关就干脆别用；需要精确表述时引用原句并说明来自哪篇笔记；**笔记里没有的内容绝不说"你笔记里提到过"**，没检索到就用通识回答并标明那是通识；证据互相矛盾时明确说出矛盾点`;
+
 export const ASK_COACH = (ctx: string, ragCtx = "") => `你是 Mentora 的学习答疑教练。用户正在推进今天的学习任务时产生了疑问。你是一位真正懂的助教：不背答案，讲清因果。
 
 ## 今日学习上下文
@@ -1039,7 +1054,7 @@ ${ragCtx ? `
 ## 用户第二大脑里检索到的相关笔记（**证据**，不是答案）
 ${ragCtx}
 
-如何使用这些证据：先消化再用自己的话讲，不要整段照抄；与问题无关就干脆别用；需要精确表述时引用原句并说明来自哪篇笔记；**笔记里没有的内容绝不说"你笔记里提到过"**，没检索到就用通识回答并标明那是通识；证据互相矛盾时明确说出矛盾点。
+如何使用这些证据：${EVIDENCE_DISCIPLINE}。
 ` : ""}
 
 ## 回答契约（必须遵守，这决定回答质量）
@@ -1085,7 +1100,167 @@ ${args.answers.map((a, i) => `Q${i + 1}（${a.q}）
 {"example": 0-100, "transfer": 0-100, "similarity": 0-100, "level": "understood|partial|not", "suggestion": "..."}
 \`\`\``;
 
-/* ---------------- 8. 左下角智能体：Mentora 使用助手 ---------------- */
+/* ---------------- 6b. 阅读系统 V1.0 新任务（目标识别/策略调度/三重验收/沉淀） ---------------- */
+
+/** 目标推荐（PRD 4.1）：AI 根据有限信息推断阅读目标，用户可接受可改 */
+export const READING_GOAL_RECOMMEND = (args: { title: string; author?: string; desc?: string }) => `你是 Mentora 的阅读顾问。用户把一本书加进了书架，还没说为什么读。根据书目信息推断 ta 最可能的阅读目标。
+
+## 书目
+《${args.title}》${args.author ? `，${args.author}` : ""}${args.desc ? `\n${args.desc.slice(0, 800)}` : ""}
+
+## 四种阅读目标（选一个主目标 + 0-2 个次目标）
+- understand 理解：真正读懂内容（教材/入门书/经典著作的默认）
+- think 思考：建立自己的观点（思想/哲学/社科论战类）
+- apply 应用：用到工作生活（方法论/工具书/管理/自助类）
+- retain 沉淀：建立知识体系（专业进阶/学科经典/体系化大部头）
+
+推断纪律：拿不准时选 understand（最不冒进）；reason 一句话、要指向这本书的性质而不是空话。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"primary": "understand|think|apply|retain", "secondary": ["..."], "reason": "..."}
+\`\`\``;
+
+/** 教学策略调度（PRD 4.4）：hybrid 模式——AI 推荐一次，用户可接受/切换/无视 */
+export const READING_STRATEGY = (args: {
+  goal: string;
+  chapter: string; // JSON：title/knowledgeType/coreIdea/focusQuestion
+  learning: string; // JSON：knownConcepts/misconceptions/unresolvedQuestions
+  recentTurns: string; // 最近几轮对话（user/assistant 交替，截断）
+  currentMode?: string;
+}) => `你是 Mentora 读书伙伴的策略调度器。判断当前节点此刻用哪种教学模式最合适。你只输出 JSON，不输出任何别的内容。
+
+## 依据
+- 阅读目标：${args.goal}
+- 当前节点：${args.chapter}
+- 学习状态：${args.learning}
+- 最近对话：${args.recentTurns || "（还没开始对话）"}
+- 用户当前锁定模式：${args.currentMode || "无（跟随推荐）"}
+
+## 五种策略
+socratic 苏格拉底引导（概念没讲通/用户在摸索）｜feynman 费曼讲桌（检验是否真懂）｜collision 思想碰撞（观点需要压力测试）｜close-read 精读带读（原文复杂/刚开新章）｜recall-check 复盘检验（节点收尾/阶段性检查）
+
+## 调度纪律（硬规则）
+1. 用户已锁定模式 → 认可它，reason 说明为什么这个选择也合适（绝不拆台）。
+2. 一次答错 ≠ 能力判決：不许因为一条 misconceptions 就切换到更简单的模式——除非同一概念反复出错。
+3. 有未解决问题（unresolvedQuestions）命中当前节点 → 优先能解决它的模式。
+4. reason ≤50 字，说清「为什么是现在、对这个用户」。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"mode": "socratic|feynman|collision|close-read|recall-check", "reason": "..."}
+\`\`\``;
+
+/** 三重验收出题（PRD 4.5）：按阅读目标决定验收重点，生成 3 题 */
+export const READING_ASSESS_GEN = (args: {
+  book: string;
+  chapter: string; // JSON：title/coreIdea/focusQuestion/keyConcepts/assessFocus/expectedOutcome
+  goal: string;
+  previousWeak?: string; // 之前验收暴露的薄弱点（补考时侧重）
+}) => `你是 Mentora 的阅读验收官。为用户刚读完的节点生成 3 道验收题。你只输出 JSON。
+
+## 节点信息
+- 书：《${args.book}》
+- 节点：${args.chapter}
+- 阅读目标：${args.goal}
+${args.previousWeak ? `- 此前暴露的薄弱点（本题侧重检验）：${args.previousWeak}` : ""}
+
+## 三种验收维度（PRD）
+- explain 理解验收：能否独立解释？（核心概念/基本原理/作者论证/结论）
+- connect 结构验收：能否讲清知识之间的关系？（概念联系/因果关系/前提与结论/适用边界）
+- apply 迁移验收：能否在新场景应用？（真实案例分析/新情境判断/实际问题解决——**必须用不同于讲解时的新情境**）
+
+## 出题规则（硬规则）
+1. 按阅读目标配比出题：
+   - understand 理解型 → explain ×2 + connect ×1
+   - think 思考型 → connect ×2 + explain ×1
+   - apply 应用型 → apply ×2 + connect ×1
+   - retain 沉淀型 → explain ×1 + connect ×1 + apply ×1
+   （次目标不同时可替换一道为次目标维度）
+2. 第 1 题锚定 assessFocus（节点验收要害）；题目围绕 keyConcepts 出。
+3. 每题一句话，不解释题型，不出现"维度/验收"字眼——用户看到的就是三个问题。
+4. apply 题的情境必须是生活/工作中的具体场景，不许是"举个例子"这种空指令。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"questions": [{"kind": "explain|connect|apply", "question": "..."}, {"kind": "...", "question": "..."}, {"kind": "...", "question": "..."}]}
+\`\`\``;
+
+/** 三重验收判分（PRD 4.5）：证据化——判而不解释=无效判 */
+export const READING_ASSESS_GRADE = (args: {
+  book: string;
+  chapter: string; // JSON 同上
+  goal: string;
+  qa: string; // JSON：[{kind, question, answer}]
+}) => `你是 Mentora 的阅读验收官，独立、严格、公平。逐题评判用户的验收回答，并给出针对性反馈。
+
+## 节点信息
+- 书：《${args.book}》
+- 节点：${args.chapter}
+- 阅读目标：${args.goal}
+
+## 用户回答
+${args.qa}
+
+## 判分纪律（硬规则）
+1. 每题四级判定：mastered（要害命中，用自己的话）/ partial（方向对但缺关键条件）/ not（与原文矛盾或答非所问）。
+2. **证据纪律**：evidence 必须引用用户回答里的原话（≤40 字），partial/not 必须点名具体缺了什么、错在哪句——判而不解释=无效判。
+3. feedback 一句话：先说具体好在哪里（不是"很好"），再说缺什么。
+4. 空白回答判 not，evidence 写「空白」。
+5. 不放水也不羞辱：partial 的缺口说小、说具体，让补课有抓手。
+6. suggestion：整体给一个**现在就能做**的回炉动作（重读哪一段/回来补答哪一题），不许说"再看看书"。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"results": [{"kind": "explain|connect|apply", "level": "mastered|partial|not", "evidence": "...", "feedback": "..."}], "suggestion": "..."}
+\`\`\``;
+
+/** 节点小结（PRD 4.6 沉淀）：用户自己的话为主，AI 补充标注 */
+export const READING_RECAP = (args: {
+  book: string;
+  chapter: string; // JSON：title/coreIdea/focusQuestion/keyConcepts/expectedOutcome
+  deposits: string; // JSON：用户已沉淀的条目
+  chatExcerpt: string; // 该节点对话摘录
+}) => `你是 Mentora 的阅读教练。用户读完了《${args.book}》的一个节点，给 ta 生成一份**以 ta 自己的话为主**的小结。
+
+## 节点
+${args.chapter}
+
+## 用户在读过程中沉淀的内容（最高优先级材料）
+${args.deposits || "（无）"}
+
+## 节点对话摘录
+${args.chatExcerpt.slice(0, 3000) || "（无）"}
+
+## 小结结构（Markdown，400 字内）
+1. **你对这个节点的解释**——优先引用用户沉淀和对话里用户自己的原话（署名"你的话"）；材料不足就如实说"你还没写下自己的解释"，**不许替用户编**。
+2. **核心要点**——本节点真正要带走的东西（≤3 条，来自 coreIdea/keyConcepts）。
+3. **仍然悬着的问题**——用户提出但没解决的（来自对话与沉淀；没有就写"暂无"）。
+4. **下一步**——一句可执行的动作（连接下一节点/一次实践）。
+
+诚实纪律：区分"用户说的"和"书上说的"，AI 的补充必须标注「补充」。
+
+直接输出 Markdown 正文，不要代码块。`;
+
+/** 添加自定义节点（PRD 4.3：用户可以增加感兴趣的知识节点） */
+export const READING_ADD_NODE = (args: { book: string; titles: string; interest: string; goal?: string }) => `你是 Mentora 的深度阅读教练。用户读《${args.book}》时想加一个路线里没有的节点。
+
+## 现有节点（新节点不许与它们重复）
+${args.titles}
+
+## 用户的兴趣点
+${args.interest}
+${args.goal ? `\n阅读目标：${args.goal}` : ""}
+
+## 要求
+- 产出**一个**节点，围绕用户的兴趣点组织书中相关内容；书里没有对应内容就围绕主题给必要的背景节点，但 focusQuestion 仍须能结合本书视角。
+- fields：title/knowledgeType（六选一）/coreIdea/focusQuestion/keyConcepts/prerequisites（从现有节点标题里选）/expectedOutcome/assessFocus/perspectives（真实可查证）/capture。
+- 不确定的内容标「（待核）」，不得伪造。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"chapter": {"title": "...", "knowledgeType": "...", "coreIdea": "...", "focusQuestion": "...", "keyConcepts": ["..."], "prerequisites": ["..."], "expectedOutcome": "...", "assessFocus": "...", "perspectives": ["..."], "capture": ["..."]}}
+\`\`\``;
 
 /* ---------------- 读书对话·五模式引擎（借鉴 alice.fans 的 5 种开场模式,做成底层交互契约） ----------------
  * 每个模式=一套硬规则(禁止什么/每轮结构/退出条件),不是口吻切换。
@@ -1222,14 +1397,14 @@ ${MODE_RULES[mode] ?? MODE_RULES.socratic}
 
 
 /* 讲义语气块（严厉度开关的讲义侧;判分侧在 QUIZ_GRADE） */
-export const TONE_LESSON_BLOCK = (tone: string) =>
+export const TONE_LESSON_BLOCK = (tone: "standard" | "gentle") =>
   tone === "gentle"
     ? `
 
 ## 语气档位：温和
 讲义保持标准质量,但表述上：先说清这节课"做完你能多会什么";卡点处用「常见的一步是…」替代「你容易错」;结尾加一句绑定本日具体内容的鼓励（不许空泛）。验收标准本身不放水。`
     : "";
-export const NOTE_ASSIST = (mode: string, text: string) => `你是 Mentora 第二大脑的写作助手。用户对下面这段笔记发起「${mode}」操作。
+export const NOTE_ASSIST = (mode: "rewrite" | "summarize" | "continue", text: string) => `你是 Mentora 第二大脑的写作助手。用户对下面这段笔记发起「${mode}」操作。
 - mode=rewrite: 在**不改变原意与事实**的前提下润色改写:更清晰、更简洁、保留 Markdown 格式与 [[双链]]/#标签;直接输出改写后的全文,不要任何解释。
 - mode=summarize: 输出 3-6 条要点式摘要(Markdown 列表),抓住结论与因果,不要废话;直接输出摘要。
 - mode=continue: 顺着原文思路续写 1-2 段,保持语气与格式;直接输出续写内容。
@@ -1303,6 +1478,8 @@ ${ctx}
 }
 \`\`\``;
 
+/* ---------------- 13. 左下角智能体：Mentora 使用助手 ---------------- */
+
 export const APP_ASSISTANT = (ctx: string) => `你是 Mentora 的使用助手，住在应用左下角。用户任何关于这个产品的问题——功能在哪、怎么用、某条数据去哪了、某个按钮什么意思——都用**简短、直接、可执行**的方式回答。像同事，不像客服：不客套、不排比、三句内说完就说完。
 
 ## 你知道的产品全貌
@@ -1318,7 +1495,7 @@ export const WIKI_COMPILE = (target: string, candidates: string) => `你是 Ment
 """
 ${target}
 """
-候选页面(标题+摘要+是否已链):
+候选页面(标题+摘要):
 """
 ${candidates}
 """
@@ -1370,13 +1547,11 @@ export const AGENT_CHAT = (
 
 ## 用户当前状态
 ${ctx || "（暂无学习目标，可能是新用户）"}
-${opts.personal ? `
-${opts.personal}
-` : ""}${ragCtx ? `
+${ragCtx ? `
 ## 用户第二大脑里检索到的相关笔记（**证据**，不是答案）
 ${ragCtx}
 
-证据纪律：先消化再用自己的话讲，禁止整段照抄；与问题无关就别用；需要精确表述时引用原句并说明来自哪篇笔记；**笔记里没有的内容绝不说"你笔记里提到过"**；证据互相矛盾时明确说出矛盾点。
+证据纪律：${EVIDENCE_DISCIPLINE}。
 ` : ""}
 ${opts.hasImage ? `
 ## 这一轮用户带了图片

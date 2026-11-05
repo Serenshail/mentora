@@ -61,6 +61,10 @@ export async function PATCH(req: NextRequest) {
 
   // 改名（同步重签会话，立即生效）
   if (body.name !== undefined) {
+    // name:null 曾经 String(null) 变成 "null" 通过校验写进会话（avatar 分支对 null 有显式处理，这里对齐）
+    if (body.name === null) {
+      return Response.json({ error: "称呼不能为空" }, { status: 400 });
+    }
     const name = String(body.name).trim();
     if (name.length < 1 || name.length > 24) {
       return Response.json({ error: "称呼请控制在 1–24 个字" }, { status: 400 });

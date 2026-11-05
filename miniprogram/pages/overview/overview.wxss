@@ -3,7 +3,7 @@
 
 .due {
   margin-top: 20rpx;
-  border-color: rgba(91, 84, 230, 0.22);
+  border-color: var(--accent-line);
 }
 .due-num {
   font-size: 52rpx;

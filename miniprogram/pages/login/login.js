@@ -50,8 +50,14 @@ Page({
       .then(function (j) {
         var user = j.user;
         getApp().globalData.user = user;
-        return store.onLogin(user.userId).then(function () {
-          util.toast("登录成功", "success");
+        return store.onLogin(user.userId).then(function (r) {
+          /* 首次云端拉取失败要显式提示：旧实现照样报「登录成功」跳转，
+           * 新手机上落地只见空态，与账号为空不可区分。 */
+          if (r === "error") {
+            util.toast("登录成功，但云端拉取失败，稍后可在「我的」里手动同步");
+          } else {
+            util.toast("登录成功", "success");
+          }
           wx.switchTab({ url: "/pages/overview/overview" });
         });
       })

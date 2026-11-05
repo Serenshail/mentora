@@ -22,8 +22,29 @@ export interface LinkCheck {
   author?: string;
 }
 
-const linkCache = new Map<string, LinkCheck>();
+/* 体检缓存：旧实现是永不失效的裸 Map——链接恢复/失效后界面一直显示旧结论，
+ * 容量也没有上限。加 TTL（30 分钟）+ 容量上限（超限先淘汰最早写入的）。 */
+const LINK_TTL_MS = 30 * 60 * 1000;
+const LINK_CACHE_MAX = 800;
+const linkCache = new Map<string, { c: LinkCheck; at: number }>();
 const inflight = new Map<string, Promise<LinkCheck | null>>();
+
+function cacheGet(url: string): LinkCheck | undefined {
+  const hit = linkCache.get(url);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > LINK_TTL_MS) {
+    linkCache.delete(url);
+    return undefined;
+  }
+  return hit.c;
+}
+function cacheSet(url: string, c: LinkCheck) {
+  if (linkCache.size >= LINK_CACHE_MAX) {
+    const oldest = linkCache.keys().next().value;
+    if (oldest !== undefined) linkCache.delete(oldest);
+  }
+  linkCache.set(url, { c, at: Date.now() });
+}
 
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), ms))]);
@@ -46,7 +67,7 @@ async function fetchChecks(urls: string[]): Promise<LinkCheck[]> {
 /** 批量体检(缓存优先,缺失的分块并发拉取);整体 12s 超时,超时部分返回 null 不阻塞 */
 export async function checkUrls(urls: string[]): Promise<Map<string, LinkCheck>> {
   const out = new Map<string, LinkCheck>();
-  const misses = [...new Set(urls)].filter((u) => u && !linkCache.has(u));
+  const misses = [...new Set(urls)].filter((u) => u && !cacheGet(u));
   if (misses.length) {
     const chunks: string[][] = [];
     for (let i = 0; i < misses.length; i += 10) chunks.push(misses.slice(i, i + 10));
@@ -55,10 +76,10 @@ export async function checkUrls(urls: string[]): Promise<Map<string, LinkCheck>>
       12_000,
       []
     );
-    for (const list of settled) for (const c of list) linkCache.set(c.url, c);
+    for (const list of settled) for (const c of list) cacheSet(c.url, c);
   }
   for (const u of urls) {
-    const c = linkCache.get(u);
+    const c = cacheGet(u);
     if (c) out.set(u, c);
   }
   return out;
@@ -66,14 +87,14 @@ export async function checkUrls(urls: string[]): Promise<Map<string, LinkCheck>>
 
 /** UI 徽章用:缓存命中即返回,否则单条异步补检 */
 export function ensureCheck(url: string): Promise<LinkCheck | null> {
-  const hit = linkCache.get(url);
+  const hit = cacheGet(url);
   if (hit) return Promise.resolve(hit);
   const pend = inflight.get(url);
   if (pend) return pend;
   const p = fetchChecks([url])
     .then((list) => {
       const c = list[0] ?? null;
-      if (c) linkCache.set(url, c);
+      if (c) cacheSet(url, c);
       inflight.delete(url);
       return c;
     })
@@ -118,8 +139,12 @@ export async function refineResources(resources: Resource[], ctx: string): Promi
   const bad = norm.filter((r) => r.url && badByUrl.has(r.url));
   let reps: Resource[] = [];
   try {
-    const full = await withTimeout(
-      streamChat({
+    /* 超时必须同时中止上游：旧实现 20s 赢得竞态后底层 streamChat 仍在跑完，
+     * 用户为自己的 BYOK Key 白付一次注定被丢弃的生成。 */
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20_000);
+    try {
+      const full = await streamChat({
         task: "resource-fix",
         args: {
           bad: JSON.stringify(
@@ -129,15 +154,21 @@ export async function refineResources(resources: Resource[], ctx: string): Promi
         },
         messages: [{ role: "user", content: "替换。" }],
         temperature: 0.3,
+        signal: ctrl.signal,
         onDelta: () => {},
-      }),
-      20_000,
-      ""
-    );
-    if (full) reps = asArray<Resource>(extractJson<unknown>(full));
+      });
+      if (full) reps = asArray<Resource>(extractJson<unknown>(full));
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     reps = [];
   }
+
+  /* 对位校验：RESOURCE_FIX 契约要求返回数组与 bad 等长、按序对应（找不到填 null）。
+   * 模型漏项/增项时 reps[ri++] 位置配对会整体错位，错位资源会顶替错误主题展示给用户
+   * ——此时弃用全部替代项，坏资源直接丢弃，宁缺毋滥。 */
+  if (reps.length !== bad.length) reps = [];
 
   // 再体检替代项(缓存优先),只保留可访问非广告的
   const repUrls = reps.map((r) => normalizeUrl(r.url)).filter((u): u is string => !!u);

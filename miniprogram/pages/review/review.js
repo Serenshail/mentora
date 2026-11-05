@@ -95,16 +95,23 @@ Page({
         task: "review-ask",
         args: { items: JSON.stringify(items) },
         messages: [{ role: "user", content: "出题。" }],
+        /* 中途退出页面就中止：否则流跑到完成或 180s 超时，节流回调对已卸载页面 setData、
+         * 失败 toast 还会弹在用户已经离开的界面里 */
+        register: function (cancel) {
+          that._askCancel = cancel;
+        },
         onDelta: function (d) {
           qBuf += d;
           renderer.push();
         }
       })
       .then(function () {
+        that._askCancel = null;
         renderer.flush();
         that.setData({ phase: "answer", questionBusy: false });
       })
       .catch(function () {
+        that._askCancel = null;
         renderer.cancel();
         util.toast("复习出题失败，稍后再试");
         that.setData({ phase: "idle", questionBusy: false });
@@ -113,6 +120,14 @@ Page({
 
   onAnswer: function (e) {
     this.setData({ answer: e.detail.value });
+  },
+
+  /* 离开页面（返回/切走销毁）中止在途出题流 */
+  onUnload: function () {
+    if (this._askCancel) {
+      this._askCancel();
+      this._askCancel = null;
+    }
   },
 
   submit: function () {

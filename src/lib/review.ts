@@ -22,6 +22,10 @@ export function isReviewCandidate(item: KnowledgeItem): boolean {
   return true;
 }
 
+/** 手动移出复习的墓碑：reviewStage = -1。与「从未入队」（缺 nextReviewAt、stage 0）
+ *  区分开，否则 backfillReviewDates 每次刷新/登录都会把用户手动移出的条目重新拉回队列。 */
+export const REVIEW_REMOVED = -1;
+
 /**
  * 旧数据自愈：来源为 learn/read、缺 nextReviewAt、且不是占位/MOC 的笔记
  * 补成今天。返回新数组（无变化时返回原引用，避免多余渲染）。
@@ -30,6 +34,8 @@ export function backfillReviewDates(items: KnowledgeItem[], today: string): Know
   let changed = false;
   const out = items.map((k) => {
     if (k.nextReviewAt || !isReviewCandidate(k)) return k;
+    // 用户手动移出的条目（墓碑）不再回填，尊重用户操作
+    if (k.reviewStage === REVIEW_REMOVED) return k;
     if (!(AUTO_REVIEW_SOURCES as readonly string[]).includes(k.source)) return k;
     changed = true;
     return { ...k, nextReviewAt: today };
@@ -37,9 +43,9 @@ export function backfillReviewDates(items: KnowledgeItem[], today: string): Know
   return changed ? out : items;
 }
 
-/** 手动加入复习时的补丁（也用于「移出复习」时传 null） */
+/** 手动加入/移出复习时的补丁（移出用墓碑标记，防止被自愈回填撤销） */
 export function reviewPatch(enabled: boolean, today: string): Partial<KnowledgeItem> {
   return enabled
-    ? { nextReviewAt: today, reviewStage: 0, lastReviewOk: undefined }
-    : { nextReviewAt: undefined, reviewStage: 0 };
+    ? { nextReviewAt: today, reviewStage: 0 }
+    : { nextReviewAt: undefined, reviewStage: REVIEW_REMOVED };
 }

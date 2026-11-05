@@ -37,16 +37,16 @@ function readAsText(file: File): Promise<string> {
   return file.text();
 }
 
-/** 解析 frontmatter（--- ... ---），返回元数据与剥离后的正文 */
-function splitFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
+/** 解析 frontmatter（--- ... ---），返回元数据、剥离后的正文与原始 meta 块（调用方抽 tags 用，避免再 match 一遍） */
+function splitFrontmatter(raw: string): { meta: Record<string, string>; body: string; metaBlock: string } {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-  if (!m) return { meta: {}, body: raw };
+  if (!m) return { meta: {}, body: raw, metaBlock: "" };
   const meta: Record<string, string> = {};
   for (const line of m[1].split(/\r?\n/)) {
     const kv = line.match(/^([A-Za-z_\-\u4e00-\u9fa5]+)\s*:\s*(.*)$/);
     if (kv) meta[kv[1].toLowerCase()] = kv[2].trim().replace(/^["']|["']$/g, "");
   }
-  return { meta, body: raw.slice(m[0].length) };
+  return { meta, body: raw.slice(m[0].length), metaBlock: m[1] };
 }
 
 /** 抽取 [[双链]] 目标：[[目标|别名]]、[[目标#锚]]、![[嵌入]] 都归一到目标标题 */
@@ -67,10 +67,7 @@ export function extractInlineTags(body: string): string[] {
   const re = /(?:^|\s)#([^\s#`~!@#$%^&*()=+{\}[\]|\\:;"'<>,.?/，。！？：（）【】]{2,24})/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) {
-    const lineStart = m.index === 0 || body[m.index] === "\n";
-    if (lineStart && /^#[^#]/.test(m[0].trim()) === false) {
-      /* 行首 # 若是标题（# 后紧跟空格）不算标签——上面字符类已排除空格 */
-    }
+    /* 行首 # 若是标题（# 后紧跟空格）不算标签——上面的字符类已排除空格，无需额外判断 */
     const t = m[1].replace(/[.,;:!?，。：；！？]+$/, "");
     if (t && !/^\d+$/.test(t)) out.add(t);
   }
@@ -130,11 +127,12 @@ export async function parseVault(
     if (!skipped) {
       try {
         const raw = await readAsText(file);
-        const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-        const { meta, body: md } = splitFrontmatter(raw);
+        /* metaBlock 由 splitFrontmatter 一并带回：旧实现先手动 match 再调函数再 match，
+         * 同一正则跑两遍（报告 3.2 登记）。 */
+        const { meta, body: md, metaBlock } = splitFrontmatter(raw);
         body = md.trim();
         if (meta.title) title = meta.title;
-        tags = [...new Set([...extractMetaTags(fm ? fm[1] : ""), ...extractInlineTags(body)])].slice(0, 12);
+        tags = [...new Set([...extractMetaTags(metaBlock), ...extractInlineTags(body)])].slice(0, 12);
       } catch {
         skipped = "读取失败（非 UTF-8？）";
       }

@@ -57,16 +57,19 @@ Page({
     }
     that.setData({ greet: periodGreet() });
     that.render();
-    store.pullIfSafe(false).then(function () {
+    store.pullIfSafe(false).then(function (r) {
       that.render();
+      /* 拉取失败要可见：旧实现把返回值扔掉，与成功不可区分 */
+      if (r === "error") util.toast("云端对齐失败，请检查网络");
     });
   },
 
   onPullDownRefresh: function () {
     var that = this;
-    store.pullIfSafe(true).then(function () {
+    store.pullIfSafe(true).then(function (r) {
       that.render();
       wx.stopPullDownRefresh();
+      if (r === "error") util.toast("同步失败，请检查网络后重试");
     });
   },
 
@@ -84,7 +87,17 @@ Page({
         wx.reLaunch({ url: "/pages/login/login" });
       })
       .catch(function () {
-        wx.reLaunch({ url: "/pages/login/login" });
+        /* 网络失败 ≠ 未登录：旧实现一律踢到登录页，无网冷启动被当未登录。
+         * 模态给重试入口（不依赖页面模板），取消则留在本页。 */
+        wx.showModal({
+          title: "连接失败",
+          content: "网络似乎不可用，请检查后重试。",
+          confirmText: "重试",
+          cancelText: "暂不",
+          success: function (res) {
+            if (res.confirm) that.probe();
+          }
+        });
       });
   },
 

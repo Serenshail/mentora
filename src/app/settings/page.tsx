@@ -9,9 +9,10 @@ import { PROVIDERS } from "@/lib/ai/providers";
 import type { ProviderId } from "@/lib/types";
 import { useAuth, pullCloud } from "@/lib/auth-client";
 import { cn, downloadJson } from "@/lib/utils";
+import Link from "next/link";
 import { toast } from "sonner";
-import { QrCode, 
-  Camera, Database, Download, KeyRound, LogOut, RefreshCw, Save, Trash2, Upload, UserRound, X,
+import {
+  Camera, Database, Download, Gift, KeyRound, LogOut, RefreshCw, Save, Trash2, Upload, UserRound, X,
 } from "lucide-react";
 
 /* ================= 账户：头像 + 称呼 ================= */
@@ -40,6 +41,8 @@ function AccountSection() {
   const setTone = (t: "standard" | "gentle") => setSettings({ coachTone: t });
   const digestWeekly = useAppStore((s) => s.settings.digestWeekly ?? false);
   const [name, setName] = useState("");
+  /* 退出的三态：旧实现是裸 await fetch —— 断网时按钮点了没反应、不跳转也不报错 */
+  const [loggingOut, setLoggingOut] = useState(false);
   const [avatar, setAvatar] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
   const [savingAvatar, setSavingAvatar] = useState(false);
@@ -220,6 +223,29 @@ function AccountSection() {
         </div>
       </Card>
 
+      {/* 会员：状态 + 续费入口（真正操作在 /membership，避免设置页塞表单） */}
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-ink">会员</p>
+            <p className="mt-1 text-xs text-ink-dim">
+              {user.entitlement?.status === "legacy"
+                ? "你的账号长期有效。"
+                : user.entitlement?.status === "expired"
+                  ? `已于 ${new Date(user.entitlement.expiresAt || "").toLocaleDateString("zh-CN")} 到期，AI 生成已暂停，数据仍在。`
+                  : user.entitlement?.expiresAt
+                    ? `有效期至 ${new Date(user.entitlement.expiresAt).toLocaleDateString("zh-CN")}，还剩 ${user.entitlement.daysLeft} 天。`
+                    : "查看当前会员状态。"}
+            </p>
+          </div>
+          <Link href="/membership">
+            <Button variant="outline" size="sm">
+              查看 / 续费
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
       {/* 教练严厉度：只改语气，不改判分标准 */}
       <Card>
         <p className="text-sm font-bold text-ink">教练风格</p>
@@ -231,6 +257,7 @@ function AccountSection() {
             <button
               key={t}
               onClick={() => setTone(t)}
+              aria-pressed={coachTone === t}
               className={cn(
                 "cursor-pointer rounded-lg border px-4 py-2 text-[13px] transition",
                 coachTone === t
@@ -286,8 +313,17 @@ function AccountSection() {
           </div>
           <Button
             variant="danger"
+            loading={loggingOut}
             onClick={async () => {
-              await logout();
+              setLoggingOut(true);
+              try {
+                await logout();
+              } catch (e) {
+                /* 本地已按登出处理（不回滚用户操作），但要如实告知服务端没生效 */
+                toast.error(e instanceof Error ? e.message : "退出登录未在服务端生效");
+              } finally {
+                setLoggingOut(false);
+              }
               window.location.href = "/";
             }}
           >
@@ -384,6 +420,10 @@ function AccountSection() {
             loading={savingDel}
             onClick={async () => {
               if (savingDel) return;
+              if (!delPwd) {
+                toast.error("先输入登录密码再点注销");
+                return;
+              }
               if (delPwd !== delPwd2) {
                 toast.error("再点一次以确认注销（该操作不可恢复）");
                 setDelPwd2(delPwd);
@@ -399,7 +439,10 @@ function AccountSection() {
                 const j = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(j.error || "注销失败");
                 const uidLocal = user.userId;
-                await logout();
+                /* 账号已注销：会话大概率已失效，logout 可能失败——不能让它阻断后面的本机清理 */
+                try {
+                  await logout();
+                } catch { /* 忽略：下面照常清本机仓并跳转 */ }
                 try {
                   localStorage.removeItem(`mentora-store-${uidLocal}`);
                   localStorage.removeItem("mentora-sync-choice");
@@ -432,7 +475,8 @@ function ModelSection() {
 
   if (!hydrated) return <Skeleton className="h-40 rounded-2xl bg-surface/60" />;
 
-  const info = PROVIDERS[settings.provider];
+  /* 兜底：provider 可能来自旧备份/云端快照，不保证是合法键——直接索引会 TypeError 崩整页 */
+  const info = PROVIDERS[settings.provider] ?? PROVIDERS[DEFAULT_SETTINGS.provider];
   const showCustom = settings.provider === "custom";
 
   const pickProvider = (id: ProviderId) => {
@@ -575,11 +619,16 @@ function DataSection() {
 
   const importFile = async (file: File) => {
     try {
-      const data = JSON.parse(await file.text());
-      importData(data);
+      const data: unknown = JSON.parse(await file.text());
+      /* 结构校验在 store 里做：坏数据一旦进 store 会被 persist 落盘，
+       * 刷新后 goals.map / PROVIDERS[provider] 直接 TypeError，应用内连「清空数据」都点不到。 */
+      if (!importData(data)) {
+        toast.error("文件结构不对（goals/knowledge 等字段不是预期的数组），未导入任何数据");
+        return;
+      }
       toast.success("导入成功");
     } catch {
-      toast.error("文件格式不对，导入失败");
+      toast.error("文件不是合法 JSON，导入失败");
     }
   };
 
@@ -589,11 +638,18 @@ function DataSection() {
     setRestoring(true);
     try {
       const cloud = await pullCloud();
-      if (!cloud) {
+      if (cloud.status === "error") {
+        toast.error(`拉取云端失败：${cloud.message}`);
+        return;
+      }
+      if (cloud.status === "empty") {
         toast.error("云端没有备份数据（可能从未成功推送过）");
         return;
       }
-      importData(cloud.data);
+      if (!importData(cloud.data)) {
+        toast.error("云端数据格式不对，已保持本机不变");
+        return;
+      }
       toast.success(`已从云端恢复（更新于 ${new Date(cloud.updatedAt).toLocaleString("zh-CN")}）`);
     } catch {
       toast.error("拉取云端失败，稍后再试");
@@ -665,7 +721,7 @@ const TABS = [
   { id: "account", label: "账户", icon: UserRound },
   { id: "model", label: "模型", icon: KeyRound },
   { id: "data", label: "数据", icon: Database },
-  { id: "invite", label: "推荐", icon: QrCode },
+  { id: "invite", label: "邀请", icon: Gift },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -688,6 +744,7 @@ export default function SettingsPage() {
             <button
               key={id}
               onClick={() => setTab(id)}
+              aria-current={tab === id ? "page" : undefined}
               className={cn(
                 "flex min-h-[44px] shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-3.5 py-2 text-[13.5px] font-medium transition",
                 tab === id
@@ -705,15 +762,148 @@ export default function SettingsPage() {
           {tab === "account" && <AccountSection />}
           {tab === "model" && <ModelSection />}
           {tab === "data" && <DataSection />}
-          {tab === "invite" && <InviteSection />}
+          {tab === "invite" && (
+            <>
+              <ReferralSection />
+              <div className="mt-5">
+                <GroupSection />
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
+/* ================= 邀请（拉新）：我的邀请码 + 拉新战绩 ================= */
+/* 用户定（2026-11-05）：拉一个新用户送一个月；邀请码放设置页，不单独占导航位。 */
+interface RefInfo {
+  refCode: string;
+  invited: number;
+  rewardedCount: number;
+  rewardedDays: number;
+  rewardDays: number;
+  list: { email: string; at: string; rewarded: boolean }[];
+}
+
+function ReferralSection() {
+  const [info, setInfo] = useState<RefInfo | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const load = () => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/referral", { cache: "no-store" });
+        if (!res.ok) throw new Error();
+        setInfo(await res.json());
+      } catch {
+        setFailed(true);
+      }
+    })();
+  };
+  useEffect(load, []);
+
+  if (failed) {
+    return (
+      <Card>
+        <p className="text-sm font-bold text-ink">邀请</p>
+        <p className="mt-1.5 text-[13px] text-ink-dim">邀请码暂时取不到。</p>
+        <Button variant="outline" size="sm" className="mt-3" onClick={load}>重试</Button>
+      </Card>
+    );
+  }
+  if (!info) return <Skeleton className="h-44 rounded-2xl bg-surface/60" />;
+
+  const link = typeof window !== "undefined" ? `${window.location.origin}/login?mode=register&ref=${info.refCode}` : "";
+
+  return (
+    <Card>
+      <p className="text-sm font-bold text-ink">拉一个朋友，你多一个月</p>
+      <p className="mt-1.5 text-[13px] leading-relaxed text-ink-dim">
+        朋友注册时填你的邀请码（或直接用你的链接），他开通后<b className="text-ink">你这边自动加 {info.rewardDays} 天</b>。
+        朋友需要自己有一张激活码，或先在首页申请 7 天体验。
+      </p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <code className="rounded-lg border border-border bg-surface-2 px-3.5 py-2 font-mono text-lg tracking-[0.2em] text-ink">
+          {info.refCode}
+        </code>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={async () => {
+            const { copyText } = await import("@/lib/utils");
+            const ok = await copyText(info.refCode);
+            if (ok) toast.success("已复制邀请码");
+            else toast.error("复制失败，请手动选中");
+          }}
+        >
+          复制邀请码
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={async () => {
+            const { copyText } = await import("@/lib/utils");
+            const ok = await copyText(link);
+            if (ok) {
+              setLinkCopied(true);
+              setTimeout(() => setLinkCopied(false), 2000);
+            } else {
+              toast.error("复制失败，请手动复制下方链接");
+            }
+          }}
+        >
+          {linkCopied ? "已复制" : "复制邀请链接"}
+        </Button>
+      </div>
+      <p className="mt-2 font-mono text-[11px] break-all text-ink-dim/70">{link}</p>
+
+      <div className="mt-4 grid grid-cols-3 gap-3 text-center">
+        <div className="rounded-xl border border-border bg-surface-2 px-2 py-3">
+          <p className="text-lg font-bold tabular text-ink">{info.invited}</p>
+          <p className="mt-0.5 text-[11px] text-ink-dim">已邀请</p>
+        </div>
+        <div className="rounded-xl border border-border bg-surface-2 px-2 py-3">
+          <p className="text-lg font-bold tabular text-ink">{info.rewardedCount}</p>
+          <p className="mt-0.5 text-[11px] text-ink-dim">已开通</p>
+        </div>
+        <div className="rounded-xl border border-border bg-surface-2 px-2 py-3">
+          <p className="text-lg font-bold tabular text-ink">+{info.rewardedDays}</p>
+          <p className="mt-0.5 text-[11px] text-ink-dim">已得天数</p>
+        </div>
+      </div>
+      <p className="mt-3 text-[11px] leading-relaxed text-ink-dim/70">
+        30 天内最多结算 10 次奖励；自己邀请自己的不计。朋友注册成功后这里立刻更新。
+      </p>
+
+      {info.list.length > 0 && (
+        <div className="mt-4">
+          <p className="text-[13px] font-semibold text-ink">我邀请的人</p>
+          <ul className="mt-2 space-y-1.5">
+            {info.list.map((r) => (
+              <li key={r.email} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-2 px-3 py-2 text-[13px]">
+                <span className="min-w-0 truncate text-ink">{r.email}</span>
+                <span className="flex shrink-0 items-center gap-2 text-[11px] text-ink-dim">
+                  {new Date(r.at).toLocaleDateString("zh-CN")}
+                  <Badge tone={r.rewarded ? "ok" : "dim"}>{r.rewarded ? "已结算 +30 天" : "未结算"}</Badge>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] text-ink-dim/70">
+            朋友的朋友再用朋友的邀请码注册，链条会在后台一路记下去——每一级都能查到上一级是谁。
+          </p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /* ================= 推荐：扫码进微信 / 飞书交流群 ================= */
-function InviteSection() {
+function GroupSection() {
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -762,6 +952,8 @@ function InviteSection() {
               if (ok) {
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
+              } else {
+                toast.error("复制失败，请手动全选上面的链接复制");
               }
             }}
           >

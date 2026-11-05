@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { dbFeedbackSave } from "@/lib/server/db";
-import { rateLimit, clientIp } from "@/lib/server/rate-limit";
+import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -11,14 +11,16 @@ export const maxDuration = 30;
  * env: GITHUB_TOKEN（需 repo 权限）、GITHUB_REPO（默认 haow9508-ctrl/mentora）
  */
 export async function POST(req: NextRequest) {
-  // 防刷：每 IP 突发 5 条、每分钟回填 2 条（未登录也可反馈,故必须限流）
-  if (!rateLimit(`feedback:${clientIp(req)}`, { capacity: 5, refillPerSec: 2 / 60 })) {
+  // 防刷：每 IP 突发 5 条、每分钟回填 2 条（未登录也可反馈,故必须限流；持久桶跨实例一致，
+  // 进程内桶在多实例下配额=每实例额度×实例数，可刷爆 GitHub Issues 配额）
+  if (!(await rateLimitPersistent(`feedback:${clientIp(req)}`, { capacity: 5, refillPerSec: 2 / 60 }))) {
     return Response.json({ error: "反馈太频繁，请稍后再试" }, { status: 429 });
   }
   const body = await req.json().catch(() => null);
   const content = String(body?.content ?? "").trim();
   const type = ["建议", "问题", "其他"].includes(body?.type) ? body.type : "其他";
-  const contact = String(body?.contact ?? "").trim();
+  /* contact 是唯一没截断的用户输入：超长会把 GitHub Issue body 顶爆（API 直接 400 → 用户收到 502） */
+  const contact = String(body?.contact ?? "").trim().slice(0, 200);
   const page = String(body?.page ?? "").slice(0, 120);
 
   if (content.length < 2) {
@@ -56,6 +58,7 @@ export async function POST(req: NextRequest) {
         Authorization: `token ${token}`,
         "Content-Type": "application/json",
         Accept: "application/vnd.github+json",
+        "User-Agent": "mentora", // GitHub API 必需 UA，与 db.ts ghApi 同一取值
       },
       body: JSON.stringify({
         title,

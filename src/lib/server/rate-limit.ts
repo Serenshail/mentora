@@ -78,9 +78,29 @@ export async function rateLimitPersistent(key: string, opts: RateLimitOpts): Pro
   }
 }
 
-/** 取客户端 IP（优先代理头） */
+/* 本站前面有几层反向代理会把真实对端地址追加到 X-Forwarded-For 末尾。
+ * 默认 1（Caddy / ELB 直连最常见）；两层链路（LB→Caddy→app）配 2。 */
+function trustedProxyHops(): number {
+  const raw = Number(process.env.TRUSTED_PROXY_HOPS ?? "1");
+  return Number.isInteger(raw) && raw >= 1 && raw <= 10 ? raw : 1;
+}
+
+/**
+ * 取客户端 IP（限流键的唯一来源）。
+ *
+ * 安全前提：X-Forwarded-For 的最左段按 HTTP 语义是"离客户端最近"的一跳，也就是
+ * 客户端自己可以随便填的那一段——拿它做键，攻击者每次请求换一个伪造值就得到
+ * 一个全新限流桶，login/admin 的爆破防线与全站桶全部失效。
+ * 可信代理会把真实对端追加在末尾，所以从右往左数「可信跳数」，伪造的前缀不参与。
+ */
 export function clientIp(req: Request): string {
   const fwd = req.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0].trim();
-  return req.headers.get("x-real-ip") ?? "unknown";
+  if (fwd) {
+    const parts = fwd.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length) {
+      const hops = trustedProxyHops();
+      return parts[Math.max(0, parts.length - hops)];
+    }
+  }
+  return req.headers.get("x-real-ip")?.trim() || "unknown";
 }

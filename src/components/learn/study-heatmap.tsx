@@ -12,7 +12,7 @@
 import { useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { Card } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { addDays, cn, streakFrom, todayISO } from "@/lib/utils";
 
 interface DayCell {
   date: string; // YYYY-MM-DD
@@ -23,8 +23,13 @@ interface DayCell {
   future?: boolean; // 今天之后的空格子：不可点、不着色
 }
 
-function localDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/* 事件日期（quizLog.date / masteredAt）一律是 UTC 日字符串（utils.ts:70 不变量）：
+ * 直接取前 10 位作 key。绝不能 new Date(q.date) 再读本地 getDate——UTC 零点被按本地
+ * 时区分桶，负偏移用户当天学习会落到前一天甚至墙外。 */
+function dayKey(raw: string): string | null {
+  if (!raw) return null;
+  const s = raw.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
 export function StudyHeatmap() {
@@ -35,46 +40,42 @@ export function StudyHeatmap() {
 
   const { weeks, streak, totalPass, today } = useMemo(() => {
     const byDate = new Map<string, DayCell>();
-    const ensure = (d: Date): DayCell => {
-      const k = localDateStr(d);
+    /* 全程用 UTC 日字符串做 key（与 quizLog.date / masteredAt / todayISO 同一坐标系，
+     * utils.ts:70 不变量）——事件日期绝不能再 new Date() 后读本地 getDate 分桶。 */
+    const ensure = (k: string): DayCell => {
       if (!byDate.has(k)) byDate.set(k, { date: k, level: 0, quizPassed: 0, quizTotal: 0, mastered: 0 });
       return byDate.get(k)!;
     };
 
     for (const q of quizLog) {
-      const d = new Date(q.date);
-      if (isNaN(d.getTime())) continue;
-      const c = ensure(d);
-      c.quizTotal++;
-      if (q.passed) c.quizPassed++;
+      const k = dayKey(q.date);
+      if (!k) continue;
+      ensure(k).quizTotal++;
+      if (q.passed) ensure(k).quizPassed++;
     }
     for (const k of knowledge ?? []) {
-      if (!k.masteredAt) continue;
-      const d = new Date(k.masteredAt);
-      if (isNaN(d.getTime())) continue;
-      const c = ensure(d);
-      c.mastered++;
+      const key = dayKey(k.masteredAt ?? "");
+      if (!key) continue;
+      ensure(key).mastered++;
     }
     // 复习事件不进格子：FSRS 卡只有当前状态，回推不出每天复习了几条（见文件头注释）。
 
-    // 26 周 × 7 天的墙
+    // 26 周 × 7 天的墙（纯 UTC 日历运算）：按今天所在周收尾对齐——周日开头、末列含今天。
+    // 旧写法从今天回退 181 天再对齐到周日，墙尾会落在今天之前 0-6 天，
+    // 最近几天（含今天）一周里只有周六能渲染，future 分支成死代码。
     const cells: DayCell[][] = [];
-    const today = new Date();
-    const end = new Date(today);
-    const start = new Date(today);
-    start.setDate(start.getDate() - (26 * 7 - 1));
-    // 按周对齐：从 start 所在周日起
-    start.setDate(start.getDate() - start.getDay());
+    const today = todayISO();
+    const todayDow = new Date(`${today}T00:00:00Z`).getUTCDay();
+    const start = addDays(-(25 * 7 + todayDow), today);
     for (let w = 0; w < 26; w++) {
       const col: DayCell[] = [];
       for (let i = 0; i < 7; i++) {
-        const d = new Date(start);
-        d.setDate(start.getDate() + w * 7 + i);
-        if (d > today) {
-          col.push({ date: localDateStr(d), level: 0, quizPassed: 0, quizTotal: 0, mastered: 0, future: true });
+        const key = addDays(w * 7 + i, start);
+        if (key > today) {
+          col.push({ date: key, level: 0, quizPassed: 0, quizTotal: 0, mastered: 0, future: true });
           continue;
         }
-        const c = ensure(d);
+        const c = ensure(key);
         // level：3=当天验收全过 / 2=有通过也有未过 / 1=没做验收但当天新掌握了东西 / 0=无
         if (c.quizTotal > 0) c.level = c.quizPassed === c.quizTotal ? 3 : 2;
         else if (c.mastered > 0) c.level = 1;
@@ -83,19 +84,11 @@ export function StudyHeatmap() {
       cells.push(col);
     }
 
-    // 连续天数（到今天,允许昨天断但今天补上则仍连续——宽限 1 天由 UI 提示,这里按严格连续）
-    let streak = 0;
-    for (let i = 0; i < 365; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() - i);
-      const c = byDate.get(localDateStr(d));
-      const active = c && (c.quizTotal > 0 || c.mastered > 0);
-      if (active) streak++;
-      else if (i === 0) continue; // 今天还没学不扣
-      else break;
-    }
+    // 连续天数：直接用 utils 的 streakFrom（今天没学不打断，从昨天起数）
+    const activeDays = [...byDate.values()].filter((c) => c.quizTotal > 0 || c.mastered > 0).map((c) => c.date);
+    const streak = streakFrom(activeDays);
     const totalPass = quizLog.filter((q) => q.passed).length;
-    return { weeks: cells, streak, totalPass, today: localDateStr(today) };
+    return { weeks: cells, streak, totalPass, today };
   }, [quizLog, knowledge]);
 
   const LVL = [
@@ -119,11 +112,12 @@ export function StudyHeatmap() {
         <div className="flex gap-[3px]">
           {weeks.map((col, wi) => (
             <div key={wi} className="flex flex-col gap-[3px]">
-              {col.map((c, di) => {
+              {col.map((c) => {
                 const future = c.future;
                 return (
                   <button
                     key={c.date}
+                    disabled={future}
                     title={future ? "" : `${c.date} · ${c.level === 0 ? "未学习" : `验收 ${c.quizPassed}/${c.quizTotal}${c.mastered ? ` · 掌握 ${c.mastered}` : ""}`}`}
                     onClick={() => !future && setPicked(c)}
                     className={cn(

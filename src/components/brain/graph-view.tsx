@@ -33,14 +33,6 @@ interface SimNode {
 
 const WORLD = 1400; // 初始布局半径参考（世界坐标无边界，可无限平移）
 
-function domainColor(domain: string): string {
-  const palette = ["#5b54e6", "#0e7490", "#047857", "#b45309", "#9f1239", "#475569"];
-  let h = 0;
-  for (let i = 0; i < domain.length; i++) h = (h * 31 + domain.charCodeAt(i)) >>> 0;
-  return palette[h % palette.length];
-}
-void domainColor; // 已改为 Obsidian 单色系，保留以防后续需要
-
 export function GraphView({
   notes,
   onOpen,
@@ -52,6 +44,13 @@ export function GraphView({
   focusId?: string | null;
 }) {
   const [gQuery, setGQuery] = useState("");
+  /* 输入即过滤会让大库每次击键重扫全部正文、并整体重启力导向布局；
+   * 停手 250ms 后才应用（输入框本身仍即时回显） */
+  const [gQueryApplied, setGQueryApplied] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setGQueryApplied(gQuery), 250);
+    return () => clearTimeout(t);
+  }, [gQuery]);
   const [gDomain, setGDomain] = useState("all");
   const [showOrphans, setShowOrphans] = useState(true);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -63,13 +62,13 @@ export function GraphView({
   );
 
   const baseNotes = useMemo(() => {
-    const q = gQuery.trim().toLowerCase();
+    const q = gQueryApplied.trim().toLowerCase();
     return notes.filter((n) => {
       if (gDomain !== "all" && n.domain.split("/")[0] !== gDomain) return false;
       if (!q) return true;
       return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
     });
-  }, [notes, gQuery, gDomain]);
+  }, [notes, gQueryApplied, gDomain]);
 
   const orphanIds = useMemo(() => {
     const linked = new Set<string>();
@@ -107,6 +106,8 @@ export function GraphView({
   const hoverRef = useRef<string | null>(null);
   const dragNodeRef = useRef<string | null>(null);
   const panRef = useRef<{ sx: number; sy: number; cx: number; cy: number } | null>(null);
+  const downPtRef = useRef<{ x: number; y: number } | null>(null);
+  const movedRef = useRef(false); // 拖节点/平移后松手的 click 不是点选（否则拖完必误开笔记）
   const alphaRef = useRef(1);
   const dirtyRef = useRef(true);
   const sizeRef = useRef({ w: 920, h: 560 });
@@ -154,7 +155,11 @@ export function GraphView({
       };
     });
     countsRef.current = { nodes: nodesRef.current.length, edges: edgeList.length };
-    alphaRef.current = 1;
+    /* 仅当节点集合真的变了才整体重启布局；纯过滤（集合相同）只温和唤醒重绘，
+     * 避免连续输入时把 CPU 全耗在无意义的重排上 */
+    const setChanged =
+      nodesRef.current.length !== prev.size || nodesRef.current.some((n) => !prev.has(n.id));
+    alphaRef.current = setChanged ? 1 : Math.max(alphaRef.current, 0.15);
     dirtyRef.current = true;
     syncStats();
   }, [visibleNotes, edgeList, syncStats]);
@@ -284,7 +289,6 @@ export function GraphView({
       /* 节点 */
       const showLabels = zoom >= 0.75 || nodesRef.current.length < 80;
       for (const n of nodesRef.current) {
-        if (dragNodeRef.current && dragNodeRef.current !== n.id) { /* 拖拽中仍全量绘制 */ }
         const active = !neighborSet || neighborSet.has(n.id);
         const [sx, sy] = toScreen(n.x, n.y);
         if (sx < -40 || sy < -40 || sx > w + 40 || sy > h + 40) continue; // 视口裁剪
@@ -419,6 +423,8 @@ export function GraphView({
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    downPtRef.current = { x: sx, y: sy };
+    movedRef.current = false;
     const node = pickNode(sx, sy);
     if (node) {
       dragNodeRef.current = node.id;
@@ -432,6 +438,9 @@ export function GraphView({
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+    const down = downPtRef.current;
+    if (down && (Math.abs(sx - down.x) > 3 || Math.abs(sy - down.y) > 3)) movedRef.current = true;
 
     if (panRef.current) {
       camRef.current.x = panRef.current.cx - (sx - panRef.current.sx) / camRef.current.zoom;
@@ -459,6 +468,7 @@ export function GraphView({
   const onPointerUp = () => {
     dragNodeRef.current = null;
     panRef.current = null;
+    downPtRef.current = null;
     alphaRef.current = Math.max(alphaRef.current, 0.12);
   };
 
@@ -503,15 +513,23 @@ export function GraphView({
   }
 
   const onClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    /* 拖拽节点/平移画布松手也会派发 click：位移超门槛就不当作点选 */
+    if (movedRef.current) {
+      movedRef.current = false;
+      return;
+    }
     const rect = e.currentTarget.getBoundingClientRect();
     const node = pickNode(e.clientX - rect.left, e.clientY - rect.top);
     if (node) onOpen(node.id);
   };
 
-  const rebuild = () => {
+  const rebuild = async () => {
     if (rebuilding) return;
     if (!confirm("扫描全部笔记正文，重建 [[双链]] 关系？\n\n解析不到目标标题的链接会建成「未解析链接」占位笔记（Obsidian 同款行为）；已有人工/AI 建立的链接保留。")) return;
     setRebuilding(true);
+    /* rebuildLinks 是同步重活：先让一帧把「重建中…」和 disabled 画出来，
+     * 否则 true/false 同批合并，loading 是死状态、防重复点击失效 */
+    await new Promise((r) => setTimeout(r, 30));
     try {
       const r = useAppStore.getState().rebuildLinks();
       toast.success(`关系链重建完成：更新 ${r.touched} 篇，新建未解析占位 ${r.placeholders} 篇`);
@@ -534,6 +552,7 @@ export function GraphView({
           <p className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim/70">图谱过滤</p>
           <button
             onClick={() => setPanelOpen((v) => !v)}
+            aria-expanded={panelOpen}
             className="text-[10.5px] text-accent hover:underline cursor-pointer"
           >
             {panelOpen ? "收起" : "展开"}
@@ -579,7 +598,7 @@ export function GraphView({
                 type="checkbox"
                 checked={showOrphans}
                 onChange={(e) => setShowOrphans(e.target.checked)}
-                className="size-3 accent-[#6c5ce7]"
+                className="size-3 accent-accent"
               />
               显示孤立节点（无连接）
             </label>
@@ -602,16 +621,18 @@ export function GraphView({
 
       {/* 右下角缩放控件（Obsidian 同款） */}
       <div className="absolute bottom-3 right-3 z-10 flex overflow-hidden rounded-lg border border-border bg-white/95 shadow-sm backdrop-blur">
-        <button onClick={() => zoomBy(1 / 1.3)} title="缩小" className="px-2.5 py-1.5 text-sm text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">−</button>
+        <button onClick={() => zoomBy(1 / 1.3)} title="缩小" aria-label="缩小" className="px-2.5 py-1.5 text-sm text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">−</button>
         <button onClick={() => { camRef.current.zoom = 1; dirtyRef.current = true; syncStats(); }} title="重置缩放" aria-label={`重置缩放为 100%，当前 ${viewStats.zoom}%`} className="border-x border-border px-2.5 py-1.5 text-[11px] tabular text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">
           {viewStats.zoom}%
         </button>
-        <button onClick={() => zoomBy(1.3)} title="放大" className="px-2.5 py-1.5 text-sm text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">+</button>
-        <button onClick={fitView} title="适应全图" className="border-l border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">适应</button>
+        <button onClick={() => zoomBy(1.3)} title="放大" aria-label="放大" className="px-2.5 py-1.5 text-sm text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">+</button>
+        <button onClick={fitView} title="适应全图" aria-label="适应全图" className="border-l border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:bg-black/[0.04] hover:text-ink cursor-pointer">适应</button>
       </div>
 
       <canvas
         ref={canvasRef}
+        role="img"
+        aria-label="知识图谱"
         className="block w-full cursor-default touch-none rounded-2xl border border-border bg-[#fcfcfd]"
         style={{ height: "calc(100vh - 170px)", minHeight: 480 }}
         onPointerDown={onPointerDown}

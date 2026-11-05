@@ -54,7 +54,8 @@ export function resolveByok(req: HeaderLike, userKey: string): Promise<AIConfig 
     })();
   }
 
-  if (provider && provider !== "demo" && provider in PROVIDERS) {
+  /* Object.hasOwn 而非 in：in 走原型链，"constructor" 这类头会让 info 解析为 Function */
+  if (provider && provider !== "demo" && Object.hasOwn(PROVIDERS, provider)) {
     const info = PROVIDERS[provider as keyof typeof PROVIDERS];
     return { provider: info.id, baseUrl: info.baseUrl, apiKey: userKey, model: model || info.defaultModel };
   }

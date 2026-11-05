@@ -11,7 +11,8 @@ import { AgentHome } from "@/components/agent-home";
 
 export default function Home() {
   const { user, checking } = useAuth();
-  if (checking) return <div className="min-h-screen" />;
+  /* 认证检查期给骨架屏：与下方 hydrated 门控同一待遇，不再整页纯空白 */
+  if (checking) return <Skeleton className="min-h-screen rounded-none" />;
   if (!user) return <Landing />;
   return <AgentPage />;
 }

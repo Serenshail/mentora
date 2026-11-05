@@ -279,8 +279,15 @@ export interface BookChapter {
   focusQuestion: string; // 本章带着什么问题读
   perspectives?: string[]; // 其他思想家/作者对该观点的看法（人名+一句话）
   capture?: string[]; // 值得随手记进第二大脑的笔记标题建议
-  status: "todo" | "done";
-  /** 三重验收结果（通俗举例/知识迁移/贴合度，源自 CogniRead 的设计） */
+  /** 节点状态机（PRD 4.3）：todo 未开始 / reading 阅读中 / done 已完成 / skipped 用户跳过 */
+  status: "todo" | "reading" | "done" | "skipped";
+  keyConcepts?: string[]; // 关键概念（PRD 4.3 节点必备字段）
+  prerequisites?: string[]; // 前置知识（节点标题或概念名，UI 标注依赖）
+  expectedOutcome?: string; // 预期学习成果
+  assessFocus?: string; // 验收要求（生成验收题时的锚点）
+  /** 通过验收的时间。与 status="done" 区分：done 可来自手动"标记已读完"，masteredAt 只能来自验收通过 */
+  masteredAt?: string;
+  /** 三重验收结果（通俗举例/知识迁移/贴合度，源自 CogniRead 的设计；v25 起新验收写 book.assessments，此字段仅旧数据兼容） */
   verification?: {
     scores: { example: number; transfer: number; similarity: number };
     total: number;
@@ -289,6 +296,99 @@ export interface BookChapter {
     at: string;
   };
 }
+
+/* ========= 阅读系统 V1.0（Reading System，PRD 2026-11-05）========= */
+
+/** 四种阅读成果（PRD 4.1）：理解/思考/应用/沉淀。四类可组合，设一个主要目标。 */
+export type ReadingGoalType = "understand" | "think" | "apply" | "retain";
+
+export const READING_GOAL_LABELS: Record<ReadingGoalType, { label: string; desc: string }> = {
+  understand: { label: "理解", desc: "真正读懂：能用自己的话独立解释" },
+  think: { label: "思考", desc: "建立自己的观点：分析、批判、判断" },
+  apply: { label: "应用", desc: "把知识用到现实：情境迁移、解决问题" },
+  retain: { label: "沉淀", desc: "建立知识体系：关联、积累、长期记忆" },
+};
+
+export interface ReadingGoal {
+  primary: ReadingGoalType;
+  secondary: ReadingGoalType[];
+  /** 用户一句话说明为什么读这本书（可选） */
+  intent?: string;
+  /** true = 用户未显式选择，由 AI/默认规则推断（用户随时可改） */
+  inferred?: boolean;
+  setAt: string;
+}
+
+/** 书籍认知地图（PRD 4.2）：四大核心区域。AI 生成，重要观点须回原文核对。 */
+export interface BookMap {
+  coreProblem: string; // 这本书在解决什么问题（问题背景 + 作者想解决的困境）
+  authorStance: string; // 作者核心主张（观点 + 主要论证 + 结论）
+  lineage: string; // 思想谱系（继承谁 / 回应谁 / 被谁继承）
+  controversies: string; // 争议与局限（学术争议 + 适用边界 + 尚未解决的问题）
+  generatedAt: string;
+}
+
+/** 三重验收维度（PRD 4.5）：理解 Explain / 结构 Connect / 迁移 Apply */
+export type AssessKind = "explain" | "connect" | "apply";
+
+export const ASSESS_KIND_LABELS: Record<AssessKind, string> = {
+  explain: "理解验收",
+  connect: "结构验收",
+  apply: "迁移验收",
+};
+
+/** 单题验收记录（PRD：评分必须附带具体表现证据，判而不解释=无效判） */
+export interface ChapterAssessment {
+  id: string;
+  chapterId: string;
+  kind: AssessKind;
+  question: string;
+  answer: string;
+  level: "mastered" | "partial" | "not";
+  evidence: string; // 判分依据：引用用户原话 / 指出具体缺什么
+  feedback: string; // 具体优点与不足
+  suggestion?: string; // 未过时的针对性补充教学建议
+  at: string;
+}
+
+/** 节点级沉淀（PRD 4.6）：优先保留用户自己的话，AI 反馈只作辅助 */
+export type DepositType =
+  | "explanation" // 我自己的解释
+  | "point" // 核心知识点
+  | "question" // 重要问题
+  | "view" // 个人观点
+  | "practice" // 实践案例
+  | "unresolved" // 未解决的问题
+  | "aiFeedback"; // AI 反馈
+
+export const DEPOSIT_TYPE_LABELS: Record<DepositType, string> = {
+  explanation: "我的解释",
+  point: "核心点",
+  question: "问题",
+  view: "我的观点",
+  practice: "实践案例",
+  unresolved: "待解决",
+  aiFeedback: "AI 反馈",
+};
+
+export interface BookDeposit {
+  id: string;
+  chapterId?: string; // 不带 = 整本书级沉淀
+  type: DepositType;
+  text: string;
+  at: string;
+}
+
+/** 学习状态追踪（PRD 5.3 learningState）：记录证据，不给用户贴标签 */
+export interface BookLearning {
+  knownConcepts: string[];
+  misconceptions: { concept: string; note: string; at: string }[];
+  unresolvedQuestions: string[];
+  evidence: { chapterId?: string; text: string; at: string }[];
+}
+
+/** 整本书的阅读状态（PRD 4.5）：未开始/阅读中/已读完/验收中/已掌握。已读完 ≠ 已掌握。 */
+export type BookReadStatus = "unread" | "reading" | "finished" | "assessing" | "mastered";
 
 export interface BookInsight {
   id: string;
@@ -332,9 +432,26 @@ export interface Book {
   id: string;
   title: string;
   author?: string;
-  profile?: BookProfile; // 深度解剖档案
+  profile?: BookProfile; // 深度解剖档案（v25 前的旧地图，保留兼容；新书用 map）
+  map?: BookMap; // 书籍认知地图（PRD 4.2 四区域）
   pastedText?: string; // 用户粘贴的原文/笔记
   status: "want" | "reading" | "done";
+  /** 阅读系统状态机（PRD 4.5）：undefined 时按 status 推导（want→unread / reading→reading / done→finished） */
+  readStatus?: BookReadStatus;
+  finishedAt?: string;
+  masteredAt?: string;
+  /** 阅读目标（PRD 4.1）：主目标 + 次目标组合 */
+  goal?: ReadingGoal;
+  /** 路线类型（PRD 4.3）：full 完整 / core 核心 / goal 目标导向。undefined = full */
+  routeType?: "full" | "core" | "goal";
+  /** 节点验收档案（PRD 4.5）：book 级存储，换路线/重规划不丢历史 */
+  assessments?: ChapterAssessment[];
+  /** 节点沉淀（PRD 4.6） */
+  deposits?: BookDeposit[];
+  /** 学习状态（PRD 5.3） */
+  learning?: BookLearning;
+  /** AI 推荐的教学策略（PRD 4.4 调度）：进入节点时更新一次；带 chapterId 防跨节点串显 */
+  recommendedMode?: { mode: string; reason: string; chapterId: string; at: string };
   /** 读书对话模式（五模式引擎;socratic/feynman/collision/close-read/recall-check） */
   chatMode?: string;
   /** 刚切换过模式：下一次发送时置位传给服务端（让模型执行该模式的开场协议），发送后清除 */

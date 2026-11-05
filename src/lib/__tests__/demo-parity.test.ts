@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+/* demo.ts 已加 server-only 护栏（防演示脚本误进浏览器包），测试里豁免 */
+vi.mock("server-only", () => ({}));
+
 import { demoGraduation, demoInsight, demoPlan, demoQuizGrade, demoReviewGrade } from "../ai/demo";
 import {
   extractJson,

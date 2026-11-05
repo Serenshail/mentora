@@ -1,10 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
-  Badge, Button, Card, Modal, Skeleton } from "@/components/ui";
+  Badge, Button, Card, Modal, Skeleton, Textarea } from "@/components/ui";
 import { GraphView } from "@/components/brain/graph-view";
 import { ObsidianImport } from "@/components/brain/obsidian-import";
 import { NoteWorkspace } from "@/components/brain/note-workspace";
@@ -68,6 +68,11 @@ export default function BrainPage() {
   const [phase, setPhase] = useState<"ask" | "answer" | "graded">("ask");
   const [verdict, setVerdict] = useState<{ verdict: string; feedback: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  /* 复习会话的代际与中止手柄：关窗重开后旧请求必须停，旧结果也不能再写新会话——
+   * 旧实现既无 signal 也无代际：两条流交错写 question，旧判卷完成时还会 recordReview，
+   * 把一次没做完的复习记进 FSRS 影响后续间隔。 */
+  const reviewGenRef = useRef(0);
+  const reviewAbortRef = useRef<AbortController | null>(null);
 
 
   /* ---- 复习流程 ---- */
@@ -93,6 +98,7 @@ export default function BrainPage() {
     const store = useAppStore.getState();
     const nextId = queue[0];
     if (!nextId) {
+      // eslint-disable-next-line react-hooks/purity -- 事件路径取会话耗时，非渲染期
       const minutes = startedAt ? Math.max(1, Math.round((Date.now() - startedAt) / 60000)) : 1;
       const nextDates = useAppStore
         .getState()
@@ -110,14 +116,21 @@ export default function BrainPage() {
     }
     const item = store.knowledge.find((k) => k.id === nextId);
     if (!item) {
-      setReviewQueue((q) => q.slice(1));
-      return;
+      // 笔记已被删除：递归跳到下一条，不能只 slice 不出题（否则弹窗卡在上一题 graded、
+      // 队列清空时静默关窗无总结）；手动「下一个」也不会误跳过有效笔记
+      const rest = queue.slice(1);
+      setReviewQueue(rest);
+      return askNext(rest);
     }
     setPhase("ask");
     setQuestion("");
     setAnswer("");
     setVerdict(null);
     setBusy(true);
+    const gen = ++reviewGenRef.current;
+    reviewAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    reviewAbortRef.current = ctrl;
     try {
       const { streamChat } = await import("@/lib/ai/client");
       await streamChat({
@@ -130,14 +143,19 @@ export default function BrainPage() {
           ),
         },
         messages: [{ role: "user", content: "出题。" }],
-        onDelta: (d) => setQuestion((p) => p + d),
+        signal: ctrl.signal,
+        onDelta: (d) => {
+          if (gen === reviewGenRef.current) setQuestion((p) => p + d);
+        },
       });
+      if (gen !== reviewGenRef.current) return;
       setPhase("answer");
     } catch {
+      if (gen !== reviewGenRef.current) return; // 已关窗/换轮：不打扰新会话
       toast.error("复习出题失败，稍后再试");
       setReviewQueue([]);
     } finally {
-      setBusy(false);
+      if (gen === reviewGenRef.current) setBusy(false);
     }
   };
 
@@ -149,6 +167,10 @@ export default function BrainPage() {
       return;
     }
     setBusy(true);
+    const gen = reviewGenRef.current; // 同一轮会话：不递增，只在被关窗/换轮后作废
+    reviewAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    reviewAbortRef.current = ctrl;
     try {
       const { streamChat } = await import("@/lib/ai/client");
       /* v17 修错位：出题时模型可能挑队列里任意一条、判卷过去只看 reviewQueue[0] 的标题——
@@ -165,20 +187,25 @@ export default function BrainPage() {
         },
         messages: [{ role: "user", content: answer }],
         temperature: 0.2,
+        signal: ctrl.signal,
         onDelta: () => {},
       });
       /* v21：复习通过必须有笔记原文依据，否则改判 fail（不给"感觉记住了"放水） */
       const g = normalizeReviewGrade(reviewGradeSchema.parse(extractJson(full)));
+      /* 关窗/换了会话：这次判卷作废——不写界面、更不能 recordReview
+       * （否则一次没做完的复习被记进 FSRS，后续间隔全被带偏）。 */
+      if (gen !== reviewGenRef.current) return;
       setVerdict(g);
       setPhase("graded");
       if (g.verdict === "pass") setCorrectCount((c) => c + 1);
       useAppStore.getState().recordReview(id, g.verdict === "pass");
     } catch {
+      if (gen !== reviewGenRef.current) return;
       /* v17 废除"评分异常默认通过"：那是给复习通过率灌水。
        * 答案还在输入框里，重试即可；不记任何分。 */
       toast.error("评分服务暂不可用，你的回答没有丢——稍等再点一次提交");
     } finally {
-      setBusy(false);
+      if (gen === reviewGenRef.current) setBusy(false);
     }
   };
 
@@ -275,6 +302,10 @@ export default function BrainPage() {
       <Modal
         open={reviewQueue.length > 0 || !!summary}
         onClose={() => {
+          /* 关窗 = 作废本轮：代际 +1 让在途请求的结果全部失效，并真正中止它们 */
+          reviewGenRef.current++;
+          reviewAbortRef.current?.abort();
+          setBusy(false);
           setReviewQueue([]);
           setSummary(null);
         }}
@@ -332,8 +363,7 @@ export default function BrainPage() {
               <Card className="border-accent/25">
                 <Markdown text={question} />
               </Card>
-              <textarea
-                className="w-full rounded-[10px] border border-border bg-white px-3.5 py-2.5 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]"
+              <Textarea
                 rows={4}
                 placeholder="不看笔记，凭回忆写下答案…"
                 value={answer}

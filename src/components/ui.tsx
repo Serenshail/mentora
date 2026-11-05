@@ -19,6 +19,7 @@ export function Button({
   variant = "primary",
   size = "md",
   loading,
+  disabled,
   children,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -48,7 +49,9 @@ export function Button({
         sizes[size],
         className
       )}
-      disabled={loading || props.disabled}
+      /* disabled 解构出来再合并：留在 ...props 里会被显式 disabled（含 false）覆盖，
+       * loading 期间强制禁用就失效了 */
+      disabled={loading || disabled}
       {...props}
     >
       {loading && <Loader2 className="size-4 animate-spin" />}
@@ -184,7 +187,7 @@ export function ProgressRing({
   return (
     <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} stroke="#ececee" strokeWidth={stroke} fill="none" />
+        <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--color-track)" strokeWidth={stroke} fill="none" />
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -216,7 +219,7 @@ export function Empty({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[#d8d8dc] bg-white/60 py-14 px-6 text-center">
+    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-faint bg-white/60 py-14 px-6 text-center">
       <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-surface-2 text-ink-dim">
         {icon}
       </div>

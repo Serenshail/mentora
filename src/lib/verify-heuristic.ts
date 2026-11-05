@@ -11,9 +11,25 @@ export interface HeuristicScores {
   suggestion: string;
 }
 
-/** 简化 Jaccard 相似度（按词/字） */
+/** 简化 Jaccard 相似度：英文按词保留，CJK 按字符 bigram 切。
+ *  纯空白分词会让中文整句退化成单 token，相似度分量趋 0，
+ *  演示模式中文用户永远到不了 understood 档（逐字粘贴才可达）。 */
 function jaccard(text1: string, text2: string): number {
-  const seg = (t: string) => new Set(t.toLowerCase().split(/\s+/).filter((w) => w.length > 0));
+  const seg = (t: string) => {
+    const out = new Set<string>();
+    for (const w of t.toLowerCase().split(/\s+/).filter((w) => w.length > 0)) {
+      for (const part of w.match(/[\u4e00-\u9fff]+|[^\u4e00-\u9fff]+/g) ?? []) {
+        if (!/[\u4e00-\u9fff]/.test(part)) {
+          out.add(part);
+        } else if (part.length === 1) {
+          out.add(part);
+        } else {
+          for (let i = 0; i < part.length - 1; i++) out.add(part.slice(i, i + 2));
+        }
+      }
+    }
+    return out;
+  };
   const w1 = seg(text1);
   const w2 = seg(text2);
   const inter = [...w1].filter((x) => w2.has(x)).length;

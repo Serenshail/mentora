@@ -1,5 +1,6 @@
 /* Demo 模式：无 API Key 时的脚本化响应，保证全流程可体验、可验收。
- * 仅服务端使用。每个函数返回一段完整文本，由 route 切成流式增量。 */
+ * 仅服务端使用（下面的 import 把这条纪律变成构建期错误，而不是注释里的君子协定）。 */
+import "server-only";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -20,11 +21,21 @@ export async function* chunked(text: string, size = 6, delay = 12) {
  * 取得到才判通过，取不到就如实判不通过——绝不输出无依据的 pass 再被降级，
  * 那样演示结果和真实产品是两件事。 */
 
-/** 从提示词里嵌的 ctx JSON 中取出某个字符串字段（含 \" \\ \n 转义还原）。 */
+/** 从提示词里嵌的 ctx JSON 中取出某个字符串字段（含 \" \\ \n 转义还原）。
+ *  必须单趟解码：先还原 \n 再还原 \\ 会把「字面反斜杠+n」错解成换行，roundtrip 不等。 */
 function ctxField(system: string, name: string): string {
   const m = system.match(new RegExp(`"${name}":\\s*"((?:[^"\\\\]|\\\\.)*)"`, "s"));
   if (!m) return "";
-  return m[1].replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  return m[1].replace(/\\(.)/g, (_, c: string) => {
+    switch (c) {
+      case "n": return "\n";
+      case "t": return "\t";
+      case "r": return ""; // 与旧实现一致：去掉回车
+      case '"': return '"';
+      case "\\": return "\\";
+      default: return c;
+    }
+  });
 }
 
 /** 找第一段"像样"的正文（去掉 markdown 标记后 ≥12 字），返回它的**原样一行**作依据。
@@ -56,16 +67,21 @@ const INTAKE_QUESTIONS = [
 export async function* demoIntake(messages: Msg[]) {
   const userTurns = messages.filter((m) => m.role === "user");
   const first = userTurns[0]?.content ?? "Python";
-  const topicMatch = first.match(/(?:学|学习)\s*([^，。,.!？?]+)/);
+  /* 交替必须「学习」在前：「学」最左优先会把「学习Python」提取成「习Python…」 */
+  const topicMatch = first.match(/(?:学习|学)\s*([^，。,.!？?]+)/);
   const topic = topicMatch?.[1]?.trim() || "Python";
-  const qIndex = userTurns.length - 1;
+  /* 空消息直达（无任何 user 轮）时回退首问，绝不取 INTAKE_QUESTIONS[-1] */
+  const qIndex = Math.max(0, userTurns.length - 1);
 
   if (qIndex < INTAKE_QUESTIONS.length) {
     yield* chunked(INTAKE_QUESTIONS[qIndex](topic));
     return;
   }
   // 信息齐了 → 目标卡
-  const hours = first.match(/(\d+)\s*小时/)?.[1] ?? "8";
+  /* 每周小时数是第 3 问（INTAKE_QUESTIONS[2]）专门收集的，优先读那一轮的回答；
+   * 用户没按流程走再回退首句，最后才用默认值。 */
+  const hoursTurn = userTurns[2]?.content ?? first;
+  const hours = hoursTurn.match(/(\d+)\s*小时/)?.[1] ?? first.match(/(\d+)\s*小时/)?.[1] ?? "8";
   const card = {
     topic,
     direction: `能独立做出一个小的 ${topic} 实战项目并读懂相关开源代码`,
@@ -391,18 +407,174 @@ export async function* demoReadingPlan(system: string) {
   yield* chunked(
     "```json\n" +
       JSON.stringify({
+        map: {
+          coreProblem: `（演示）《${title}》在解决一个所有人都遇到但很少说清的问题：为什么"知道"和"做到"之间隔着一条沟。作者从日常失效的经验出发，想给出一套能跨过这条沟的办法。`,
+          authorStance: "（演示）作者的核心主张：问题的根源不在信息不足，而在缺乏把信息转化为行动的结构。全书围绕这个主张铺开论证，结论落在可操作的习惯设计上。",
+          lineage: "（演示）继承实用主义传统，回应纯理论派，被后来的行为设计学派继承。",
+          controversies: "（演示）主要争议：结构化方法是否低估了情境的随机性（一般认为批评来自复杂性学派）。适用边界：稳定的个人事务，不适用于强随机环境。（待核）",
+        },
         planSummary: `（演示）《${title}》的核心是一场思维方式的迁移。路线：先抓全书主论点，再分主题深读，每章带一个问题读，读一章聊一章。`,
         chapters: [
-          { title: "全书在回答什么问题", focusQuestion: "作者反对的那个主流观点是什么？你原本站在哪边？" },
-          { title: "核心概念的第一性", focusQuestion: "这个概念在解释什么现象？找一个你自己的例子。" },
-          { title: "关键论证链", focusQuestion: "从论点到结论，最弱的一环在哪？" },
-          { title: "反方怎么说", focusQuestion: "最强的批评是什么？作者回应了吗？" },
-          { title: "与你生活的碰撞", focusQuestion: "这本书会让你改变哪一个具体决定？" },
-          { title: "合上书之后", focusQuestion: "用 3 分钟向朋友讲清这本书，你会怎么讲？" },
+          {
+            title: "全书在回答什么问题",
+            focusQuestion: "作者反对的那个主流观点是什么？你原本站在哪边？",
+            knowledgeType: "concept",
+            keyConcepts: ["问题意识", "主流观点"],
+            prerequisites: [],
+            expectedOutcome: "能向外行说清这本书在解决什么问题",
+            assessFocus: "作者的问题意识与主流观点的对立",
+            perspectives: ["（演示）塔勒布：这类结构化方案常低估随机性。"],
+            capture: ["这本书解决什么问题"],
+          },
+          {
+            title: "核心概念的第一性",
+            focusQuestion: "这个概念在解释什么现象？找一个你自己的例子。",
+            knowledgeType: "concept",
+            keyConcepts: ["核心概念"],
+            prerequisites: ["全书在回答什么问题"],
+            expectedOutcome: "能用自己的话给核心概念下定义并举例",
+            assessFocus: "概念的正例与边界例",
+            perspectives: [],
+            capture: [],
+          },
+          {
+            title: "关键论证链",
+            focusQuestion: "从论点到结论，最弱的一环在哪？",
+            knowledgeType: "discrimination",
+            keyConcepts: ["论证链"],
+            prerequisites: ["核心概念的第一性"],
+            expectedOutcome: "能指出全书论证最薄弱的一环",
+            assessFocus: "论证前提与结论的关系",
+            perspectives: [],
+            capture: [],
+          },
+          {
+            title: "反方怎么说",
+            focusQuestion: "最强的批评是什么？作者回应了吗？",
+            knowledgeType: "judgment",
+            keyConcepts: ["反方论据"],
+            prerequisites: ["关键论证链"],
+            expectedOutcome: "能替作者回应一轮最强的反方批评",
+            assessFocus: "争议的适用边界",
+            perspectives: ["（演示）批评方：结构化=机械化。"],
+            capture: [],
+          },
+          {
+            title: "与你生活的碰撞",
+            focusQuestion: "这本书会让你改变哪一个具体决定？",
+            knowledgeType: "procedure",
+            keyConcepts: ["迁移应用"],
+            prerequisites: ["核心概念的第一性"],
+            expectedOutcome: "写出一个本周可执行的应用动作",
+            assessFocus: "新情境下的应用",
+            perspectives: [],
+            capture: [],
+          },
+          {
+            title: "合上书之后",
+            focusQuestion: "用 3 分钟向朋友讲清这本书，你会怎么讲？",
+            knowledgeType: "creative",
+            keyConcepts: ["整体复盘"],
+            prerequisites: ["与你生活的碰撞"],
+            expectedOutcome: "零依赖完成 3 分钟整书讲述",
+            assessFocus: "整体结构化复述",
+            perspectives: [],
+            capture: [],
+          },
         ],
       }) +
       "\n```"
   );
+}
+
+/* ---------- 阅读系统 V1.0 六个新任务（演示：同形状输出，schema 校验过得了） ---------- */
+export async function* demoReadingSystem(task: string, args: Record<string, unknown>) {
+  if (task === "reading-goal") {
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          primary: "understand",
+          secondary: ["apply"],
+          reason: "（演示）从书名看不出工具属性，默认按理解型安排，最稳妥。",
+        }) +
+        "\n```"
+    );
+    return;
+  }
+  if (task === "reading-strategy") {
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          mode: "socratic",
+          reason: "（演示）节点是概念且刚起步，先追问到你自己的话。",
+        }) +
+        "\n```"
+    );
+    return;
+  }
+  if (task === "reading-assess-gen") {
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          questions: [
+            { kind: "explain", question: "（演示）合上书：这个节点的核心主张是什么？用自己的话说。" },
+            { kind: "connect", question: "（演示）它和前面读过的内容是什么关系？谁依赖谁？" },
+            { kind: "apply", question: "（演示）你这周正在做的哪件事能用上它？具体到怎么做。" },
+          ],
+        }) +
+        "\n```"
+    );
+    return;
+  }
+  if (task === "reading-assess-grade") {
+    /* 演示判分也要讲证据纪律：有实质回答给 partial+具体缺口，空白给 not。 */
+    const qa = JSON.parse(String(args.qa || "[]")) as { answer?: string }[];
+    const results = qa.map((x, i) => {
+      const blank = !x.answer || !String(x.answer).trim();
+      return blank
+        ? { kind: i === 0 ? "explain" : i === 1 ? "connect" : "apply", level: "not", evidence: "空白", feedback: "（演示）这题没答，先回正文找一句你觉得最关键的话抄下来，再用自己的话改写。" }
+        : { kind: i === 0 ? "explain" : i === 1 ? "connect" : "apply", level: "partial", evidence: `你说：「${String(x.answer).slice(0, 30)}」`, feedback: "（演示）方向对，但缺一个你自己的例子——补上它才算是你的理解。" };
+    });
+    yield* chunked(
+      "```json\n" + JSON.stringify({ results, suggestion: "（演示）回正文把核心论点那段重读一遍，回来只补答第一题。" }) + "\n```"
+    );
+    return;
+  }
+  if (task === "reading-add-node") {
+    const interest = String(args.interest ?? "你感兴趣的点").slice(0, 30);
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          chapter: {
+            title: `${interest}·专题`,
+            knowledgeType: "concept",
+            focusQuestion: `（演示）${interest}和这本书的主张是什么关系？支持还是挑战？`,
+            keyConcepts: [interest],
+            prerequisites: [],
+            expectedOutcome: `能说清${interest}与本书核心论点的联系`,
+            assessFocus: `${interest}与主论点的关系`,
+            perspectives: [],
+            capture: [],
+          },
+        }) +
+        "\n```"
+    );
+    return;
+  }
+  /* reading-recap：Markdown 正文 */
+  yield* chunked(`## 你对这个节点的解释（演示）
+
+你还没写下自己的解释——小结不会替你编。回去用一句话写：这个节点到底在说什么？
+
+## 核心要点
+- （演示）作者的主张：问题不在信息不足，在缺转化结构。
+- （演示）验收要害：能不能举出你自己的例子。
+
+## 仍然悬着的问题
+- （演示）暂无。
+
+## 下一步
+把核心主张讲给一个真实的人听，讲完回来做验收。`);
 }
 
 export async function* demoReadingChat(messages: Msg[]) {

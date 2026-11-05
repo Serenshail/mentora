@@ -16,6 +16,9 @@ import net from "node:net";
  * 对本产品（无特权网络、纯 KV 后端）该强度足够，不为此引入自定义 socket agent。
  * ============================================================ */
 
+/* DNS 解析硬超时：黑洞域名的 lookup 会拖到系统级超时（十几秒） */
+const DNS_TIMEOUT_MS = 3_000;
+
 function isPrivateV4(ip: string): boolean {
   const p = ip.split(".").map(Number);
   if (p.length !== 4 || p.some((n) => Number.isNaN(n))) return true; // 畸形视为不安全
@@ -130,7 +133,15 @@ export async function assertSafePublicUrl(
       : { ok: true };
   }
   try {
-    const addrs = await dns.lookup(host, { all: true });
+    /* dns.lookup 无超时兜底：DNS 黑洞会拖十几秒，用户拿到的是网关 503 而非
+     * 本守卫备好的「域名无法解析」——超时竞速 3s 后按解析失败处理 */
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const addrs = await Promise.race([
+      dns.lookup(host, { all: true }),
+      new Promise<never>((_, rej) => {
+        timer = setTimeout(() => rej(new Error("dns timeout")), DNS_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
     if (addrs.length === 0) return { ok: false, reason: "域名无法解析" };
     if (addrs.some((a) => isPrivateAddress(a.address))) {
       return { ok: false, reason: "目标指向内部网络" };

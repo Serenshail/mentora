@@ -5,7 +5,6 @@
  *   links:  [{text, url}] —— 供页面顶部/底部生成可复制的链接清单
  * 行内语法：**粗体** *斜体* `代码` [文字](链接) [[双链]]
  * 块级语法：# 标题 / 段落 / > 引用 / - 列表 / 1. 列表 / ``` 代码围栏 / --- 分隔线 / 表格 */
-var util = require("./util.js");
 
 var TOKEN_RE = /(`([^`]+)`)|(\[\[([^\]]+)\]\])|(!?\[([^\]]*)\]\(([^)\s]+)[^)]*\))|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)/g;
 
@@ -42,10 +41,11 @@ function spanStyle(sp) {
   if (sp.c) {
     s += "font-family:ui-monospace,Menlo,monospace;";
     s += "font-size:0.94em;";
-    s += "background:#f2f2f7;border-radius:4px;padding:1px 4px;";
+    /* 与 app.wxss 令牌对齐（带字面回退：rich-text 的内联样式不保证解析 CSS 变量） */
+    s += "background:var(--surface-2, #f4f4f5);border-radius:4px;padding:1px 4px;";
   }
-  if (sp.w) s += "color:#007aff;font-weight:600;";
-  if (sp.link) s += "color:#007aff;";
+  if (sp.w) s += "color:var(--accent, #5b54e6);font-weight:600;";
+  if (sp.link) s += "color:var(--accent, #5b54e6);";
   return s;
 }
 
@@ -109,7 +109,7 @@ function parse(text) {
     var h = /^(#{1,6})\s+(.*)$/.exec(trimmed);
     if (h) {
       var level = Math.min(h[1].length, 4);
-      pushInline("h", h[2], "font-weight:600;color:#000000;", { level: level });
+      pushInline("h", h[2], "font-weight:600;color:var(--ink, #1d1d1f);", { level: level });
       i += 1;
       continue;
     }
@@ -128,7 +128,7 @@ function parse(text) {
         qbuf.push(lines[i].trim().replace(/^>\s?/, ""));
         i += 1;
       }
-      pushInline("quote", qbuf.join(" "), "color:#3c3c4399;");
+      pushInline("quote", qbuf.join(" "), "color:var(--ink-2, #6e6e73);");
       continue;
     }
 
@@ -191,12 +191,6 @@ function parse(text) {
   }
 
   return { blocks: blocks, links: links };
-}
-
-function linksFrom(spans, links) {
-  spans.forEach(function (sp) {
-    if (sp.link) links.push({ text: sp.text, url: sp.link });
-  });
 }
 
 /* 提取纯文本（气泡摘要用）：去标记，保留代码与文字 */

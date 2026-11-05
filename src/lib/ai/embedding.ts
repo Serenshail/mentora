@@ -39,8 +39,12 @@ export async function embedText(texts: string[]): Promise<number[][] | null> {
     if (!res.ok) return null;
     const j = (await res.json()) as { data?: { embedding?: unknown; index?: number }[] };
     if (!Array.isArray(j.data) || j.data.length !== texts.length) return null;
+    /* 兼容端点可能乱序返回：带 index 时按 index 对齐原文，缺 index 才按原顺序 */
+    const ordered = j.data.every((d) => typeof d.index === "number")
+      ? [...j.data].sort((a, b) => (a.index as number) - (b.index as number))
+      : j.data;
     const out: number[][] = [];
-    for (const d of j.data) {
+    for (const d of ordered) {
       if (!Array.isArray(d.embedding) || typeof d.embedding[0] !== "number") return null;
       out.push(d.embedding);
     }

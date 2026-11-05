@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server";
-import crypto from "node:crypto";
 import { dbGet, dbPut, dbDelete, emailHash } from "@/lib/server/db";
 import { verifyPassword, hashPassword } from "@/lib/server/auth";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { deployEnv } from "@/lib/server/deploy-env";
+import { consumeResetCode } from "@/lib/server/reset-code";
 
 export const runtime = "nodejs";
 
@@ -19,21 +19,21 @@ interface UserRecord {
   _sha?: string;
 }
 
-/** 忘记密码：邀请码重置（邮箱验证码通道已取消）。
- *  流程：邮箱 + 邀请码 + 新密码 → 校验邀请码并设新密码。
+/** 忘记密码：邮箱 + 管理员发放的一次性重置码 + 新密码。
+ *  为什么不用邮箱验证码：线上发信依赖 Resend，个人收款阶段用户本来就在微信上找你，
+ *  后台一键发码更可靠，也不会把"重置任意账号"的钥匙做成一张人人可得的公共码。
  *  安全语义：
- *  - 邀请码 timing-safe 比对，与注册共用同一个 INVITE_CODE；
- *  - 拿到邀请码即可重置任意已知邮箱的密码——因此必须有更严的限流；
+ *  - 重置码 24 小时有效、一次性、失败 8 次即焚；
  *  - 成功改密后 sv+1：旧设备上所有会话立即吊销；
  *  - 登录失败锁定随之清除；
- *  - 本路由不签发新会话——改完必须回登录页重新登录，一步一个脚印。 */
+ *  - 本路由不签发新会话——改完必须回登录页重新登录。 */
 export async function POST(req: NextRequest) {
   if (!(await rateLimitPersistent(`reset:${clientIp(req)}`, { capacity: 5, refillPerSec: 5 / 60 }))) {
     return Response.json({ error: "尝试太频繁，请稍后再试" }, { status: 429 });
   }
   const body = await req.json().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
-  const inviteRaw = String(body.inviteCode ?? "").trim();
+  const resetCode = String(body.resetCode ?? body.inviteCode ?? "").trim();
   const newPassword = String(body.newPassword ?? "");
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
@@ -42,14 +42,8 @@ export async function POST(req: NextRequest) {
   if (newPassword.length < 6) {
     return Response.json({ error: "新密码至少 6 位" }, { status: 400 });
   }
-  const inviteExpected = (process.env.INVITE_CODE || "").trim();
-  if (!inviteExpected) {
-    return Response.json({ error: "重置通道暂未开放" }, { status: 503 });
-  }
-  const inviteA = Buffer.from(inviteRaw);
-  const inviteB = Buffer.from(inviteExpected);
-  if (!inviteRaw || inviteA.length !== inviteB.length || !crypto.timingSafeEqual(inviteA, inviteB)) {
-    return Response.json({ error: "邀请码不对" }, { status: 401 });
+  if (!resetCode) {
+    return Response.json({ error: "请输入重置码" }, { status: 400 });
   }
 
   const path = `users/${emailHash(email)}.json`;
@@ -65,6 +59,17 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "新密码不能与当前密码相同" }, { status: 400 });
   }
 
+  const verdict = await consumeResetCode(email, resetCode);
+  if (verdict === "none") {
+    return Response.json({ error: "重置码不存在或已使用，请联系管理员重新发放" }, { status: 401 });
+  }
+  if (verdict === "expired") {
+    return Response.json({ error: "重置码已过期，请联系管理员重新发放" }, { status: 401 });
+  }
+  if (verdict === "mismatch") {
+    return Response.json({ error: "重置码不对" }, { status: 401 });
+  }
+
   const { salt, hash } = hashPassword(newPassword);
   const { _sha, ...clean } = record;
   const sv = (record.sv ?? 0) + 1;
@@ -78,7 +83,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "保存失败，稍后再试" }, { status: 503 });
   }
 
-  // 清掉防爆破锁定：用户已凭邀请码完成重置
+  // 清掉防爆破锁定：用户已凭重置码完成重置
   const failPath = `loginfail/${deployEnv()}/${emailHash(email)}.json`;
   await dbDelete(failPath, null).catch(() => {});
 

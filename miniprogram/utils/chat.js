@@ -74,7 +74,9 @@ function extractJson(text) {
  *   messages    [{role, content}]
  *   temperature 温度
  *   onDelta(delta) 增量回调；onThink(text) 思考心跳
- * 返回 Promise<fullText>；中途收到 t=e 直接 reject（调用方可用已收到的增量做兜底）。 */
+ *   register(cancel) 把取消句柄交给调用方（页面 onUnload 时中止，别让流跑到 180s 超时）
+ * 返回 Promise<fullText>；中途失败直接 reject，且 err.partial = 已收到的增量
+ * （调用方可用它兜底，别把用户已读到的半截回答整体抹掉）。 */
 function streamChat(opts) {
   return new Promise(function (resolve, reject) {
     var decoder = new utf8.Utf8Decoder();
@@ -90,9 +92,22 @@ function streamChat(opts) {
       try {
         reqTask.abort();
       } catch (e) { /* 已结束 */ }
-      if (err) reject(err);
-      else resolve(full);
+      if (err) {
+        /* 已收到的半截增量挂错误对象上：讲义路径靠它保留中断内容，其他流也可兜底 */
+        if (full) err.partial = full;
+        reject(err);
+      } else {
+        resolve(full);
+      }
     };
+
+    /* 把取消句柄交给调用方：页面 onUnload 后流会继续跑到完成或超时，
+     * 节流回调还会对已卸载页面 setData、失败 toast 弹在用户已经离开的界面上。 */
+    if (typeof opts.register === "function") {
+      opts.register(function () {
+        done(new Error("生成已停止"));
+      });
+    }
 
     var handleLines = function (text) {
       buf += text;
@@ -147,7 +162,14 @@ function streamChat(opts) {
         done(null);
       },
       fail: function (err) {
-        done(new Error((err && err.errMsg) || "网络请求失败"));
+        /* 原始 errMsg 是英文技术串（如 "request:fail timeout"），
+         * 多数调用方直接展示 e.message——这里先映射成人话。 */
+        var raw = (err && err.errMsg) || "";
+        var msg;
+        if (raw.indexOf("timeout") >= 0) msg = "请求超时，请检查网络后重试";
+        else if (raw.indexOf("abort") >= 0) msg = "生成已停止";
+        else msg = "网络请求失败，请检查网络后重试";
+        done(new Error(msg));
       }
     });
 

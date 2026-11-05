@@ -14,6 +14,7 @@ import {
   applyRerank,
   assessRetrieval,
   buildContext,
+  dedupeConflicts,
   fuseMultiQuery,
   rerankPrompt,
   wikiRetrieve,
@@ -34,6 +35,9 @@ export interface EnhancedRetrieval {
     degraded?: string;
   };
 }
+
+/** 增强检索总预算：超过就按取消处理，回落到基线检索（宁可少一点召回，也不能卡住回答） */
+const RAG_DEADLINE_MS = 20_000;
 
 /** 从模型输出里稳健取出改写问句数组；失败返回 [] */
 function parseQueries(text: string): string[] {
@@ -78,6 +82,28 @@ export async function retrieveEnhanced(
   k = 3,
   opts: { rewrite?: boolean; rerank?: boolean; signal?: AbortSignal; context?: string } = {}
 ): Promise<EnhancedRetrieval> {
+  /* 增强检索最多两次模型调用（改写 + 精排），而调用方普遍不传 signal：
+   * 上游挂起时整条对话会被无限期卡在「检索笔记」阶段。这里给一个总预算，
+   * 超时按"取消"处理，内部走降级（沿用基线检索），绝不把答案卡死。 */
+  const ctrl = new AbortController();
+  const onAbort = () => ctrl.abort();
+  opts.signal?.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => ctrl.abort(), RAG_DEADLINE_MS);
+  try {
+    return await runEnhanced(query, notes, k, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/** 增强检索实现体：signal 由上面的入口统一注入（调用方 signal ∪ 总超时） */
+async function runEnhanced(
+  query: string,
+  notes: WikiNote[],
+  k = 3,
+  opts: { rewrite?: boolean; rerank?: boolean; signal?: AbortSignal; context?: string } = {}
+): Promise<EnhancedRetrieval> {
   const { rewrite = true, rerank = true, signal, context } = opts;
   const trace: EnhancedRetrieval["trace"] = {
     initialHits: 0,
@@ -94,7 +120,9 @@ export async function retrieveEnhanced(
   // ② CRAG 自评：命中不足/相关度低 → 一定改写；命中尚可时也改写（一次廉价调用换召回）
   const assess = assessRetrieval(baseline);
   trace.retrievalWeak = assess.weak;
-  const needRewrite = rewrite;
+  /* 自评接线：自评弱时即便调用方关了改写也强制触发一次，
+   * 否则"检索不足"被伪装成"已参考笔记"，自评结果白算。 */
+  const needRewrite = rewrite || assess.weak;
 
   let candidates = baseline;
   if (needRewrite) {
@@ -114,7 +142,8 @@ export async function retrieveEnhanced(
         candidates = fuseMultiQuery(
           query,
           variants,
-          notes.map((n) => ({
+          /* 与基线 wikiRetrieve 同口径：融合前先做冲突裁决，旧版冲突文档不得借融合回流 */
+          dedupeConflicts(notes).map((n) => ({
             id: n.id,
             title: n.title,
             body: n.body,

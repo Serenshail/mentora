@@ -7,6 +7,9 @@ var streamView = require("../../utils/stream-view.js");
 
 var DEFAULT_SEATS = ["naval", "jobs", "taleb"];
 
+/* 席位色兜底：与 app.wxss 的 --ink-3 同值（JS 读不到 CSS 变量，集中在这里便于对齐） */
+var INK_3 = "#86868b";
+
 // 有真人头像的席位（与网页版 public/personas 一致）
 var PHOTO_IDS = ["naval", "jobs", "munger", "feynman", "taleb", "graham", "karpathy", "musk", "zhangxuefeng", "zhangyiming", "mrbeast", "sutskever"];
 
@@ -97,10 +100,8 @@ Page({
   /* ---------------- 新建选择器 ---------------- */
 
   openPick: function () {
-    var picked = {};
-    DEFAULT_SEATS.forEach(function (id) {
-      picked[id] = true;
-    });
+    /* 死预填已删：这里塞 DEFAULT_SEATS 后马上被 picked:{} 覆盖，从未生效；
+     * 圆桌模式的默认勾选由 switchPickMode 负责。 */
     var allSeats = seats.ALL.map(function (s) {
       return {
         id: s.id,
@@ -218,6 +219,13 @@ Page({
     this.setData({ input: e.detail.value });
   },
 
+  /* 流式中退出：中止在途请求（单聊 / 圆桌各席 / 主持人都可能还在跑） */
+  onUnload: function () {
+    if (this._cancelSingle) this._cancelSingle();
+    if (this._cancelTake) this._cancelTake();
+    if (this._cancelHost) this._cancelHost();
+  },
+
   /* ---------------- 单聊 ---------------- */
 
   startWith: function (personaId) {
@@ -237,6 +245,13 @@ Page({
   sendSingle: function (text) {
     var that = this;
     var s = store.sessionById(that.sessionId);
+    /* 他端删会话后本端会 adoptCloud 换掉 sessions：无守卫会在这里同步抛 TypeError，
+     * 而 busy 已经置 true → 输入框永久锁死。 */
+    if (!s) {
+      that.setData({ busy: false });
+      util.toast("这个会话已经不存在了");
+      return;
+    }
     var personaId = s.personaId;
     var p = resolvePersona(personaId);
     var custom = p && p.custom ? p.system : undefined;
@@ -263,6 +278,9 @@ Page({
           return { role: m.role, content: m.content };
         }),
         temperature: 0.8,
+        register: function (cancel) {
+          that._cancelSingle = cancel;
+        },
         onDelta: function (d) {
           stream += d;
           renderer.push();
@@ -271,6 +289,11 @@ Page({
       .then(function (full) {
         renderer.flush();
         var content = full || stream;
+        /* 空响应当失败：旧实现无条件落一条空 assistant 消息，聊天区出现空白卡片
+         * （对照圆桌空 take 标 failed）。throw 进下方 catch 统一走失败分支。 */
+        if (!content.trim()) {
+          throw new Error("对方没有返回内容，请重试");
+        }
         store.addSessionMsg(that.sessionId, {
           id: util.uid("m"),
           role: "assistant",
@@ -286,8 +309,25 @@ Page({
       })
       .catch(function (e) {
         renderer.cancel();
-        util.toast(e.message || "发言失败");
-        that.setData({ streamBlocks: [] });
+        /* 失败落持久标记：用户消息已入库，只弹瞬时 toast 会让人以为已获回复（与圆桌一致） */
+        var partial = (e && e.partial) || stream;
+        var content = partial
+          ? "（生成中断，以下是已生成的部分）\n\n" + partial
+          : "> 本次发言生成失败" + (e && e.message ? "：" + e.message : "") + "。请重新发送重试。";
+        store.addSessionMsg(that.sessionId, {
+          id: util.uid("m"),
+          role: "assistant",
+          content: content,
+          failed: true,
+          at: new Date().toISOString()
+        });
+        that.setData({
+          chatView: that.data.chatView.concat([
+            { role: "assistant", blocks: md.parse(content).blocks }
+          ]),
+          streamBlocks: []
+        });
+        util.toast((e && e.message) || "发言失败");
       })
       .then(function () {
         that.setData({ busy: false });
@@ -296,58 +336,64 @@ Page({
 
   /* ---------------- 圆桌 ---------------- */
 
-  sendRoundtable: function (text, retry) {
+  sendRoundtable: function (text) {
     var that = this;
     var s = store.sessionById(that.sessionId);
-    if (!s) return;
-    var question = retry ? retry.question : text;
+    /* 早返回必须复位 busy：调用方（onSend）已经置了 busy=true，静默 return 会让
+     * composer 永久禁用，用户以为卡死。 */
+    if (!s) {
+      that.setData({ busy: false });
+      util.toast("这个圆桌会话已经不存在了");
+      return;
+    }
+    var question = text;
     var participants = (s.participants || [])
       .map(resolvePersona)
       .filter(Boolean);
-    var goodTakes = (retry && retry.goodTakes) || {};
 
-    if (!retry) {
-      store.addSessionMsg(that.sessionId, {
-        id: util.uid("m"),
-        role: "user",
-        content: question,
-        at: new Date().toISOString()
-      });
-      if ((s.messages || []).length === 0) {
-        var d = new Date();
-        store.updateSession(that.sessionId, {
-          title:
-            question.replace(/\s+/g, " ").slice(0, 16) +
-            " · " +
-            participants.length +
-            "人 · " +
-            (d.getMonth() + 1) +
-            "/" +
-            d.getDate()
-        });
-      }
-      that.setData({
-        chatView: that.data.chatView.concat([{ role: "user", content: question }])
+    /* 标题要在落首条消息之前判空：旧实现先 addSessionMsg（同一对象引用）再判
+     * length === 0，恒 false → 所有圆桌永远叫「圆桌(N人)」，列表无法分辨。 */
+    if ((s.messages || []).length === 0) {
+      var d = new Date();
+      store.updateSession(that.sessionId, {
+        title:
+          question.replace(/\s+/g, " ").slice(0, 16) +
+          " · " +
+          participants.length +
+          "人 · " +
+          (d.getMonth() + 1) +
+          "/" +
+          d.getDate()
       });
     }
+    store.addSessionMsg(that.sessionId, {
+      id: util.uid("m"),
+      role: "user",
+      content: question,
+      at: new Date().toISOString()
+    });
+    that.setData({
+      chatView: that.data.chatView.concat([{ role: "user", content: question }])
+    });
 
     var seatState = participants.map(function (p) {
       return {
         id: p.id,
         name: p.name,
-        color: (seats.byId(p.id) || {}).color || "#86868b",
+        color: (seats.byId(p.id) || {}).color || INK_3,
         hasPhoto: PHOTO_IDS.indexOf(p.id) >= 0,
-        status: goodTakes[p.id] ? "done" : "pending",
-        take: goodTakes[p.id] || ""
+        status: "pending",
+        take: ""
       };
     });
     that.setData({ rtSeats: seatState, rtPhase: "takes", rtHostBlocks: [] });
 
-    var takes = Object.assign({}, goodTakes);
+    /* 不可达的 retry/goodTakes 断点续传机制已删：唯一调用点固定传 null、
+     * wxml 无绑定，只会误导维护者。 */
+    var takes = {};
     var runSequential = function (i) {
       if (i >= seatState.length) return Promise.resolve();
       var seat = seatState[i];
-      if (seat.status === "done") return runSequential(i + 1);
       seat.status = "streaming";
       /* 性能：只把这一席的状态用路径更新传给渲染层（官方 setData 纪律：
        * 只传变化的数据路径）。此前每个 delta 都整组 rtSeats 全量传输。 */
@@ -372,6 +418,9 @@ Page({
           },
           messages: [{ role: "user", content: question }],
           temperature: 0.8,
+          register: function (cancel) {
+            that._cancelTake = cancel;
+          },
           onDelta: function (d) {
             stream += d;
             seat.take = stream;
@@ -440,6 +489,9 @@ Page({
           args: { mode: "host", names: names, takes: takesText, question: question },
           messages: [{ role: "user", content: "请写圆桌纪要。" }],
           temperature: 0.4,
+          register: function (cancel) {
+            that._cancelHost = cancel;
+          },
           onDelta: function (d) {
             hostStream += d;
             hostRenderer.push();
@@ -488,7 +540,7 @@ Page({
     if (!that.data.session) return;
     that.setData({ input: "", busy: true, streamBlocks: [], rtHostBlocks: [] });
     if (that.data.session.isRoundtable) {
-      that.sendRoundtable(text, null);
+      that.sendRoundtable(text);
     } else {
       that.sendSingle(text);
     }

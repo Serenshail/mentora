@@ -12,12 +12,11 @@ import { StudyHeatmap } from "@/components/learn/study-heatmap";
 import { useDueReviews } from "@/lib/store";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
-import { extractJson } from "@/lib/ai/client";
 import { cn } from "@/lib/utils";
 
 interface LifeEvent {
   at: string; // ISO
-  kind: "pass" | "skip" | "mastered" | "council" | "book";
+  kind: "pass" | "skip" | "fail" | "mastered" | "council" | "book";
   title: string;
   detail?: string;
 }
@@ -53,7 +52,7 @@ export default function LifePage() {
         const day = g.plan?.days[q.dayId];
         out.push({
           at: new Date(q.date).toISOString(),
-          kind: q.forced ? "skip" : q.passed ? "pass" : "skip",
+          kind: q.forced ? "skip" : q.passed ? "pass" : "fail",
           title: q.forced ? `跳过了「${day?.title ?? q.dayId}」` : q.passed ? `通过了「${day?.title ?? q.dayId}」的验收` : `「${day?.title ?? q.dayId}」验收未通过`,
           detail: g.topic,
         });
@@ -87,7 +86,12 @@ export default function LifePage() {
     if (postBusy) return;
     setPostBusy(true);
     try {
-      const recent = events.slice(0, 12).map((e) => ({ date: e.at.slice(5, 10), what: e.title }));
+      /* 文案与 prompt 都承诺「近 7 天」：真的按 7 天过滤，而不是取最新 12 条 */
+      const weekAgo = Date.now() - 7 * 86400_000;
+      const recent = events
+        .filter((e) => new Date(e.at).getTime() >= weekAgo)
+        .slice(0, 12)
+        .map((e) => ({ date: e.at.slice(5, 10), what: e.title }));
       const { streamChat } = await import("@/lib/ai/client");
       const full = await streamChat({
         task: "life-post",
@@ -110,6 +114,7 @@ export default function LifePage() {
   const KIND_META: Record<LifeEvent["kind"], { label: string; cls: string }> = {
     pass: { label: "验收通过", cls: "text-ok" },
     skip: { label: "跳过", cls: "text-warn" },
+    fail: { label: "验收未过", cls: "text-bad" },
     mastered: { label: "新掌握", cls: "text-accent" },
     council: { label: "圆桌", cls: "text-accent-2" },
     book: { label: "读书", cls: "text-ink-dim" },
@@ -228,7 +233,7 @@ export default function LifePage() {
       <Card className="mb-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="flex size-9 items-center justify-center rounded-xl bg-[#1d1d1f] text-[13px] font-bold text-white">M</div>
+            <div className="flex size-9 items-center justify-center rounded-xl bg-ink text-[13px] font-bold text-white">M</div>
             <div>
               <p className="text-[13px] font-bold text-ink">Mentora 教练</p>
               <p className="text-[11px] text-ink-dim/70">你的学习教练 · 每次进来会更新动态</p>
@@ -286,7 +291,7 @@ export default function LifePage() {
           {events.slice(0, 40).map((e, i) => (
             <div key={i} className="flex gap-3">
               <div className="flex flex-col items-center">
-                <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", e.kind === "pass" ? "bg-ok" : e.kind === "mastered" ? "bg-accent" : e.kind === "council" ? "bg-accent-2" : "bg-ink-dim/30")} />
+                <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", e.kind === "pass" ? "bg-ok" : e.kind === "fail" ? "bg-bad" : e.kind === "mastered" ? "bg-accent" : e.kind === "council" ? "bg-accent-2" : "bg-ink-dim/30")} />
                 {i < Math.min(events.length, 40) - 1 && <span className="w-px flex-1 bg-border" />}
               </div>
               <div className="pb-4">

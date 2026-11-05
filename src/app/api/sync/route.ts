@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbPut, dbList, dbDelete } from "@/lib/server/db";
 import { verifySession } from "@/lib/server/auth";
+import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
+import { logEvent } from "@/lib/server/config";
 import zlib from "node:zlib";
 
 export const runtime = "nodejs";
@@ -35,7 +37,7 @@ const verDir = (userId: string) => `versions/${userId}`;
 /** 把当前云端快照存档为历史版本，并裁剪到最近 KEEP_VERSIONS 份（尽力而为，失败只记日志） */
 async function archivePrevious(userId: string, prev: { data?: unknown; updatedAt?: string } | null) {
   if (!prev?.data || !prev.updatedAt) {
-    console.log(JSON.stringify({ ev: "sync", msg: "archive-skip", userId, hasData: Boolean(prev?.data), hasTs: Boolean(prev?.updatedAt) }));
+    logEvent({ ev: "sync", msg: "archive-skip", userId, hasData: Boolean(prev?.data), hasTs: Boolean(prev?.updatedAt) });
     return;
   }
   const ts = Date.parse(prev.updatedAt);
@@ -46,7 +48,7 @@ async function archivePrevious(userId: string, prev: { data?: unknown; updatedAt
       .filter((n) => !Number.isNaN(n));
     if (existing.some((n) => n >= ts)) return; // 该版本已存档过
     await dbPut(`${verDir(userId)}/${ts}.json`, prev, { encrypted: true });
-    console.log(JSON.stringify({ ev: "sync", msg: "archived", userId, ts }));
+    logEvent({ ev: "sync", msg: "archived", userId, ts });
     const all = (await dbList(verDir(userId)))
       .map((f) => Number(f.name.replace(".json", "")))
       .filter((n) => !Number.isNaN(n))
@@ -56,9 +58,7 @@ async function archivePrevious(userId: string, prev: { data?: unknown; updatedAt
       await dbDelete(`${verDir(userId)}/${oldest}.json`, null).catch(() => {});
     }
   } catch (e) {
-    console.log(
-      JSON.stringify({ ev: "sync", msg: "archive-failed", userId, err: e instanceof Error ? e.message : String(e) })
-    );
+    logEvent({ ev: "sync", msg: "archive-failed", userId, err: e instanceof Error ? e.message : String(e) });
   }
 }
 
@@ -67,6 +67,11 @@ async function archivePrevious(userId: string, prev: { data?: unknown; updatedAt
 export async function GET(req: NextRequest) {
   const user = await verifySession();
   if (!user) return Response.json({ error: "未登录" }, { status: 401 });
+  /* GET 也要分桶：插件/多端轮询会反复全量读。与 POST 分开计数，
+   * 避免正常写同步把读配额挤掉（反之亦然）。 */
+  if (!(await rateLimitPersistent(`sync:get:${clientIp(req)}`, { capacity: 30, refillPerSec: 30 / 60 }))) {
+    return Response.json({ error: "请求过于频繁" }, { status: 429 });
+  }
   const { searchParams } = new URL(req.url);
 
   try {
@@ -86,11 +91,21 @@ export async function GET(req: NextRequest) {
     if (!file) return Response.json({ data: null });
     const { _sha, ...rest } = file;
     const body = JSON.stringify({ data: rest.data ?? rest, updatedAt: rest.updatedAt });
-    // plain=1：客户端（微信小程序等）无法解压 x-gzip，显式要明文 JSON；
-    // 快照上限受 Vercel 4.5MB 响应约束，与 gzip 通道同一闸门。
+    /* 读侧体积闸：写侧虽有 64MB 解压闸，但响应侧此前只靠 Vercel 平台 4.5MB 硬失败兜底——
+     * 自托管连平台闸都没有，明文通道会原样吐几十 MB。超限给明确 413，不静默截断。 */
+    // plain=1：客户端（微信小程序等）无法解压 x-gzip，显式要明文 JSON。
     const plain = searchParams.has("plain");
+    if (plain && body.length > MAX_BODY_BYTES) {
+      return Response.json(
+        { error: "云端快照过大，明文通道无法下发（请用支持 gzip 的端同步，或精简第二大脑内容）" },
+        { status: 413 }
+      );
+    }
     if (!plain && body.length > 1024 * 1024) {
       const gz = zlib.gzipSync(Buffer.from(body, "utf8"), { level: 9 });
+      if (gz.length > MAX_BODY_BYTES) {
+        return Response.json({ error: "云端快照过大，无法下发，请精简第二大脑内容" }, { status: 413 });
+      }
       return new Response(gz, {
         headers: { "Content-Type": "application/x-gzip", "Cache-Control": "no-store" },
       });
@@ -107,6 +122,11 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await verifySession();
   if (!user) return Response.json({ error: "未登录" }, { status: 401 });
+  /* 写放大最重的端点（读旧快照+归档+分块写）：自动同步 2.5s 防抖正常上限约 24 次/分，
+   * 给到 60 次/分只拦重试风暴/脚本刷写，不影响真实编辑节奏。 */
+  if (!(await rateLimitPersistent(`sync:post:${clientIp(req)}`, { capacity: 60, refillPerSec: 1 }))) {
+    return Response.json({ error: "同步太频繁，请稍后再试" }, { status: 429 });
+  }
 
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (declared > MAX_BODY_BYTES) {
@@ -132,7 +152,12 @@ export async function POST(req: NextRequest) {
       }
       parsed = JSON.parse(plain.toString("utf8"));
     } else {
-      parsed = await req.json();
+      /* JSON 分支同样过体积闸：content-length 可被省略（chunked），必须读出来量 */
+      const txt = await req.text();
+      if (Buffer.byteLength(txt) > MAX_BODY_BYTES) {
+        return Response.json({ error: "同步包过大，请清理第二大脑后重试" }, { status: 413 });
+      }
+      parsed = JSON.parse(txt);
     }
   } catch {
     parsed = null;

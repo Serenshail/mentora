@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Badge, Button, Card, Input } from "@/components/ui";
+import { Badge, Button, Card, Input, Skeleton } from "@/components/ui";
 import { useAuth } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import {
@@ -34,15 +34,41 @@ interface Overview {
   users: AdminUser[];
   feedback: AdminFeedback[];
   feedbackConfigured: boolean;
+  /* 失败态必须能看见：旧实现把「GitHub 拉取失败」「单条读取失败」都折叠成空，
+   * 后台看起来一切正常（0 条反馈 / 用户凭空消失），运营完全无感。 */
+  feedbackError?: string | null;
+  skippedUsers?: number;
+  statsPartial?: number;
 }
 
 function fmtDate(iso: string | null): string {
   if (!iso || iso === "未知") return "—";
+  // 非法时间串 new Date 不抛异常、只会得 NaN：先判，别让中文后台渲染出 "Invalid Date"
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" });
+}
+
+/* 后台密码记 sessionStorage：刷新/一键处理的请求统一带头，
+ * 密码进入的非 admin 会话不再一刷新就 401 退回密码门、反馈操作永远失败 */
+const PW_KEY = "mentora-admin-pw";
+function pwHeaders(): Record<string, string> {
   try {
-    return new Date(iso).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" });
+    const p = sessionStorage.getItem(PW_KEY);
+    return p ? { "x-admin-password": p } : {};
   } catch {
-    return iso;
+    return {};
   }
+}
+function rememberPw(pw: string) {
+  try {
+    sessionStorage.setItem(PW_KEY, pw);
+  } catch { /* ignore */ }
+}
+function forgetPw() {
+  try {
+    sessionStorage.removeItem(PW_KEY);
+  } catch { /* ignore */ }
 }
 
 export default function AdminPage() {
@@ -62,7 +88,7 @@ export default function AdminPage() {
     try {
       const res = await fetch("/api/admin/feedback-state", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...pwHeaders() },
         body: JSON.stringify({ number, state }),
       });
       const j = await res.json();
@@ -86,11 +112,12 @@ export default function AdminPage() {
     try {
       const res = await fetch("/api/admin/overview", {
         cache: "no-store",
-        headers: password ? { "x-admin-password": password } : {},
+        headers: { ...pwHeaders(), ...(password ? { "x-admin-password": password } : {}) },
       });
       const j = await res.json();
       if (!res.ok) {
         if (res.status === 401) {
+          forgetPw(); // 存下的密码已失效/不对：清掉，别下次刷新又拿它撞 401
           setNeedPw(true);
           setData(null);
           setError(password ? "后台密码不对，再试一次" : null);
@@ -99,6 +126,7 @@ export default function AdminPage() {
           setData(null);
         }
       } else {
+        if (password) rememberPw(password);
         setNeedPw(false);
         setData(j as Overview);
       }
@@ -114,7 +142,6 @@ export default function AdminPage() {
     // v17：load 同步 setState（loading）挪出 effect 体一拍，避免级联渲染告警
     const t = setTimeout(() => void load(), 0);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checking]);
 
   const submitPw = async () => {
@@ -243,7 +270,25 @@ export default function AdminPage() {
         </div>
 
         {/* 用户表 */}
-        {tab === "users" && (
+        {tab === "users" && !data && (
+          <div className="mt-6 space-y-3">
+            {/* 加载中必须是骨架而不是空表：空表会被读成「还没有注册用户」 */}
+            <Skeleton className="h-16 rounded-2xl" />
+            <Skeleton className="h-16 rounded-2xl" />
+            <Skeleton className="h-16 rounded-2xl" />
+          </div>
+        )}
+        {tab === "users" && data && ((data.skippedUsers ?? 0) > 0 || (data.statsPartial ?? 0) > 0) && (
+          <Card className="mt-6 border-warn/25 bg-warn/[0.04] text-xs leading-relaxed text-warn">
+            {(data.skippedUsers ?? 0) > 0 && (
+              <p>{data.skippedUsers} 个用户档案读取失败，未出现在下面的列表里（不是「不存在」）。</p>
+            )}
+            {(data.statsPartial ?? 0) > 0 && (
+              <p>{data.statsPartial} 个用户的云端数据读取失败，其数据量显示为 0（不等于未上云）。</p>
+            )}
+          </Card>
+        )}
+        {tab === "users" && data && (
           <div className="mt-6 overflow-hidden rounded-2xl border border-border bg-surface">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[820px] text-left text-[13px]">
@@ -265,7 +310,7 @@ export default function AdminPage() {
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={u.avatar} alt={u.name} className="size-7 rounded-lg border border-border object-cover" />
                           ) : (
-                            <div className="flex size-7 items-center justify-center rounded-lg bg-[#1d1d1f] text-[11px] font-bold text-white">
+                            <div className="flex size-7 items-center justify-center rounded-lg bg-ink text-[11px] font-bold text-white">
                               {u.name.slice(0, 1).toUpperCase()}
                             </div>
                           )}
@@ -302,6 +347,12 @@ export default function AdminPage() {
             {data && !data.feedbackConfigured && (
               <Card className="border-warn/25 bg-warn/[0.04] text-xs text-warn">
                 服务端未配置 GITHUB_TOKEN，反馈通道离线（用户提交会失败并本地排队）。
+              </Card>
+            )}
+            {data?.feedbackError && (
+              <Card className="border-bad/25 bg-bad/[0.04] text-xs text-bad">
+                反馈列表拉取失败：{data.feedbackError}。下面的「{data.feedback.length} 条」不是真实总数，
+                排查前别把它当成「没有新反馈」。
               </Card>
             )}
             {data?.feedback.map((f) => (

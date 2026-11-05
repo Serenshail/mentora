@@ -56,37 +56,64 @@ export async function GET(req: NextRequest) {
     stats: { goals: number; knowledge: number; books: number; sessions: number; personas: number };
   }[] = [];
 
+  let skippedUsers = 0; // 档案读取/解密失败 → 该用户从列表整体消失，必须让管理端知道
+  let statsPartial = 0; // 云快照读取失败被折叠成全 0，与「从未上云」同形，排查丢数据时会误导
+
   try {
     const files = await dbList("users");
-    for (const f of files) {
-      try {
-        const rec = await dbGet<UserRecord>(`users/${f.name}`, { encrypted: true });
-        if (!rec?.userId) continue;
-        let lastSyncAt: string | null = null;
-        let stats = { goals: 0, knowledge: 0, books: 0, sessions: 0, personas: 0 };
-        try {
-          const data = await dbGet<DataRecord>(`data/${rec.userId}.json`, { encrypted: true });
-          if (data?.updatedAt) {
-            lastSyncAt = data.updatedAt;
-            stats = {
-              goals: data.data?.goals?.length ?? 0,
-              knowledge: data.data?.knowledge?.length ?? 0,
-              books: data.data?.books?.length ?? 0,
-              sessions: data.data?.sessions?.length ?? 0,
-              personas: data.data?.customPersonas?.length ?? 0,
+    /* 串行 N+1：每用户 2 次远端加密读（每次 decrypt 还要走一遍解密 + KV 往返），
+     * N≈200 时保守估计就超 maxDuration=60 → 后台直接不可用。分块并发，
+     * 块内并行、块间串行，既压满往返又不至于一次打爆远端。 */
+    const CHUNK = 8;
+    for (let i = 0; i < files.length; i += CHUNK) {
+      const part = await Promise.all(
+        files.slice(i, i + CHUNK).map(async (f) => {
+          try {
+            const rec = await dbGet<UserRecord>(`users/${f.name}`, { encrypted: true });
+            if (!rec?.userId) return null;
+            let lastSyncAt: string | null = null;
+            let stats = { goals: 0, knowledge: 0, books: 0, sessions: 0, personas: 0 };
+            let partial = false;
+            try {
+              const data = await dbGet<DataRecord>(`data/${rec.userId}.json`, { encrypted: true });
+              if (data?.updatedAt) {
+                lastSyncAt = data.updatedAt;
+                stats = {
+                  goals: data.data?.goals?.length ?? 0,
+                  knowledge: data.data?.knowledge?.length ?? 0,
+                  books: data.data?.books?.length ?? 0,
+                  sessions: data.data?.sessions?.length ?? 0,
+                  personas: data.data?.customPersonas?.length ?? 0,
+                };
+              }
+            } catch {
+              /* 读失败 ≠ 没有云端数据：dbGet 取不到的键走 null 不进这里 */
+              partial = true;
+            }
+            return {
+              user: {
+                userId: rec.userId,
+                email: rec.email,
+                name: rec.name || "（未设置）",
+                ...(rec.avatar ? { avatar: rec.avatar } : {}),
+                createdAt: rec.createdAt ?? "未知",
+                lastSyncAt,
+                stats,
+              },
+              failed: false,
+              partial,
             };
+          } catch {
+            return { user: null, failed: true, partial: false };
           }
-        } catch { /* 该用户没有云端数据 */ }
-        users.push({
-          userId: rec.userId,
-          email: rec.email,
-          name: rec.name || "（未设置）",
-          ...(rec.avatar ? { avatar: rec.avatar } : {}),
-          createdAt: rec.createdAt ?? "未知",
-          lastSyncAt,
-          stats,
-        });
-      } catch { /* 单个用户读失败不阻塞整个列表 */ }
+        })
+      );
+      for (const r of part) {
+        if (!r) continue;
+        if (r.failed) skippedUsers++;
+        if (r.partial) statsPartial++;
+        if (r.user) users.push(r.user);
+      }
     }
     users.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch {
@@ -106,6 +133,9 @@ export async function GET(req: NextRequest) {
 
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPO || "haow9508-ctrl/mentora";
+  /* 拉取失败必须显式返回：旧实现一律静默折叠成空列表，坏 token 会让后台长期显示
+   * 「0 条反馈」而运营完全无感。 */
+  let feedbackError: string | null = null;
   if (token) {
     try {
       const res = await fetch(
@@ -143,7 +173,10 @@ export async function GET(req: NextRequest) {
           });
         }
       }
-    } catch { /* 反馈拉取失败不阻塞用户列表 */ }
+      else feedbackError = `GitHub 返回 ${res.status}`;
+    } catch (e) {
+      feedbackError = e instanceof Error ? e.message : "反馈拉取失败";
+    }
   }
 
   return Response.json({
@@ -151,5 +184,8 @@ export async function GET(req: NextRequest) {
     users,
     feedback,
     feedbackConfigured: Boolean(token),
+    feedbackError,
+    skippedUsers,
+    statsPartial,
   });
 }

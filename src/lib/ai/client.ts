@@ -30,7 +30,9 @@ export type ChatTask =
   | "autolink" | "persona-distill" | "coach-qa"
   | "verify-score" | "app-assistant" | "insight" | "note-assist" | "wiki-compile" | "resource-fix" | "direction-guide" | "life-post" | "graduation"
   /* RAG 增强（2026-10-26）：查询改写 / 结果精排 */ | "query-rewrite" | "rag-rerank"
-  /* 首页学习智能体（M2） */ | "agent";
+  /* 首页学习智能体（M2） */ | "agent"
+  /* 阅读系统 V1.0（2026-11-05）：目标识别/策略调度/三重验收/小结/加节点 */
+  | "reading-goal" | "reading-strategy" | "reading-assess-gen" | "reading-assess-grade" | "reading-recap" | "reading-add-node";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：
@@ -103,6 +105,10 @@ export async function streamChat(
   const decoder = new TextDecoder();
   let buf = "";
   let full = "";
+  /* 服务端在 finally 里必发 {"t":"end"}。读到这里之前流就断了，说明是连接被掐
+   * （网关超时/函数被平台强切），此时 full 是半截回答——旧实现直接 return，
+   * 下游把它当成功：extractJson 报「无法解析 JSON」掩盖真因，聊天里也把残句当完整答案。 */
+  let sawEnd = false;
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -124,6 +130,8 @@ export async function streamChat(
           if (Array.isArray(calls) && calls.length > 0) opts.onToolCalls?.(calls);
         } else if (ev.t === "n" && ev.v === "tools_off") {
           opts.onNativeOff?.();
+        } else if (ev.t === "end") {
+          sawEnd = true;
         } else if (ev.t === "e") {
           throw new Error(ev.v || "模型返回错误");
         }
@@ -133,6 +141,7 @@ export async function streamChat(
       }
     }
   }
+  if (!sawEnd) throw new Error("连接中断，回答没有生成完——内容不完整，请重试");
   return full;
 }
 
@@ -474,30 +483,158 @@ export const bookProfileSchema = z.object({
   controversies: z.string(),
 });
 
-export const readingPlanSchema = z.object({
-  bookProfile: bookProfileSchema.optional().nullable(),
-  planSummary: z.string(),
-  chapters: z
+export const readingPlanSchema = z.preprocess(
+  (v) => {
+    /* 裸数组容错（v14 extractJson 家族）：小模型偶发跳过对象包装直接输出章节数组。
+     * 单元素对象含 chapters/map/planSummary → 解包；纯章节数组 → 包成 {chapters}，planSummary 留空。 */
+    if (Array.isArray(v)) {
+      const first = v[0];
+      if (
+        v.length === 1 &&
+        first &&
+        typeof first === "object" &&
+        !Array.isArray(first) &&
+        ("chapters" in first || "map" in first || "planSummary" in first)
+      ) {
+        return first;
+      }
+      return { chapters: v };
+    }
+    return v;
+  },
+  z.object({
+    /* v25：认知地图（PRD 四区域）。旧书/旧链路仍是 bookProfile——两者都收，调用方优先 map。 */
+    map: z
+      .object({
+        coreProblem: z.string(),
+        authorStance: z.string(),
+        lineage: z.string(),
+        controversies: z.string(),
+      })
+      .optional()
+      .nullable(),
+    bookProfile: bookProfileSchema.optional().nullable(),
+    planSummary: z.preprocess((v) => (typeof v === "string" ? v : ""), z.string()),
+    chapters: z
+      .array(
+        z.object({
+          title: z.string(),
+          knowledgeType: z.preprocess(
+            (v) => {
+              const s = String(v ?? "").toLowerCase();
+              if (["fact", "concept", "procedure", "discrimination", "judgment", "creative"].includes(s)) return s;
+              return "concept"; // 默认值
+            },
+            z.enum(["fact", "concept", "procedure", "discrimination", "judgment", "creative"])
+          ),
+          coreIdea: z.string().optional().nullable(),
+          focusQuestion: z.string(),
+          perspectives: z.array(z.string()).optional().nullable(),
+          capture: z.array(z.string()).optional().nullable(),
+          /* v25 节点新字段（PRD 4.3）：全部 optional 容错——旧模型/降级链路缺了不炸 */
+          keyConcepts: z.array(z.string()).optional().nullable(),
+          prerequisites: z.array(z.string()).optional().nullable(),
+          expectedOutcome: z.string().optional().nullable(),
+          assessFocus: z.string().optional().nullable(),
+        })
+      )
+      .min(3),
+  })
+);
+export type ReadingPlan = z.infer<typeof readingPlanSchema>;
+
+/* ---- 阅读系统 V1.0 新任务 schema（PRD 2026-11-05）---- */
+
+/** 目标推荐（PRD 4.1）：非法枚举回落 understand，不炸 */
+export const readingGoalSchema = z.object({
+  primary: z.preprocess(
+    (v) => (["understand", "think", "apply", "retain"].includes(String(v)) ? v : "understand"),
+    z.enum(["understand", "think", "apply", "retain"])
+  ),
+  secondary: z
+    .array(
+      z.preprocess(
+        (v) => (["understand", "think", "apply", "retain"].includes(String(v)) ? v : null),
+        z.enum(["understand", "think", "apply", "retain"]).nullable()
+      )
+    )
+    .optional()
+    .nullable(),
+  reason: z.string().optional().nullable(),
+});
+
+/** 策略调度（PRD 4.4）：mode 非法回落 socratic */
+export const readingStrategySchema = z.object({
+  mode: z.preprocess(
+    (v) =>
+      ["socratic", "feynman", "collision", "close-read", "recall-check"].includes(String(v))
+        ? v
+        : "socratic",
+    z.enum(["socratic", "feynman", "collision", "close-read", "recall-check"])
+  ),
+  reason: z.string().optional().nullable(),
+});
+
+/** 验收出题（PRD 4.5）：kind 非法回落 explain；固定 3 题，多了截断少了报错 */
+export const readingAssessGenSchema = z.object({
+  questions: z
     .array(
       z.object({
-        title: z.string(),
-        knowledgeType: z.preprocess(
-          (v) => {
-            const s = String(v ?? "").toLowerCase();
-            if (["fact", "concept", "procedure", "discrimination", "judgment", "creative"].includes(s)) return s;
-            return "concept"; // 默认值
-          },
-          z.enum(["fact", "concept", "procedure", "discrimination", "judgment", "creative"])
+        kind: z.preprocess(
+          (v) => (["explain", "connect", "apply"].includes(String(v)) ? v : "explain"),
+          z.enum(["explain", "connect", "apply"])
         ),
-        coreIdea: z.string().optional().nullable(),
-        focusQuestion: z.string(),
-        perspectives: z.array(z.string()).optional().nullable(),
-        capture: z.array(z.string()).optional().nullable(),
+        question: z.string(),
       })
     )
-    .min(3),
+    .min(2)
+    .max(5),
 });
-export type ReadingPlan = z.infer<typeof readingPlanSchema>;
+
+/** 验收判分（PRD 4.5）：evidence 纪律在提示词里，schema 只兜形状 */
+export const readingAssessGradeSchema = z.object({
+  results: z
+    .array(
+      z.object({
+        kind: z.preprocess(
+          (v) => (["explain", "connect", "apply"].includes(String(v)) ? v : "explain"),
+          z.enum(["explain", "connect", "apply"])
+        ),
+        level: z.preprocess(
+          (v) => (["mastered", "partial", "not"].includes(String(v)) ? v : "partial"),
+          z.enum(["mastered", "partial", "not"])
+        ),
+        evidence: z.string().optional().nullable(),
+        feedback: z.string().optional().nullable(),
+      })
+    )
+    .min(1),
+  suggestion: z.string().optional().nullable(),
+});
+
+/** 添加自定义节点（PRD 4.3） */
+export const readingAddNodeSchema = z.object({
+  chapter: z.object({
+    title: z.string(),
+    knowledgeType: z.preprocess(
+      (v) => {
+        const s = String(v ?? "").toLowerCase();
+        return ["fact", "concept", "procedure", "discrimination", "judgment", "creative"].includes(s)
+          ? s
+          : "concept";
+      },
+      z.enum(["fact", "concept", "procedure", "discrimination", "judgment", "creative"])
+    ),
+    coreIdea: z.string().optional().nullable(),
+    focusQuestion: z.string(),
+    keyConcepts: z.array(z.string()).optional().nullable(),
+    prerequisites: z.array(z.string()).optional().nullable(),
+    expectedOutcome: z.string().optional().nullable(),
+    assessFocus: z.string().optional().nullable(),
+    perspectives: z.array(z.string()).optional().nullable(),
+    capture: z.array(z.string()).optional().nullable(),
+  }),
+});
 
 export const insightsSchema = z.object({
   /** 允许空数组：INSIGHT_EXTRACT 的纪律是「只提炼真实有内容的洞见，没有就输出空数组」。

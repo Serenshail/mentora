@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { rateLimit, clientIp } from "@/lib/server/rate-limit";
+import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { assertSafePublicUrl } from "@/lib/server/url-guard";
 
 export const runtime = "nodejs";
@@ -148,6 +148,28 @@ async function checkVideo(raw: string): Promise<CheckResult | null> {
   return null;
 }
 
+/** 按字节预算读响应体头部：读满即 cancel——res.text() 无上限，URL 调用方任填时
+ *  会把整页（可达数十 MB）拉进内存，构成带宽/内存放大器 */
+async function readHead(res: Response, maxBytes: number): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      total += value.length;
+      if (total >= maxBytes) {
+        void reader.cancel().catch(() => {});
+        break;
+      }
+    }
+  } catch { /* 读一半失败：有多少用多少 */ }
+  return Buffer.concat(parts.map((p) => Buffer.from(p))).toString("utf8");
+}
+
 async function checkOne(raw: string): Promise<CheckResult> {
   const v = await checkVideo(raw);
   if (v) return v;
@@ -197,7 +219,7 @@ async function checkOne(raw: string): Promise<CheckResult> {
         // 非网页(文件/接口)不算广告,视为可访问
         return { ...base, ok: true, reason: "可访问" };
       }
-      const html = (await res.text().catch(() => "")).slice(0, 200_000);
+      const html = await readHead(res, 200_000).catch(() => "");
       const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
       base.title = (m?.[1] ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
       // 重定向后的终页也要复核（如 /free 跳到登录页）：URL 形态 + 页面标题双查
@@ -230,7 +252,9 @@ async function checkOne(raw: string): Promise<CheckResult> {
 }
 
 export async function POST(req: NextRequest) {
-  if (!rateLimit(`linkcheck:${clientIp(req)}`, { capacity: 20, refillPerSec: 20 / 60 })) {
+  /* 匿名可调、每请求最多 10 URL×5 跳出网——限流必须跨实例持久（进程内桶多实例下形同虚设，
+   * 与 feedback/track 同一标准） */
+  if (!(await rateLimitPersistent(`linkcheck:${clientIp(req)}`, { capacity: 20, refillPerSec: 20 / 60 }))) {
     return Response.json({ error: "检测太频繁" }, { status: 429 });
   }
   const body = await req.json().catch(() => ({}));

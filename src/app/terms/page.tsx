@@ -9,7 +9,7 @@ export default function TermsPage() {
   return (
     <main className="mx-auto max-w-2xl px-6 py-14 leading-relaxed">
       <h1 className="font-heading text-3xl font-semibold tracking-tight">用户协议</h1>
-      <p className="mt-2 text-sm text-neutral-500">最近更新：2026-10</p>
+      <p className="mt-2 text-sm text-ink-dim">最近更新：2026-10</p>
 
       <section className="mt-8 space-y-3">
         <h2 className="text-lg font-semibold">1. 服务说明</h2>
@@ -58,9 +58,9 @@ export default function TermsPage() {
       </section>
 
       <p className="mt-12 text-sm">
-        <Link href="/" className="text-neutral-500 underline-offset-4 hover:underline">← 返回首页</Link>
+        <Link href="/" className="text-ink-dim underline-offset-4 hover:underline">← 返回首页</Link>
         {" · "}
-        <Link href="/privacy" className="text-neutral-500 underline-offset-4 hover:underline">隐私政策</Link>
+        <Link href="/privacy" className="text-ink-dim underline-offset-4 hover:underline">隐私政策</Link>
       </p>
     </main>
   );

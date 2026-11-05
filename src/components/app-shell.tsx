@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { CmdK } from "@/components/cmdk";
+import { Skeleton } from "@/components/ui";
 import { FeedbackWidget } from "@/components/feedback-widget";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { toast } from "sonner";
@@ -31,26 +32,59 @@ import { useAuth, useAutoPush, useSyncStatus, useFlushOnHide } from "@/lib/auth-
 import { isAdminEmail } from "@/lib/admin-emails";
 import { useVisualViewportInset } from "@/lib/use-visual-viewport";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /* 侧栏（v22.0 重构）：首页 = 智能体；学习教练与第二大脑合并为「学习」；
  * 学习人生接管原首页的所有卡片（日历/学习进行时/复习/读书/人生伙伴）。
  * 读书伙伴与人生伙伴保留独立入口（各有结构化工作台）。 */
 /* 侧栏（v23.3 重排）：读书伙伴并入「学习」工作台（第二个 tab）；
  * 学习人生紧随 Mentora；人生伙伴回到学习之后。NAV 顺序 = 用户指定终版。 */
+/* v24.1（用户定）：设置不再单独占导航位——点击侧栏底部头像/用户框或移动端
+ * 「更多」抽屉进入；邀请（拉新）也收进设置页。 */
 const NAV = [
   { href: "/", label: "Mentora", icon: Sparkles },
   { href: "/life", label: "学习人生", icon: Footprints },
   { href: "/learn", label: "学习", icon: GraduationCap },
   { href: "/council", label: "人生伙伴", icon: Compass },
-  { href: "/settings", label: "设置", icon: Settings2 },
 ];
 
-/* 移动底栏（PRD-2026-10-26-MOBILE-UI §3.1）：5 个主入口 +「更多」抽屉。
- * v22 侧栏重构后：Mentora/学习/学习人生/读书/人生伙伴 为主，设置进更多。
- * 当前在隐藏路由时「更多」显示 active（M1-2）。 */
+/* 移动底栏（PRD-2026-10-26-MOBILE-UI §3.1）：主入口 +「更多」抽屉。
+ * 设置不占底栏格位，收进「更多」抽屉。 */
 const MOBILE_PRIMARY = NAV.slice(0, 5);
-const MOBILE_MORE = NAV.slice(5);
+const MOBILE_MORE = [...NAV.slice(5), { href: "/settings", label: "设置", icon: Settings2 }];
+
+/* 桌面侧栏项：四处复制粘贴的 className 收拢到一处 */
+function NavItem({
+  href,
+  label,
+  icon: Icon,
+  active,
+  collapsed,
+}: {
+  href: string;
+  label: string;
+  icon: typeof Sparkles;
+  active: boolean;
+  collapsed: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      title={collapsed ? label : undefined}
+      aria-label={collapsed ? label : undefined}
+      className={cn(
+        "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
+        collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
+        active
+          ? "bg-black/[0.05] font-semibold text-ink"
+          : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
+      )}
+    >
+      <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
+      {!collapsed && label}
+    </Link>
+  );
+}
 
 /* 管理员邮箱（与 /admin 服务端鉴权同一份白名单）；非管理员不显示入口 */
 
@@ -82,8 +116,8 @@ function MembershipBanner() {
       <Sparkles className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1">
         {expired
-          ? "会员已到期：AI 生成已暂停，笔记与数据仍可查看和导出。"
-          : `会员还剩 ${ent.daysLeft} 天，到期后 AI 生成会暂停。`}
+          ? "会员已到期，已转入免费版：AI 按月度免费额度受限，学习记录与笔记全部保留。"
+          : `会员还剩 ${ent.daysLeft} 天，到期后自动转入免费版（AI 额度受限，数据不受影响）。`}
       </span>
       <span className="shrink-0 font-semibold underline-offset-2 hover:underline">续费 →</span>
     </Link>
@@ -218,21 +252,27 @@ export function AppShell({ children }: { children: ReactNode }) {
    * 旧实现直接看本地默认值，把"跟随服务端"当成了演示模式——
    * 于是每个用户侧栏都挂着"正在用演示数据"，而实际走的是服务端真模型。 */
   const byok = Boolean(apiKey && provider && provider !== "demo");
-  const [serverDemo, setServerDemo] = useState(false);
+  /* 三态：undefined=探测中，null=探活失败（未知），true/false=演示/真模型。
+   * 旧实现把请求失败也折成 false，真演示 + 一次网络抖动 = 整场把演示回声当真模型输出。 */
+  const [serverDemo, setServerDemo] = useState<boolean | null | undefined>(undefined);
   useEffect(() => {
     if (byok) return; // 自带 Key：服务端配没配模型都不影响
     let alive = true;
     fetch("/api/health")
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (alive && j?.channel?.ai) setServerDemo(j.channel.ai === "demo");
+        if (!alive) return;
+        const ai = j?.channel?.ai;
+        setServerDemo(ai === "demo" ? true : ai ? false : null);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive) setServerDemo(null); // 失败=未知，不与「真模型」混同
+      });
     return () => {
       alive = false;
     };
   }, [byok]);
-  const demoMode = !byok && serverDemo;
+  const demoMode = !byok && serverDemo === true;
 
   /* 本地快照写满（知识库过大）时给一次可见提示：不崩溃、数据以云端为准 */
   useEffect(() => {
@@ -250,10 +290,18 @@ export function AppShell({ children }: { children: ReactNode }) {
       const stack = (e.error as Error | undefined)?.stack ?? "";
       if (/startTime/.test(e.message) && /reportAllChanges/.test(stack)) e.preventDefault();
     };
+    /* store 侧的存储告警（旧数据没迁移成功 / 本地快照损坏）：
+     * 这些故障以前只在注释里"忽略"，用户侧完全无感，直到发现数据不见了。 */
+    const onStoreWarning = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      toast.error(detail || "本地数据读写异常，请到设置页导出备份。");
+    };
     window.addEventListener("mentora:quota", onQuota);
+    window.addEventListener("mentora:store-warning", onStoreWarning);
     window.addEventListener("error", onError);
     return () => {
       window.removeEventListener("mentora:quota", onQuota);
+      window.removeEventListener("mentora:store-warning", onStoreWarning);
       window.removeEventListener("error", onError);
     };
   }, []);
@@ -288,6 +336,18 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, [user, moreOpen]);
 
+  /* 抽屉键盘契约（对齐共享 Modal 的最小实现）：Esc 关闭，打开时聚焦面板 */
+  const drawerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMoreOpen(false);
+    };
+    drawerRef.current?.focus();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [moreOpen]);
+
   /* 键盘 inset：挂在壳层一处，全站 fixed 层共享（§4.3） */
   useVisualViewportInset(!!user);
 
@@ -302,6 +362,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   /* 「更多」是否该亮：当前路由落在抽屉内的任一入口（含管理员后台） */
   const moreActive =
     MOBILE_MORE.some(({ href }) => isActive(href)) || pathname.startsWith("/admin");
+
+  /* 认证探测中：受保护页先渲染骨架，避免先闪一帧内容再跳登录/套壳的布局抖动 */
+  if (checking && !isPublicPath) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Skeleton className="h-40 w-full max-w-md rounded-2xl bg-surface/60" />
+      </div>
+    );
+  }
 
   /* 登录页始终走全屏布局：注册成功的一瞬 user 已写入，但路由还没跳走，
    * 若此时套上应用壳会和登录页双栏叠成三栏（旧实现靠整页空白规避，反而闪屏）。 */
@@ -413,22 +482,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </p>
             )}
             {NAV.slice(0, 6).map(({ href, label, icon: Icon }) => (
-              <Link
-                key={href}
-                href={href}
-                title={collapsed ? label : undefined}
-                aria-label={collapsed ? label : undefined}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
-                  collapsed ? "justify-center px-2 py-3" : "px-3.5 py-2.5",
-                  isActive(href)
-                    ? "bg-black/[0.05] font-semibold text-ink"
-                    : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
-                )}
-              >
-                <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
-                {!collapsed && label}
-              </Link>
+              <NavItem key={href} href={href} label={label} icon={Icon} active={isActive(href)} collapsed={collapsed} />
             ))}
           </nav>
           <nav className="mx-3 mt-4 space-y-0.5 border-t border-border pt-4">
@@ -436,63 +490,63 @@ export function AppShell({ children }: { children: ReactNode }) {
               系统
             </p>
             {NAV.slice(6).map(({ href, label, icon: Icon }) => (
-              <Link
-                key={href}
-                href={href}
-                title={collapsed ? label : undefined}
-                aria-label={collapsed ? label : undefined}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
-                  collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
-                  isActive(href)
-                    ? "bg-black/[0.05] font-semibold text-ink"
-                    : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
-                )}
-              >
-                <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
-                {!collapsed && label}
-              </Link>
+              <NavItem key={href} href={href} label={label} icon={Icon} active={isActive(href)} collapsed={collapsed} />
             ))}
             {isAdmin && (
-              <Link
-                href="/admin"
-                title={collapsed ? "管理后台" : undefined}
-                aria-label={collapsed ? "管理后台" : undefined}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg text-[13.5px] tracking-[-0.01em] transition-all duration-150",
-                  collapsed ? "justify-center px-2 py-2.5" : "px-3.5 py-2.5",
-                  isActive("/admin")
-                    ? "bg-black/[0.05] font-semibold text-ink"
-                    : "font-medium text-ink-dim hover:bg-black/[0.035] hover:text-ink"
-                )}
-              >
-                <ShieldCheck className="size-[18px] shrink-0" strokeWidth={1.75} />
-                {!collapsed && "管理后台"}
-              </Link>
+              <NavItem href="/admin" label="管理后台" icon={ShieldCheck} active={isActive("/admin")} collapsed={collapsed} />
             )}
           </nav>
         </div>
 
         <div className={cn("mt-auto pb-4 pt-2", collapsed ? "px-1.5" : "px-3")}>
+          {/* 同步状态可见（saving/error 才显示，saved 不复述）：
+              自动推送重试耗尽会置 error，此前全仓无人渲染——用户对"数据丢了"毫无征兆。 */}
+          {user && (syncStatus === "saving" || syncStatus === "error") && (
+            <p
+              className={cn(
+                "mb-1 px-2.5 text-[10.5px]",
+                syncStatus === "error" ? "text-bad" : "text-ink-dim",
+                collapsed && "text-center"
+              )}
+              title={syncStatus === "error" ? "云端同步失败，改动仍在本机，会自动重试" : "正在把改动同步到云端"}
+            >
+              {collapsed ? (syncStatus === "error" ? "!" : "…") : syncStatus === "saving" ? "正在同步…" : "同步失败，稍后自动重试"}
+            </p>
+          )}
           {!collapsed && <FeedbackWidget />}
           {user ? (
             <div className="mt-1 flex items-center gap-2 rounded-xl px-2.5 py-2">
-              {user.avatar ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={user.avatar}
-                  alt={user.name || user.email}
-                  className="size-7 shrink-0 rounded-lg border border-border object-cover"
-                />
-              ) : (
-                <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#1d1d1f] text-[11px] font-bold text-white">
-                  {(user.name || user.email).slice(0, 1).toUpperCase()}
-                </div>
-              )}
-              {!collapsed && <span className="truncate text-xs text-ink">{user.name || user.email}</span>}
+              {/* 头像/用户框 = 设置入口（用户定：设置不单独占导航位，点这里进来） */}
+              <button
+                onClick={() => router.push("/settings")}
+                title="设置"
+                aria-label="打开设置"
+                className={cn(
+                  "flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg py-1 text-left transition hover:bg-black/[0.04]",
+                  collapsed && "justify-center"
+                )}
+              >
+                {user.avatar ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={user.avatar}
+                    alt={user.name || user.email}
+                    className="size-7 shrink-0 rounded-lg border border-border object-cover"
+                  />
+                ) : (
+                  <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#1d1d1f] text-[11px] font-bold text-white">
+                    {(user.name || user.email).slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+                {!collapsed && <span className="truncate text-xs text-ink">{user.name || user.email}</span>}
+              </button>
               <button
                 onClick={async () => {
-                  await logout();
+                  try {
+                    await logout();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "退出登录未在服务端生效");
+                  }
                   router.push("/");
                 }}
                 className={cn("text-[11px] text-ink-dim hover:text-ink cursor-pointer", !collapsed && "ml-auto")}
@@ -523,6 +577,9 @@ export function AppShell({ children }: { children: ReactNode }) {
               正在用演示数据 · 点此接上真模型
             </Link>
           )}
+          {!byok && serverDemo === null && !collapsed && (
+            <p className="mt-1 px-2.5 text-[10px] text-ink-dim/50">暂时无法确认服务端模型状态</p>
+          )}
         </div>
       </aside>
 
@@ -539,9 +596,20 @@ export function AppShell({ children }: { children: ReactNode }) {
             scrolled && "scrolled-chrome"
           )}
         >
-          <Link href="/" className="flex items-baseline">
-            <span className="font-brand text-[22px] leading-none text-ink">Mentora</span>
-          </Link>
+          <div className="flex min-w-0 items-center gap-2">
+            {demoMode && (
+              /* 演示提示此前只在桌面侧栏：移动端用户全程收不到「正在用演示数据」 */
+              <Link
+                href="/settings"
+                className="shrink-0 rounded-full border border-warn/30 bg-warn/[0.08] px-2 py-0.5 text-[10px] font-medium text-warn"
+              >
+                演示数据
+              </Link>
+            )}
+            <Link href="/" className="flex items-baseline">
+              <span className="font-brand text-[22px] leading-none text-ink">Mentora</span>
+            </Link>
+          </div>
         </header>
 
         <main className="reserve-mobile-nav flex w-full flex-1 flex-col px-4 pt-6 md:px-7 md:py-8">
@@ -591,11 +659,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         {moreOpen && (
           <div className="fixed inset-0 z-50 flex items-end bg-black/30 backdrop-blur-[2px] md:hidden" onClick={() => setMoreOpen(false)}>
             <div
+              ref={drawerRef}
+              tabIndex={-1}
               role="dialog"
               aria-modal="true"
               aria-label="更多"
               style={{ paddingBottom: "calc(var(--safe-bottom) + 12px)" }}
-              className="materialize open w-full rounded-t-2xl border-t border-border bg-white px-2 pb-2 pt-3 shadow-overlay"
+              className="materialize open w-full rounded-t-2xl border-t border-border bg-white px-2 pb-2 pt-3 shadow-overlay outline-none"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-faint" />
@@ -604,6 +674,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <Link
                     key={href}
                     href={href}
+                    /* 先关抽屉：路由跳转前退出哨兵 history 条目，避免 Back 需按两次 */
+                    onClick={() => setMoreOpen(false)}
                     className={cn(
                       "flex min-h-[64px] flex-col items-center justify-center gap-1.5 rounded-xl border px-1 py-2 text-xs transition",
                       isActive(href)
@@ -618,6 +690,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {isAdmin && (
                   <Link
                     href="/admin"
+                    onClick={() => setMoreOpen(false)}
                     className={cn(
                       "flex min-h-[64px] flex-col items-center justify-center gap-1.5 rounded-xl border px-1 py-2 text-xs transition",
                       pathname.startsWith("/admin")
@@ -632,7 +705,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <button
                   onClick={async () => {
                     setMoreOpen(false);
-                    await logout();
+                    try {
+                      await logout();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "退出登录未在服务端生效");
+                    }
                     router.push("/");
                   }}
                   className="flex min-h-[64px] flex-col items-center justify-center gap-1.5 rounded-xl border border-border px-1 py-2 text-xs text-ink-dim transition hover:bg-bad/[0.06] hover:text-bad cursor-pointer"

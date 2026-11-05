@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+/* demo.ts 已加 server-only 护栏（防演示脚本误进浏览器包），测试里豁免 */
+vi.mock("server-only", () => ({}));
+
 import { demoRoundtableTake, demoRoundtableHost } from "../ai/demo";
 
 /* 圆桌 Demo 同语义回归锁（R1）：无 API Key 时三席必须立场可辨，

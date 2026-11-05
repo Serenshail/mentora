@@ -2,11 +2,14 @@ import { NextRequest } from "next/server";
 import { createHash } from "node:crypto";
 import type { AIConfig } from "@/lib/ai/providers";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
-import { withBudget } from "@/lib/server/db";
+import { withBudget, dbEventSave } from "@/lib/server/db";
 import { verifySession, type SessionUser } from "@/lib/server/auth";
 import { checkAndCountServerKey } from "@/lib/server/quota";
+import { readEntitlement } from "@/lib/server/entitlement";
+import { withinFreeBudget, addUsage } from "@/lib/server/usage";
 import { resolveByok, serverConfig } from "@/lib/server/ai-config";
 import { isDeployed } from "@/lib/server/deploy-env";
+import { assertSafePublicUrl } from "@/lib/server/url-guard";
 import * as P from "@/lib/ai/prompts";
 import { agentToolsPrompt, agentToolsSchema } from "@/lib/server/agent-tools";
 import { agentPersonalContext } from "@/lib/server/personal";
@@ -19,7 +22,10 @@ import {
 } from "@/lib/ai/demo";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+/* 长生成任务（阅读路线/总纲要/讲义）在推理模型下可达 90-150s。
+ * 自托管（腾讯云）无此限制照常生效；Vercel 按套餐钳制（Fluid 可 300s，Hobby 非钳 60s）——
+ * 平台上限以内尽力放行，超限由平台诚实报错（与全局 45s 假超时相比是改善）。 */
+export const maxDuration = 300;
 
 type Part =
   | { type: "text"; text: string }
@@ -74,11 +80,41 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
       if (args.mode === "phase-detail")
         return P.PLANNER_PHASE_DETAIL(s("ctx"), s("boundary"), s("days"));
       return P.PLANNER_PHASE_LIST(s("ctx"));
-    case "lesson": return P.DAILY_LESSON(s("ctx")) + P.TONE_LESSON_BLOCK(s("tone"));
+    case "lesson":
+      /* 与判分侧同口径：非法值一律回落到标准语气，避免拼错静默切档 */
+      return P.DAILY_LESSON(s("ctx")) + P.TONE_LESSON_BLOCK(s("tone") === "gentle" ? "gentle" : "standard");
     case "quiz-grade": return P.QUIZ_GRADE(s("ctx"), s("tone") === "gentle" ? "gentle" : "standard");
     case "review-ask": return P.REVIEW_PROMPT(s("items"));
     case "review-grade": return P.REVIEW_GRADE(s("ctx"));
-    case "reading-plan": return P.READING_PLAN(s("desc"));
+    case "reading-plan":
+      return P.READING_PLAN({
+        desc: s("desc"),
+        goal: args.goal as { primary: string; secondary?: string; intent?: string } | undefined,
+        routeType: s("routeType") || undefined,
+      });
+    /* 阅读系统 V1.0（PRD 2026-11-05）：六个新任务 */
+    case "reading-goal": return P.READING_GOAL_RECOMMEND({ title: s("title"), author: s("author") || undefined, desc: s("desc") || undefined });
+    case "reading-strategy":
+      return P.READING_STRATEGY({
+        goal: s("goal"),
+        chapter: s("chapter"),
+        learning: s("learning"),
+        recentTurns: s("recentTurns"),
+        currentMode: s("currentMode") || undefined,
+      });
+    case "reading-assess-gen":
+      return P.READING_ASSESS_GEN({
+        book: s("book"),
+        chapter: s("chapter"),
+        goal: s("goal"),
+        previousWeak: s("previousWeak") || undefined,
+      });
+    case "reading-assess-grade":
+      return P.READING_ASSESS_GRADE({ book: s("book"), chapter: s("chapter"), goal: s("goal"), qa: s("qa") });
+    case "reading-recap":
+      return P.READING_RECAP({ book: s("book"), chapter: s("chapter"), deposits: s("deposits"), chatExcerpt: s("chatExcerpt") });
+    case "reading-add-node":
+      return P.READING_ADD_NODE({ book: s("book"), titles: s("titles"), interest: s("interest"), goal: s("goal") || undefined });
     case "reading-chat": {
       const rag = s("ragCtx")
         ? `\n\n## 用户第二大脑里检索到的相关笔记（这是**证据**，不是答案）
@@ -112,9 +148,14 @@ ${s("ragCtx")}
         deep: args.deep === true,
         hasImage: args.hasImage === true,
         tools: args.noTools === true ? "" : agentToolsPrompt(),
-        personal: s("personal"),
       });
-    case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
+    case "note-assist": {
+      const mode = s("mode");
+      return P.NOTE_ASSIST(
+        mode === "summarize" || mode === "continue" ? mode : "rewrite",
+        s("text")
+      );
+    }
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
     /* RAG 增强（2026-10-26）：查询改写与精排都只输出 JSON，检索质量由代码裁决 */
     case "query-rewrite": return P.QUERY_REWRITE(s("question"), s("context"));
@@ -169,6 +210,16 @@ function demoTask(
     case "graduation": return demoGraduation(s);
     case "reading-plan": return demoReadingPlan(s);
     case "reading-chat": return demoReadingChat(flat);
+    /* 阅读系统 V1.0：Demo 同形状（schema 会校验，形状不对演示链路就断） */
+    case "reading-goal":
+    case "reading-strategy":
+    case "reading-assess-gen":
+    case "reading-assess-grade":
+    case "reading-add-node":
+    case "reading-recap":
+      return (async function* () {
+        yield* (await import("@/lib/ai/demo")).demoReadingSystem(task as string, args);
+      })();
     case "autolink":
       return (async function* () {
         yield* (await import("@/lib/ai/demo")).demoAutolink();
@@ -223,7 +274,19 @@ function ndjson(res: ReadableStreamDefaultController, chunk: string) {
 /* 可重试的瞬时故障：限流/服务端错误/超时；4xx(除408/409/429)为确定性错误不重试 */
 const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
 const UPSTREAM_TIMEOUT_MS = 45_000;
+/* 响应头到手后的读体空闲上限：45s 没有新分片就判定上游挂死。
+ * 旧实现只给"等到响应头"设超时，读循环可以无限期占着连接。 */
+const STREAM_IDLE_TIMEOUT_MS = 45_000;
+/* 长生成任务分级（v25.0.1 事故根修）：阅读路线/总纲要/讲义等任务，推理型模型
+ * 从请求到响应头可达 90s+，45s 全局超时把建书/重排路线直接打死（重试 3 次全超时，
+ * 用户看到"一直转圈然后报错"）。这两类任务放宽到 120s/90s，其余维持原预算。 */
+const LONG_GEN_TASKS = new Set(["reading-plan", "plan", "lesson", "graduation", "persona-distill"]);
+const upstreamHeaderTimeout = (task?: string) =>
+  task && LONG_GEN_TASKS.has(task) ? 120_000 : UPSTREAM_TIMEOUT_MS;
+const upstreamIdleTimeout = (task?: string) =>
+  task && LONG_GEN_TASKS.has(task) ? 90_000 : STREAM_IDLE_TIMEOUT_MS;
 const MAX_ATTEMPTS = 3;
+const MAX_UPSTREAM_REDIRECTS = 3;
 
 class FatalUpstream extends Error { fatal = true; }
 
@@ -232,6 +295,38 @@ interface UpstreamStats {
   completionTokens?: number;
   /** 网关不支持原生 tools（400）→ 已降级为围栏协议；通知客户端后续轮不再带 tools */
   nativeToolsRejected?: boolean;
+}
+
+/* BYOK 自定义端点：入口过一遍 url-guard 不等于安全——redirect:"follow" 会忠实地
+ * 把「302 → 内网/元数据地址」跟完，guard 只是事后诸葛（linkcheck 已改 manual 逐跳复检）。
+ * 这里同样 manual：每一跳都重新过公网 HTTPS 校验，最多 3 跳。
+ * 内置服务商走常量 baseUrl，不需要这层（也给正常 301 留出 follow 行为）。 */
+async function fetchUpstreamGuarded(
+  url: string,
+  init: RequestInit,
+  guarded: boolean
+): Promise<Response> {
+  if (!guarded) return fetch(url, init);
+  let current = url;
+  for (let hop = 0; hop <= MAX_UPSTREAM_REDIRECTS; hop++) {
+    const res = await fetch(current, { ...init, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+    const loc = res.headers.get("location");
+    if (!loc) return res;
+    let next: string;
+    try {
+      next = new URL(loc, current).toString();
+    } catch {
+      throw new FatalUpstream("自定义端点返回了非法的重定向地址");
+    }
+    const safe = await assertSafePublicUrl(next, { allowHttp: false });
+    if (!safe.ok) throw new FatalUpstream(`自定义端点重定向到不可用地址：${safe.reason}`);
+    try {
+      await res.body?.cancel();
+    } catch { /* 忽略：只要不把响应体留在连接里 */ }
+    current = next;
+  }
+  throw new FatalUpstream("自定义端点重定向次数过多");
 }
 
 /** 带超时 + 指数退避重试的上游请求（仅在尚未产出任何增量前重试，保证幂等）。
@@ -252,27 +347,32 @@ async function fetchUpstream(
   let attempt = 0;
   while (attempt < MAX_ATTEMPTS) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
+    const headerTimeout = upstreamHeaderTimeout(body.task);
+    const timer = setTimeout(() => ctrl.abort(), headerTimeout);
     const onParentAbort = () => ctrl.abort();
     parentSignal?.addEventListener("abort", onParentAbort);
     try {
       if (parentSignal?.aborted) throw new DOMException("Aborted", "AbortError");
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-        body: JSON.stringify({
-          model: cfg.model,
-          messages: [
-            ...(body.system ? [{ role: "system", content: body.system }] : []),
-            ...body.messages,
-          ],
-          stream: true,
-          temperature: body.temperature ?? 0.7,
-          ...(wantsUsage ? { stream_options: { include_usage: true } } : {}),
-          ...(useTools ? { tools, tool_choice: "auto" } : {}),
-        }),
-        signal: ctrl.signal,
-      });
+      const res = await fetchUpstreamGuarded(
+        url,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+          body: JSON.stringify({
+            model: cfg.model,
+            messages: [
+              ...(body.system ? [{ role: "system", content: body.system }] : []),
+              ...body.messages,
+            ],
+            stream: true,
+            temperature: body.temperature ?? 0.7,
+            ...(wantsUsage ? { stream_options: { include_usage: true } } : {}),
+            ...(useTools ? { tools, tool_choice: "auto" } : {}),
+          }),
+          signal: ctrl.signal,
+        },
+        cfg.provider === "custom"
+      );
       clearTimeout(timer);
       if (res.ok && res.body) {
         logEvent({ route: "chat-upstream", status: res.status, attempt });
@@ -294,7 +394,7 @@ async function fetchUpstream(
       if (e instanceof DOMException && e.name === "AbortError" && parentSignal?.aborted) throw e; // 客户端断开：不重试
       lastErr =
         e instanceof Error && e.name === "AbortError"
-          ? `上游模型响应超时（>${UPSTREAM_TIMEOUT_MS / 1000}s）`
+          ? `上游模型响应超时（>${headerTimeout / 1000}s）`
           : e instanceof Error ? e.message : "网络错误";
     } finally {
       parentSignal?.removeEventListener("abort", onParentAbort);
@@ -322,43 +422,74 @@ async function* upstreamDeltas(
   const agg = new ToolCallAggregator();
   const reader = streamBody.getReader();
   const decoder = new TextDecoder();
-  let buf = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith("data:")) continue;
-      const payload = t.slice(5).trim();
-      if (payload === "[DONE]") {
-        if (!agg.isEmpty) yield { nativeToolCalls: agg.finish() };
-        return;
-      }
+  /* 断连必须真正停掉上游：fetchUpstream 里的 parentSignal→ctrl 监听在拿到响应头后
+   * 就随 finally 移除了，此后 outer.abort() 没有任何消费者——旧实现断连后上游继续
+   * 生成、token 照烧（BYOK 烧用户的钱），自托管还会一直占着连接。 */
+  let aborted = false;
+  const onAbort = () => {
+    aborted = true;
+    void reader.cancel().catch(() => {});
+  };
+  parentSignal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    let buf = "";
+    for (;;) {
+      if (aborted) throw new DOMException("Aborted", "AbortError");
+      const read = reader.read();
+      read.catch(() => {}); // 超时路径下 cancel() 会让这次 read 以 done/reject 收尾，避免未处理拒绝
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const idleLimit = upstreamIdleTimeout(body.task);
+      const idle = new Promise<never>((_, reject) => {
+        idleTimer = setTimeout(() => {
+          void reader.cancel().catch(() => {});
+          reject(new Error(`上游流中断：${idleLimit / 1000}s 没有新数据`));
+        }, idleLimit);
+      });
+      let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
-        const j = JSON.parse(payload);
-        // usage 通常在最后一个不带 choices 的块里
-        if (j.usage) {
-          stats.promptTokens = j.usage.prompt_tokens ?? stats.promptTokens;
-          stats.completionTokens = j.usage.completion_tokens ?? stats.completionTokens;
+        chunk = await Promise.race([read, idle]);
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
+      }
+      const { done, value } = chunk;
+      if (aborted) throw new DOMException("Aborted", "AbortError");
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith("data:")) continue;
+        const payload = t.slice(5).trim();
+        if (payload === "[DONE]") {
+          if (!agg.isEmpty) yield { nativeToolCalls: agg.finish() };
+          return;
         }
-        const delta = j.choices?.[0]?.delta;
-        // 推理模型的思考期（reasoning_content）：转发为心跳事件，让客户端知道连接活着、模型在干活。
-        // 不转发的话，思考期可达 60s+ 只靠合成 ping 保活，弱网/公网隧道仍可能掐断（手机实测 network error）。
-        const think: string = delta?.reasoning_content || "";
-        if (think) yield { think: think.slice(0, 200) };
-        const piece: string = delta?.content || "";
-        if (piece) yield { piece };
-        /* 原生 tool_calls 分片：逐个喂进聚合器，流结束时一次性输出完整调用 */
-        if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
-          agg.feed(delta.tool_calls);
-        }
-      } catch { /* 半包，忽略 */ }
+        try {
+          const j = JSON.parse(payload);
+          // usage 通常在最后一个不带 choices 的块里
+          if (j.usage) {
+            stats.promptTokens = j.usage.prompt_tokens ?? stats.promptTokens;
+            stats.completionTokens = j.usage.completion_tokens ?? stats.completionTokens;
+          }
+          const delta = j.choices?.[0]?.delta;
+          // 推理模型的思考期（reasoning_content）：转发为心跳事件，让客户端知道连接活着、模型在干活。
+          // 不转发的话，思考期可达 60s+ 只靠合成 ping 保活，弱网/公网隧道仍可能掐断（手机实测 network error）。
+          const think: string = delta?.reasoning_content || "";
+          if (think) yield { think: think.slice(0, 200) };
+          const piece: string = delta?.content || "";
+          if (piece) yield { piece };
+          /* 原生 tool_calls 分片：逐个喂进聚合器，流结束时一次性输出完整调用 */
+          if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
+            agg.feed(delta.tool_calls);
+          }
+        } catch { /* 半包，忽略 */ }
+      }
     }
+    if (!agg.isEmpty) yield { nativeToolCalls: agg.finish() };
+  } finally {
+    parentSignal?.removeEventListener("abort", onAbort);
   }
-  if (!agg.isEmpty) yield { nativeToolCalls: agg.finish() };
 }
 
 export async function POST(req: NextRequest) {
@@ -397,6 +528,19 @@ export async function POST(req: NextRequest) {
   // 仅部署环境（production/preview）强制登录；本地开发（DEPLOY_ENV/VERCEL_ENV 未设）放行，保 e2e 冒烟链路
   const enforceLogin = isDeployed();
 
+  /* 会员分级（PRD §6.2）：到期 ≠ 锁号——自动降级为免费版，AI 走月度 token 预算，
+   * 数据与查看永远保留。BYOK 烧自己的钱、不受免费预算管。
+   * 读库有 1.2s 预算且失败降级放行：KV 抖动绝不能把付费用户判成免费。 */
+  let freeTier = false;
+  if (session) {
+    const ent = await withBudget(
+      readEntitlement(session.email),
+      { status: "legacy" as const, plan: null, expiresAt: null, daysLeft: null },
+      1200
+    );
+    freeTier = ent.status === "expired";
+  }
+
   let cfg: AIConfig;
   if (byok) {
     if (enforceLogin && !session) {
@@ -414,9 +558,23 @@ export async function POST(req: NextRequest) {
         { status: 401 }
       );
     }
+    /* 免费版月度 token 预算（PRD §3）：到期降级的用户仍可少量使用，超了就停到下月。
+     * 与会员的每日次数配额二选一——免费看 token（防成本失控），会员看次数（防滥用）。 */
+    if (session && freeTier && cfg.provider !== "demo") {
+      const b = await withBudget(withinFreeBudget(session.email), { ok: true, usedTokens: 0, limit: 200_000 }, 1500);
+      if (!b.ok) {
+        return Response.json(
+          {
+            code: "FREE_BUDGET_EXHAUSTED",
+            error: `本月免费 AI 额度已用完，下月 1 日自动恢复。你的学习记录、笔记和全部数据都在，也可以随时续费会员恢复完整额度。`,
+          },
+          { status: 429 }
+        );
+      }
+    }
     // 服务端 Key 配额（商业化前置）：烧部署者的钱按用户(未登录按 IP)限每日次数;BYOK 不受此限。
     // 超限文案给解法(等明天/自带 Key),不报"系统错误"。
-    if (cfg.provider !== "demo" && cfg.apiKey) {
+    if (!freeTier && cfg.provider !== "demo" && cfg.apiKey) {
       const q = await withBudget(
         checkAndCountServerKey(session?.email || clientIp(req)),
         { ok: true, used: 0, limit: Math.max(1, Number(process.env.AI_DAILY_CALL_LIMIT || 60)) },
@@ -436,20 +594,26 @@ export async function POST(req: NextRequest) {
   /* 任务分级路由：验收/复习/三重验收判分是全产品频次最高的 AI 调用，
    * 走快模型省成本、降延迟。仅服务端 Key 生效——BYOK 用户自己选的模型不动；
    * 未配 AI_CHEAP_MODEL 时保持原模型，行为不变。 */
-  const CHEAP_TASKS = new Set(["quiz-grade", "review-grade", "verify-score"]);
+  const CHEAP_TASKS = new Set(["quiz-grade", "review-grade", "verify-score", "reading-strategy", "reading-goal"]);
   if (!byok && cfg.provider !== "demo" && body.task && CHEAP_TASKS.has(body.task)) {
     const cheap = (process.env.AI_CHEAP_MODEL || "").trim();
     if (cheap) cfg = { ...cfg, model: cheap };
   }
 
-  /* 个人上下文（v24.0 二期）：长期记忆摘要，仅 agent 任务、登录态；
-   * 带 1.5s 硬预算——KV 变慢宁可不注入，也不能让首字节等超时。 */
-  if (body.task === "agent" && session) {
-    const personal = await withBudget(agentPersonalContext(session.userId), "", 1500);
-    body.args = { ...(body.args ?? {}), personal };
-  }
-
   // 双契约：客户端发 args(新,核心任务)→服务端组装提示词；发 system(旧,council)→沿用。
+  /* verify-score 的 args 此前被断言掩盖、未做校验：answers 缺失/非数组时 VERIFY_SCORE 里
+   * args.answers.map 在 buildSystem（流外）抛 TypeError → 整个请求 500，NDJSON 错误通道用不上。 */
+  if (body.task === "verify-score" && body.args) {
+    const rawAnswers = body.args.answers;
+    if (!Array.isArray(rawAnswers)) {
+      return Response.json({ error: "验收参数不完整，请重新完成三重验收" }, { status: 400 });
+    }
+    // q/a 宽松归一成字符串：字段缺失只降级为空白作答，不再让模板出现 undefined
+    body.args.answers = rawAnswers.map((a) => {
+      const o = (a ?? {}) as { q?: unknown; a?: unknown };
+      return { q: String(o.q ?? ""), a: String(o.a ?? "") };
+    });
+  }
   const system =
     body.args && Object.keys(body.args).length > 0
       ? buildSystem(body.task, body.args)
@@ -520,6 +684,33 @@ export async function POST(req: NextRequest) {
           push({ t: "end" });
           controller.close();
         } catch { /* cancel 后控制器已关闭 */ }
+        /* 用量落 events 表：admin/stats 的 chat-usage 面板以此聚合，此前只进 stdout 日志导致统计恒为 0。
+         * 放在流关闭之后 await，不拖慢 end 标记送达；dbEventSave 内部 best-effort 绝不抛出。 */
+        if (cfg.provider !== "demo") {
+          // 免费版的 token 计量（PRD §3.2）：请求结束后按真实 usage 结算；
+          // 上游没给 usage 时按字符数估算，模型失败自然没有 usage、不会错扣。
+          if (freeTier && !byok && session) {
+            await addUsage(session.email, stats.promptTokens ?? 0, stats.completionTokens ?? 0, {
+              // 上游不给 usage 时按字符估（输入取请求体，输出保守按同体积计）
+              estimateInChars: raw.length,
+              estimateOutChars: stats.completionTokens ? undefined : raw.length,
+            }).catch(() => {});
+          }
+          await dbEventSave({
+            name: "chat-usage",
+            account: session
+              ? createHash("sha256").update(session.email).digest("hex").slice(0, 8)
+              : clientIp(req),
+            path: "/api/chat",
+            props: JSON.stringify({
+              provider: cfg.provider,
+              model: cfg.model,
+              byok: byok ? 1 : 0,
+              prompt_tokens: stats.promptTokens ?? 0,
+              completion_tokens: stats.completionTokens ?? 0,
+            }),
+          }).catch(() => {});
+        }
       }
     },
     cancel() {

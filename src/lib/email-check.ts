@@ -30,10 +30,6 @@ export async function checkEmailDeliverable(email: string): Promise<EmailCheck> 
   /* MX：这个域是否配了收信服务器；没有 MX 再退查 A 记录（少数域用 A 直收）。
    * 工程：DNS 全部失败(网络/DNS 故障)时判定为"无法取证"→ 放行并降级,
    * 绝不因外部依赖故障把真实用户挡在门外(fail-open),本地断网曾误伤真实注册。 */
-  const knownGood = new Set([
-    "gmail.com", "outlook.com", "hotmail.com", "live.com", "icloud.com", "yahoo.com",
-    "qq.com", "163.com", "126.com", "sina.com", "sohu.com", "aliyun.com", "foxmail.com",
-  ]);
   try {
     const mx = await resolveMx(domain);
     if (!mx || mx.length === 0) {
@@ -45,8 +41,9 @@ export async function checkEmailDeliverable(email: string): Promise<EmailCheck> 
       await resolveA(domain);
       return { ok: true };
     } catch {
-      if (knownGood.has(domain)) return { ok: true }; // DNS 故障期间的已知大厂域放行
-      return { ok: false, reason: "暂时无法核验这个邮箱域名，请稍后再试或换常用邮箱" };
+      /* MX/A 全查不动 = DNS 故障期无法取证：按声明的 fail-open 放行，
+       * 不得只放行白名单域（否则 protonmail/企业高校域全被挡在门外）。 */
+      return { ok: true };
     }
   }
 }

@@ -43,6 +43,16 @@ Page({
   },
 
   onHide: function () {
+    this.unbindSync();
+  },
+
+  /* 本页唯一的销毁路径（logout/switchBase 的 reLaunch）只触发 onUnload，不触发 onHide：
+   * 只挂 onHide 会让监听器残留，并且继续对已销毁的页面 setData。 */
+  onUnload: function () {
+    this.unbindSync();
+  },
+
+  unbindSync: function () {
     if (this._offSync) {
       this._offSync();
       this._offSync = null;
@@ -52,8 +62,8 @@ Page({
   render: function () {
     var st = store.state;
     var baseId = config.currentId();
-    // 用 config.BASES 的键序生成列表，保证与可切换集合一致（不硬编码三个字符串）
-    var bases = Object.keys(config.BASES).map(function (id) {
+    // 只列当前环境允许的后端（正式包只有 prod，避免用户切到不可达地址后锁死）
+    var bases = Object.keys(config.availableBases()).map(function (id) {
       var meta = BASE_META[id] || { label: id, desc: "" };
       return { id: id, label: meta.label, desc: meta.desc };
     });
@@ -78,7 +88,13 @@ Page({
       .pullIfSafe(true)
       .then(function (r) {
         util.toast(
-          r === "pulled" ? "已采用云端数据" : r === "pushed" ? "本机数据已推上云" : "云端与本机已一致"
+          r === "pulled"
+            ? "已采用云端数据"
+            : r === "pushed"
+              ? "本机数据已推上云"
+              : r === "error"
+                ? "同步失败，请检查网络后重试"
+                : "云端与本机已一致"
         );
         that.render();
       })
@@ -119,11 +135,13 @@ Page({
       content: "切换后需要重新登录。",
       success: function (res) {
         if (!res.confirm) return;
-        store.onLogout();
-        api.clearSession();
-        getApp().globalData.user = null;
-        config.set(id);
-        wx.reLaunch({ url: "/pages/login/login" });
+        // 等最后一批改动推上云再切后端：onLogout 内部会排空在途推送
+        store.onLogout().then(function () {
+          api.clearSession();
+          getApp().globalData.user = null;
+          config.set(id);
+          wx.reLaunch({ url: "/pages/login/login" });
+        });
       }
     });
   },
@@ -134,11 +152,13 @@ Page({
       content: "本机数据已同步到云端，退出后随时可以登录回来。",
       success: function (res) {
         if (!res.confirm) return;
-        store.onLogout();
-        api.logout();
-        getApp().globalData.user = null;
-        api.clearSession();
-        wx.reLaunch({ url: "/pages/login/login" });
+        // 先让在途推送落地，避免退出瞬间的改动被丢掉
+        store.onLogout().then(function () {
+          api.logout();
+          getApp().globalData.user = null;
+          api.clearSession();
+          wx.reLaunch({ url: "/pages/login/login" });
+        });
       }
     });
   }

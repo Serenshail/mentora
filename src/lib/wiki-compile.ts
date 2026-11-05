@@ -21,10 +21,13 @@ export interface CompileResult {
   merges: string[];
   conflicts: string[];
   processed: number;
+  /** 逐笔记编译失败数与最后一个错误：全失败时调用方必须能区分"没活干"和"干不了" */
+  failed: number;
+  lastError?: string;
 }
 
 export async function runWikiCompile(limit = 3): Promise<CompileResult> {
-  const res: CompileResult = { linked: 0, merges: [], conflicts: [], processed: 0 };
+  const res: CompileResult = { linked: 0, merges: [], conflicts: [], processed: 0, failed: 0 };
   const notes = useAppStore
     .getState()
     .knowledge.filter((k) => !(k.tags ?? []).includes("MOC") && !k.unresolved);
@@ -42,7 +45,7 @@ export async function runWikiCompile(limit = 3): Promise<CompileResult> {
       .map((h) => {
         const n = others.find((k) => k.id === h.doc.id);
         if (!n) return "";
-        return `- ${n.title}${(t.links ?? []).includes(n.id) ? "(已链)" : ""}：${n.body.slice(0, 80)}`;
+        return `- ${n.title}：${n.body.slice(0, 80)}`;
       })
       .filter(Boolean)
       .join("\n");
@@ -56,13 +59,18 @@ export async function runWikiCompile(limit = 3): Promise<CompileResult> {
         temperature: 0.2,
         onDelta: () => {},
       });
-    } catch {
+    } catch (e) {
+      /* 失败不再静默：BYOK 失效/配额/网络故障全失败时不能被呈现成"没有笔记需要编译"的假空态 */
+      res.failed++;
+      res.lastError = e instanceof Error ? e.message : String(e);
       continue;
     }
     let ops: CompileOps;
     try {
       ops = extractJson<CompileOps>(full);
-    } catch {
+    } catch (e) {
+      res.failed++;
+      res.lastError = e instanceof Error ? e.message : String(e);
       continue;
     }
     res.processed++;

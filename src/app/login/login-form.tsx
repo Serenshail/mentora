@@ -11,9 +11,9 @@ import { toast } from "sonner";
 
 export type LoginMode = "login" | "register" | "reset";
 
-/* 登录后回跳目标：只认站内路径，避免 ?next= 被拿去跳外站 */
+/* 登录后回跳目标：只认站内路径。反斜杠变体也要拦——WHATWG 把 /\evil.com 解析成 //evil.com */
 function safeNext(raw: string | null): string {
-  return raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+  return raw && /^\/[^/\\]/.test(raw) ? raw : "/";
 }
 
 /* 条件字段展开/收起：grid 0fr→1fr 过渡高度，避免切模式时卡片突然长高/塌陷 */
@@ -34,7 +34,7 @@ function Collapse({ open, children }: { open: boolean; children: React.ReactNode
 
 /* 左侧品牌轮廓：大字标（PopText）+ 卖点提纲 */
 function BrandPanel() {
-  const { elRef } = usePopText("Mentora", 300);
+  const { elRef, failed } = usePopText("Mentora", 300);
 
   return (
     <aside className="relative hidden flex-col justify-between overflow-hidden bg-ink p-10 text-white md:flex lg:p-14">
@@ -49,9 +49,12 @@ function BrandPanel() {
       <div className="relative">
         <h1
           ref={elRef}
-          className="pop-text min-h-[1.4em] leading-none"
-          style={{ fontFamily: "'Great Vibes', cursive", fontSize: "clamp(56px, 5vw, 76px)" }}
-        />
+          className="pop-text font-brand min-h-[1.4em] leading-none"
+          style={{ fontSize: "clamp(56px, 5vw, 76px)" }}
+        >
+          {/* PopText 加载失败时的纯文本兜底（成功路径无此节点，视觉不变） */}
+          {failed && "Mentora"}
+        </h1>
       </div>
 
       <div className="relative max-w-md">
@@ -100,6 +103,19 @@ export function LoginForm({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [invite, setInvite] = useState("");
+  const [refCode, setRefCode] = useState("");
+
+  /* 邀请链接（?ref=XXXX）带进来的邀请人码：预填好，用户可以改或清空 */
+  useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("ref");
+    if (!fromUrl) return;
+    // 挪一拍：effect 同步 setState 是级联渲染红线（lint）
+    const raf = requestAnimationFrame(() => {
+      setRefCode(fromUrl.toUpperCase().replace(/[^0-9A-Z]/g, ""));
+      setMode("register");
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   /* 已登录还访问 /login：直接回目标页。提交中不抢跳转，交给 afterAuth 同步完再走，
    * 否则注册/登录成功瞬间会和整页空白、双重导航叠在一起，看起来就是闪一下。 */
@@ -110,8 +126,12 @@ export function LoginForm({
   }, [checking, user, busy, nextPath, router]);
 
   const afterAuth = async () => {
-    // 全自动同步：云端有数据直接采用，无需用户点选
-    const result = await syncAfterLogin();
+    // 全自动同步：云端有数据直接采用，无需用户点选。
+    // 5s 超时兜底：同步链路挂起时不能把 busy/表单永久锁死（useAuth 探测同款先例）
+    const result = await Promise.race([
+      syncAfterLogin(),
+      new Promise<null>((r) => setTimeout(() => r(null), 5000)),
+    ]);
     if (result === "pulled") toast.success("已同步云端最新数据");
     else if (result === "pushed") toast.success("本机数据已备份到云端");
     // 从 /admin 等页面被送来的，登录完要回到那里，别一律甩回首页
@@ -123,11 +143,11 @@ export function LoginForm({
     setBusy(true);
     try {
       if (mode === "reset") {
-        // 忘记密码：邮箱 + 邀请码 + 新密码一步重置；成功后回登录态，不自动签发会话
+        // 忘记密码：邮箱 + 管理员发放的一次性重置码 + 新密码；成功后回登录态，不自动签发会话
         const res = await fetch("/api/auth/reset-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email.trim(), inviteCode: invite.trim(), newPassword: password }),
+          body: JSON.stringify({ email: email.trim(), resetCode: invite.trim(), newPassword: password }),
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(j.error || "重置失败");
@@ -139,7 +159,11 @@ export function LoginForm({
         await login(email.trim(), password);
         await afterAuth();
       } else {
-        await register(email.trim(), password, name.trim(), invite.trim());
+        const u = await register(email.trim(), password, name.trim(), invite.trim(), refCode.trim());
+        const exp = u.entitlement?.expiresAt;
+        toast.success(
+          exp ? `开通成功，有效期至 ${new Date(exp).toLocaleDateString("zh-CN")}` : "账号已创建"
+        );
         await afterAuth();
       }
     } catch (e) {
@@ -174,7 +198,7 @@ export function LoginForm({
           </h2>
           <p className="mt-2 text-sm leading-relaxed text-ink-dim">
             {mode === "reset"
-              ? "用内测邀请码重置密码。改完后其他设备都要重新登录。"
+              ? "输入邮箱、管理员发给你的重置码和新密码。改完后其他设备都要重新登录。"
               : "登录后，你的学习计划、笔记和对话跟着你走——换设备也在。"}
           </p>
 
@@ -211,7 +235,7 @@ export function LoginForm({
               <Collapse open={mode !== "login"}>
                 <div className="mt-3">
                   <Input
-                    placeholder="邀请码（必填）"
+                    placeholder={mode === "register" ? "激活码（必填）" : "重置码（必填）"}
                     value={invite}
                     onChange={(e) => setInvite(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -219,8 +243,22 @@ export function LoginForm({
                   />
                   <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim/70">
                     {mode === "register"
-                      ? "内测期凭邀请码开通账号，没有邀请码暂时无法注册。"
-                      : "凭内测邀请码重置密码，邀请码请联系发放人获取。"}
+                      ? "一张激活码开一个账号，兑换后从当天开始计时。没有码可以先在首页申请 7 天体验。"
+                      : "重置码由管理员一次性发放，24 小时内有效。没有的话请联系发码的人。"}
+                  </p>
+                </div>
+              </Collapse>
+              <Collapse open={mode === "register"}>
+                <div className="mt-3">
+                  <Input
+                    placeholder="邀请人码（可选）"
+                    value={refCode}
+                    onChange={(e) => setRefCode(e.target.value.toUpperCase())}
+                    onKeyDown={(e) => e.key === "Enter" && submit()}
+                    disabled={busy}
+                  />
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim/70">
+                    朋友分享给你的码，填上他那边会多一个月；不填也一样能注册。
                   </p>
                 </div>
               </Collapse>

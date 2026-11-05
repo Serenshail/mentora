@@ -3,7 +3,7 @@
  * 所以用同层分段切换，而不是两个 tab —— 手机上一共只有五个格子，不该分掉两个。 */
 
 .goal-on {
-  border-color: rgba(91, 84, 230, 0.22);
+  border-color: var(--accent-line);
 }
 .goal-topic {
   margin-top: 16rpx;

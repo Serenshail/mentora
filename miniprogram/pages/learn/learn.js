@@ -28,6 +28,29 @@ Page({
       wx.reLaunch({ url: "/pages/login/login" });
       return;
     }
+    /* 「有 cookie」不等于「会话有效」：服务端对失效会话回 200 + {user:null} 且不清 cookie，
+     * 30 天过期后 userId 恒 null、hasSession() 恒 true → 守卫永不跳登录、pullIfSafe 恒 skip，
+     * 五个 tab 全部永久空态且不自愈。这里补一次显式探测，明确失效就清会话回登录页。 */
+    if (!store.state.userId) {
+      api
+        .me()
+        .then(function (j) {
+          if (j && j.user) {
+            getApp().globalData.user = j.user;
+            return store.onLogin(j.user.userId).then(function () {
+              that.render();
+            });
+          }
+          api.clearSession();
+          getApp().globalData.user = null;
+          wx.reLaunch({ url: "/pages/login/login" });
+          return null;
+        })
+        .catch(function () {
+          /* 网络失败保留会话（弱网也会 reject），下次 onShow 重试 */
+        });
+      return;
+    }
     that.render();
     store.pullIfSafe(false).then(function () {
       that.render();
@@ -47,7 +70,14 @@ Page({
   },
 
   render: function () {
-    var goals = store.state.goals.map(function (g) {
+    // 进行中的排最前；同级按创建时间倒序（新目标在前）——次级排序此前只在注释里存在
+    var srcGoals = store.state.goals.slice().sort(function (a, b) {
+      if ((a.status === "active") !== (b.status === "active")) {
+        return a.status === "active" ? -1 : 1;
+      }
+      return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+    });
+    var goals = srcGoals.map(function (g) {
       var total = 0;
       var done = 0;
       if (g.plan) {
@@ -75,11 +105,6 @@ Page({
         tone: g.status === "active" ? "accent" : g.status === "done" ? "ok" : "dim",
         active: g.status === "active"
       };
-    });
-    // 进行中的排最前；其余按创建时间倒序（之前次级排序缺失，比较函数恒返回 0）
-    goals.sort(function (a, b) {
-      if (a.active !== b.active) return a.active ? -1 : 1;
-      return 0;
     });
 
     var books = store.state.books.map(function (b) {

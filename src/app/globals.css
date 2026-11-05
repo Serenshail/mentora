@@ -394,7 +394,8 @@ h1, h2, h3 {
   .page-fade,
   .page-fade > *,
   .animate-rise,
-  .stream-cursor {
+  .stream-cursor,
+  .type-cursor {
     animation: none;
   }
   .card-lift,

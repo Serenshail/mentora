@@ -40,14 +40,42 @@ Page({
     this.render();
   },
 
+  onUnload: function () {
+    if (this._cancelStream) this._cancelStream();
+  },
+
+  chapterView: function (b, chapter) {
+    return {
+      id: chapter.id,
+      index: b.chapters.indexOf(chapter) + 1,
+      title: chapter.title,
+      focusQuestion: chapter.focusQuestion || "",
+      coreIdea: chapter.coreIdea || "",
+      knowledgeType: chapter.knowledgeType || "concept",
+      status: chapter.status
+    };
+  },
+
   render: function () {
     var b = store.bookById(this.bookId);
     if (!b) {
       this.setData({ book: null });
       return;
     }
-    var chapter =
-      b.chapters.filter(function (c) { return c.status === "todo"; })[0] || b.chapters[0] || null;
+    /* 已选章节优先：render 在每次 onShow/pickMode 后重跑，旧实现每次重算
+     * 「第一个 todo 章」，用户选的章被静默重置，bookCtx 的 AI 上下文也切错章节。
+     * 选中的章没了（云端替换）才回退默认。 */
+    var self = this;
+    var chapter = null;
+    if (this.currentChapterId) {
+      b.chapters.forEach(function (c) {
+        if (c.id === self.currentChapterId) chapter = c;
+      });
+    }
+    if (!chapter) {
+      chapter =
+        b.chapters.filter(function (c) { return c.status === "todo"; })[0] || b.chapters[0] || null;
+    }
     var modeId = b.chatMode || modes.defaultMode(chapter && chapter.knowledgeType);
     var chatView = toChatView(b.chat || []);
     var doneCount = b.chapters.filter(function (c) { return c.status === "done"; }).length;
@@ -60,17 +88,7 @@ Page({
         planSummary: b.planSummary || "",
         modeJustSwitched: Boolean(b.modeJustSwitched)
       },
-      chapter: chapter
-        ? {
-            id: chapter.id,
-            index: b.chapters.indexOf(chapter) + 1,
-            title: chapter.title,
-            focusQuestion: chapter.focusQuestion || "",
-            coreIdea: chapter.coreIdea || "",
-            knowledgeType: chapter.knowledgeType || "concept",
-            status: chapter.status
-          }
-        : null,
+      chapter: chapter ? this.chapterView(b, chapter) : null,
       mode: modes.byId(modeId),
       chatView: chatView,
       doneCount: doneCount,
@@ -113,11 +131,17 @@ Page({
   pickChapter: function (e) {
     var id = e.currentTarget.dataset.id;
     var b = store.bookById(this.bookId);
+    if (!b) return;
     var c = null;
     b.chapters.forEach(function (x) {
       if (x.id === id) c = x;
     });
-    this.setData({ showChapters: false, chapter: c });
+    if (!c) return;
+    /* 存 id 让 render（onShow/pickMode 后重跑）记住选择；
+     * setData 传 render() 同款映射形状——旧实现塞 store 原始 chapter（无 index），
+     * 页头立刻显示「第 undefined 章」。 */
+    this.currentChapterId = id;
+    this.setData({ showChapters: false, chapter: this.chapterView(b, c) });
   },
 
   onInput: function (e) {
@@ -126,6 +150,9 @@ Page({
 
   bookCtx: function () {
     var b = store.bookById(this.bookId);
+    /* 他端删书后本端 pullIfSafe→adoptCloud 会整体替换 books：这里不加守卫会同步抛
+     * TypeError，而调用方已置 busy=true → composer 永久卡死、输入丢失。 */
+    if (!b) return "{}";
     var chapter = this.data.chapter;
     return JSON.stringify(
       {
@@ -152,7 +179,7 @@ Page({
     var that = this;
     var text = that.data.input.trim();
     if (!text || that.data.busy) return;
-    that.setData({ input: "", busy: true, stream: "" });
+    that.setData({ input: "", busy: true, streamBlocks: [] });
     var modeSwitch = that.data.book.modeJustSwitched === true;
     var sendOpts = {
       args: { bookCtx: that.bookCtx(), ragCtx: "", mode: that.data.mode.id, modeSwitch: modeSwitch },
@@ -169,6 +196,12 @@ Page({
     var chatView = that.data.chatView.concat([{ role: "user", content: text }]);
     that.setData({ chatView: chatView });
     that.scrollBottom();
+    /* 带最近几轮历史：旧实现只发当前一条，多轮追问彻底失忆（day/council/Web 端都带） */
+    var bNow = store.bookById(that.bookId);
+    var history = ((bNow && bNow.chat) || [])
+      .slice(-6)
+      .map(function (m) { return { role: m.role, content: m.content }; });
+    if (!history.length) history = [{ role: "user", content: text }];
     var stream = "";
     var renderer = streamView.createStreamRenderer(function () {
       that.setData({ streamBlocks: md.parse(stream).blocks });
@@ -177,7 +210,10 @@ Page({
       .streamChat({
         task: sendOpts.task,
         args: sendOpts.args,
-        messages: [{ role: "user", content: text }],
+        messages: history,
+        register: function (cancel) {
+          that._cancelStream = cancel;
+        },
         onDelta: function (d) {
           stream += d;
           renderer.push();
@@ -202,8 +238,35 @@ Page({
       })
       .catch(function (e) {
         renderer.cancel();
-        util.toast(e.message || "发送失败");
-        that.setData({ stream: "" });
+        /* 失败也要落持久标记（用户消息已入库）：有半截增量就保留，别整体抹掉 */
+        var partial = (e && e.partial) || stream;
+        if (partial) {
+          store.addBookMsg(that.bookId, {
+            id: util.uid("m"),
+            role: "assistant",
+            content: "（生成中断，以下是已生成的部分）\n\n" + partial,
+            failed: true,
+            at: new Date().toISOString()
+          });
+          that.setData({
+            chatView: that.data.chatView.concat([
+              { role: "assistant", blocks: md.parse(partial).blocks }
+            ])
+          });
+        } else {
+          store.addBookMsg(that.bookId, {
+            id: util.uid("m"),
+            role: "assistant",
+            content: "（本次回答生成失败" + (e && e.message ? "：" + e.message : "") + "。请重新发送。）",
+            failed: true,
+            at: new Date().toISOString()
+          });
+        }
+        util.toast((e && e.message) || "发送失败");
+        /* 旧实现清的是不存在的 data.stream 字段，streamBlocks 残留：
+         * 下次发送 busy=true 期间会闪现上一轮残缺内容。 */
+        that.setData({ streamBlocks: [] });
+        that.scrollBottom();
       })
       .then(function () {
         that.setData({ busy: false });

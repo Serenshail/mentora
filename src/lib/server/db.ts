@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import zlib from "node:zlib";
 import type Redis from "ioredis";
+import { logEvent } from "./config";
 
 /* ============================================================
  * 存储层（已收口：上层只见 dbGet/dbPut/dbList/dbDelete）
@@ -17,17 +18,23 @@ import type Redis from "ioredis";
 
 /* ---------------- 通用：加密（两通道共用，gzip 压缩向后兼容） ---------------- */
 
+/* scryptSync 是 CPU 密集的（每次约几十毫秒）：encrypt/decrypt 是登录、限流、
+ * 同步、后台的热路径，每次调用都重算一遍纯属浪费。密钥在进程内是常量，memo 一次。 */
+let encKeyCache: Buffer | null = null;
 function encKey(): Buffer {
+  if (encKeyCache) return encKeyCache;
   const secret = process.env.AUTH_SECRET || "";
   if (!secret) throw new Error("AUTH_SECRET 未配置");
-  return crypto.scryptSync(secret, "mentora-db-v1", 32);
+  encKeyCache = crypto.scryptSync(secret, "mentora-db-v1", 32);
+  return encKeyCache;
 }
 
 const GZ_PREFIX = "GZ1.";
 
 export function encrypt(obj: unknown): string {
-  // 大库（如几百条笔记的 vault）明文 JSON 可达 9MB+，先 gzip 再加密
-  const gz = zlib.gzipSync(Buffer.from(JSON.stringify(obj), "utf8"), { level: 9 });
+  // 大库（如几百条笔记的 vault）明文 JSON 可达 9MB+，先 gzip 再加密。
+  // level 9 对 9MB 明文同步压缩约秒级、冻结事件循环；level 6 CPU 约降至 1/4，解压端无损兼容
+  const gz = zlib.gzipSync(Buffer.from(JSON.stringify(obj), "utf8"), { level: 6 });
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", encKey(), iv);
   const ct = Buffer.concat([cipher.update(gz), cipher.final()]);
@@ -51,7 +58,8 @@ export function decrypt<T>(payload: string): T {
 
 /* ---------------- 通用：重试（指数退避）+ 网络健康熔断 ---------------- */
 
-const RETRY_STATUS = new Set([403, 429, 500, 502, 503, 504]);
+/* 403 不重试：确定性失败（凭据错/被拒），重试只是烧满退避；交给各通道 !res.ok 分支计入熔断 */
+const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
 const RETRY_DELAYS = [300, 600, 1200]; // ms
 const REMOTE_FETCH_TIMEOUT_MS = 5_000; // 单次 fetch 硬超时：连不上的服务不该拖死请求
 
@@ -87,8 +95,9 @@ export function withBudget<T>(p: Promise<T>, fallback: T, ms = 1200): Promise<T>
   ]);
 }
 
-async function withRetry<T>(fn: () => Promise<Response>): Promise<Response> {
+async function withRetry(fn: () => Promise<Response>): Promise<Response> {
   let lastErr: unknown = null;
+  let statusFail = false; // 重试型状态码（429/5xx）烧满：与断网同等计入熔断
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
       const res = await fn();
@@ -96,6 +105,7 @@ async function withRetry<T>(fn: () => Promise<Response>): Promise<Response> {
         recordNetResult(true);
         return res;
       }
+      statusFail = true;
       lastErr = new Error(`status ${res.status}`);
       /* 消费 body 释放连接 */
       await res.text().catch(() => {});
@@ -107,6 +117,7 @@ async function withRetry<T>(fn: () => Promise<Response>): Promise<Response> {
       await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
     }
   }
+  if (statusFail) recordNetResult(false); // 持续 429/5xx 也要能开熔断，不能每个请求都陪跑满 4 尝试
   throw lastErr instanceof Error ? lastErr : new Error("网络错误");
 }
 
@@ -152,10 +163,27 @@ async function upstashSet(path: string, value: string): Promise<void> {
   await upstash(["SET", path, value]);
 }
 
+/** SET NX：只有 key 不存在才写。返回 true 表示本次写入成功（抢到了）。 */
+async function upstashSetIfAbsent(path: string, value: string): Promise<boolean> {
+  const { result } = await upstash<string | null>(["SET", path, value, "NX"]);
+  return result === "OK";
+}
+
 async function upstashList(dir: string): Promise<string[]> {
-  /* SCAN 匹配前缀；返回去掉前缀的文件名 */
-  const { result } = await upstash<string[]>(["KEYS", `${dir}/*.json`]);
-  return (result || []).map((k) => k.slice(dir.length + 1));
+  /* 用 SCAN 而不是 KEYS：KEYS 会阻塞整个 Redis 实例（注释本来就写着 SCAN，实现却是 KEYS）。
+   * 游标循环按 COUNT 分批，最多 60 轮兜底防异常响应导致死循环。 */
+  const out: string[] = [];
+  let cursor = "0";
+  for (let guard = 0; guard < 60; guard++) {
+    const { result } = await upstash<[string, string[]]>([
+      "SCAN", cursor, "MATCH", `${dir}/*.json`, "COUNT", 200,
+    ]);
+    const next = String(result?.[0] ?? "0");
+    for (const k of result?.[1] ?? []) out.push(k.slice(dir.length + 1));
+    cursor = next;
+    if (cursor === "0") break;
+  }
+  return out;
 }
 
 async function upstashDelete(path: string): Promise<void> {
@@ -285,6 +313,16 @@ async function d1Delete(path: string): Promise<void> {
   await d1Raw(PREFIX_DELETE, [path, len, pre]);
 }
 
+/** 仅当 key 不存在才写。RETURNING 只在新插入时返回行，故能区分"已存在"。 */
+async function d1PutIfAbsent(path: string, content: string): Promise<boolean> {
+  await d1Init();
+  const rows = await d1Raw<{ k?: string }>(
+    "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO NOTHING RETURNING k",
+    [path, content]
+  );
+  return rows.length > 0;
+}
+
 /* ---------------- 通道 3：华为云 RDS PostgreSQL（huawei 主数据真源，HW-T-01/02） ----------------
  * 免分块：PG TEXT 无 1MB 限制，大库单行直存；加密语义与 D1/Upstash 完全一致（密文透传）。
  * 懒加载：未配置 DATABASE_URL 时不加载 pg 驱动，旧通道零感知。 */
@@ -297,7 +335,12 @@ let rdsPoolInst: PgPool | null = null;
 async function rdsPool(): Promise<PgPool> {
   if (!rdsPoolInst) {
     const { Pool } = await import("pg");
-    rdsPoolInst = new Pool({ connectionString: DATABASE_URL, max: 5 }) as unknown as PgPool;
+    const pool = new Pool({ connectionString: DATABASE_URL, max: 5 });
+    /* pg 的空闲连接出错时会在 Pool 上 emit 'error'：不监听就是 uncaughtException
+     * （Next 只打日志不退出，但噪音会污染日志且掩盖真实故障）。ioredis 侧早有对口处理。 */
+    pool.on("error", (err: unknown) => {
+      logEvent({ route: "db", ev: "pg-pool-error", msg: err instanceof Error ? err.message : String(err) });
+    });    rdsPoolInst = pool as unknown as PgPool;
   }
   return rdsPoolInst;
 }
@@ -355,6 +398,16 @@ async function rdsDelete(path: string): Promise<void> {
   await rdsQuery("DELETE FROM kv WHERE k = $1 OR substr(k, 1, $2) = $3", [path, `${path}#p`.length, `${path}#p`]);
 }
 
+/** 仅当 key 不存在才写。RETURNING 只在新插入时返回行。 */
+async function rdsPutIfAbsent(path: string, content: string): Promise<boolean> {
+  await rdsInit();
+  const rows = await rdsQuery<{ k?: string }>(
+    "INSERT INTO kv (k, v) VALUES ($1, $2) ON CONFLICT(k) DO NOTHING RETURNING k",
+    [path, content]
+  );
+  return rows.length > 0;
+}
+
 /* ---------------- 通道 4：华为云 DCS Redis（huawei 跨进程状态，HW-T-05/S-02） ----------------
  * 协议与 Upstash 通道语义一致（GET/SET/SCAN/DEL + AES-256-GCM 加密值）。
  * 键原生 TTL 仅为存储清理（code 11min / quota 36h / rl 1h / loginfail 30min）；
@@ -410,6 +463,16 @@ async function dcsGet(path: string): Promise<string | null> {
 async function dcsPut(path: string, content: string): Promise<void> {
   const ttl = dcsTtl(path);
   await dcsCmd((r) => (ttl ? r.set(path, content, "EX", ttl) : r.set(path, content)), "写入");
+}
+
+/** SET NX：只有 key 不存在才写。ioredis 在 NX 未命中时返回 null。 */
+async function dcsPutIfAbsent(path: string, content: string): Promise<boolean> {
+  const ttl = dcsTtl(path);
+  const out = await dcsCmd<string | null>(
+    (r) => (ttl ? r.set(path, content, "EX", ttl, "NX") : r.set(path, content, "NX")),
+    "写入"
+  );
+  return out === "OK";
 }
 
 async function dcsList(dir: string): Promise<string[]> {
@@ -607,6 +670,32 @@ export async function dbPut<T>(
   return { sha: (res.json as { content?: { sha?: string } })?.content?.sha ?? "" };
 }
 
+/** 仅当 key 不存在才写：用于卡密占用、短锁这类"只能有一个赢家"的场景。
+ *  Upstash/DCS 走 SET NX；RDS/D1 走 INSERT ... ON CONFLICT DO NOTHING RETURNING；
+ *  GitHub 不带 sha 的 PUT 在文件已存在时返回 422——据此判定失败。
+ *  网络/服务故障时抛错，调用方应视为"没抢到"并拒绝写入，绝不降级成覆盖写。 */
+export async function dbPutIfAbsent<T>(
+  path: string,
+  value: T,
+  opts: { encrypted?: boolean } = {}
+): Promise<boolean> {
+  const content = opts.encrypted ? encrypt(value) : JSON.stringify(value, null, 1);
+  const ch = routeOf(path);
+
+  if (ch === "upstash") return upstashSetIfAbsent(path, content);
+  if (ch === "d1") return d1PutIfAbsent(path, content);
+  if (ch === "rds") return rdsPutIfAbsent(path, content);
+  if (ch === "dcs") return dcsPutIfAbsent(path, content);
+
+  const res = await ghApi(path, "PUT", {
+    message: `db: ${path} (create)`,
+    content: Buffer.from(content, "utf8").toString("base64"),
+  });
+  if (res.status === 201) return true;
+  if (res.status === 422) return false;
+  throw new Error(`DB 写入失败（${res.status}）`);
+}
+
 /** 列目录，返回 [{name, sha}]（sha 在 KV 类通道为占位） */
 export async function dbList(dir: string): Promise<{ name: string; sha: string }[]> {
   const ch = routeOf(`${dir}/_`);
@@ -706,6 +795,20 @@ export function hasRemoteDb(): boolean {
   return hasUpstash() || hasD1();
 }
 
+/* events/feedback 惰性建表 memo（kv 表 d1Ready/rdsReady 同款纪律）：每进程只跑一次 DDL。
+ * 埋点/反馈是高频路径，每次 INSERT 前都跑一遍 CREATE TABLE 是双倍往返与目录锁竞争；
+ * 失败不缓存，下次调用重试。 */
+const auxTableReady = new Map<string, Promise<void>>();
+/* DDL 回调返回 rdsQuery 的 rows（无意义），收口为 unknown：调用方不必为了类型再包一层 */
+function ensureAuxTable(key: string, ddl: () => Promise<unknown>): Promise<void> {
+  const cached = auxTableReady.get(key);
+  if (cached) return cached;
+  const p: Promise<void> = ddl().then(() => undefined);
+  p.catch(() => auxTableReady.delete(key));
+  auxTableReady.set(key, p);
+  return p;
+}
+
 /** 反馈双写（GitHub Issues 为主通道，KV 库存一份冗余；任何失败都不抛出）
  *  通道感知：huawei 模式写 RDS，其余模式保持 D1（HW-S-01/V-02） */
 export async function dbFeedbackSave(rec: {
@@ -718,9 +821,11 @@ export async function dbFeedbackSave(rec: {
   try {
     if (dbChannelEnv() === "huawei") {
       if (!hasRds()) return;
-      await rdsQuery(
-        "CREATE TABLE IF NOT EXISTS feedback (number BIGINT PRIMARY KEY, type TEXT, content TEXT, contact TEXT, page TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
-        []
+      await ensureAuxTable("rds:feedback", () =>
+        rdsQuery(
+          "CREATE TABLE IF NOT EXISTS feedback (number BIGINT PRIMARY KEY, type TEXT, content TEXT, contact TEXT, page TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+          []
+        )
       );
       await rdsQuery(
         "INSERT INTO feedback (number, type, content, contact, page) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(number) DO NOTHING",
@@ -729,11 +834,13 @@ export async function dbFeedbackSave(rec: {
       return;
     }
     if (!hasD1()) return;
-    await d1Init();
-    await d1Raw(
-      "CREATE TABLE IF NOT EXISTS feedback (number INTEGER PRIMARY KEY, type TEXT, content TEXT, contact TEXT, page TEXT, created_at TEXT DEFAULT (datetime('now')))",
-      []
-    );
+    await ensureAuxTable("d1:feedback", async () => {
+      await d1Init();
+      await d1Raw(
+        "CREATE TABLE IF NOT EXISTS feedback (number INTEGER PRIMARY KEY, type TEXT, content TEXT, contact TEXT, page TEXT, created_at TEXT DEFAULT (datetime('now')))",
+        []
+      );
+    });
     await d1Raw(
       "INSERT INTO feedback (number, type, content, contact, page) VALUES (?, ?, ?, ?, ?) ON CONFLICT(number) DO NOTHING",
       [rec.number, rec.type, rec.content, rec.contact, rec.page]
@@ -752,9 +859,11 @@ export async function dbEventSave(rec: {
   try {
     if (dbChannelEnv() === "huawei") {
       if (!hasRds()) return;
-      await rdsQuery(
-        "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
-        []
+      await ensureAuxTable("rds:events", () =>
+        rdsQuery(
+          "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+          []
+        )
       );
       await rdsQuery(
         "INSERT INTO events (name, account, path, props) VALUES ($1, $2, $3, $4)",
@@ -763,11 +872,13 @@ export async function dbEventSave(rec: {
       return;
     }
     if (!hasD1()) return;
-    await d1Init();
-    await d1Raw(
-      "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT DEFAULT (datetime('now')))",
-      []
-    );
+    await ensureAuxTable("d1:events", async () => {
+      await d1Init();
+      await d1Raw(
+        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT DEFAULT (datetime('now')))",
+        []
+      );
+    });
     await d1Raw(
       "INSERT INTO events (name, account, path, props) VALUES (?, ?, ?, ?)",
       [rec.name, rec.account, rec.path, rec.props]
@@ -816,9 +927,11 @@ export async function dbEventStats(): Promise<{
     let propsList: string[] = [];
     if (dbChannelEnv() === "huawei") {
       if (!hasRds()) return null;
-      await rdsQuery(
-        "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
-        []
+      await ensureAuxTable("rds:events", () =>
+        rdsQuery(
+          "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+          []
+        )
       );
       funnelRows = await rdsQuery<{ name: string; n: number }>(
         "SELECT name, COUNT(*)::int AS n FROM events WHERE name IN ($1, $2, $3, $4, $5) GROUP BY name",
@@ -832,7 +945,13 @@ export async function dbEventStats(): Promise<{
       ).map((r) => r.props);
     } else {
       if (!hasD1()) return null;
-      await d1Init();
+      await ensureAuxTable("d1:events", async () => {
+        await d1Init();
+        await d1Raw(
+          "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT DEFAULT (datetime('now')))",
+          []
+        );
+      });
       funnelRows = await d1Raw(
         "SELECT name, COUNT(*) AS n FROM events WHERE name IN (?, ?, ?, ?, ?) GROUP BY name",
         FUNNEL

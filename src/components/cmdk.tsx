@@ -57,6 +57,20 @@ function CmdKDialog({ onOpenChange }: { onOpenChange: (v: boolean) => void }) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  /* Esc 挂 document（焦点在面板任意处都能关，与 Modal 同标准），关闭后焦点归还触发元素 */
+  useEffect(() => {
+    const prevFocus = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onOpenChange(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      prevFocus?.focus?.();
+    };
+  }, [onOpenChange]);
+
+
   const items = useMemo<Item[]>(() => {
     const query = q.trim().toLowerCase();
     const match = (s: string) => !query || s.toLowerCase().includes(query);
@@ -105,7 +119,11 @@ function CmdKDialog({ onOpenChange }: { onOpenChange: (v: boolean) => void }) {
       }
     }
     return out.slice(0, 14);
-  }, [q, goals, knowledge, books, router, isAdmin]);
+  }, [q, goals, knowledge, books, router, isAdmin, user]);
+  /* 键盘高亮跟随：选中项滚进可视区（listRef 此前只挂不读） */
+  useEffect(() => {
+    listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [idx, items]);
 
   const pick = (i: number) => {
     const it = items[i];
@@ -137,6 +155,11 @@ function CmdKDialog({ onOpenChange }: { onOpenChange: (v: boolean) => void }) {
           <Search className="size-4.5 shrink-0 text-ink-3" />
           <input
             ref={inputRef}
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="cmdk-result"
+            aria-autocomplete="list"
+            aria-activedescendant={items[idx] ? `cmdk-opt-${idx}` : undefined}
             value={q}
             onChange={(e) => {
               setQ(e.target.value);
@@ -152,8 +175,6 @@ function CmdKDialog({ onOpenChange }: { onOpenChange: (v: boolean) => void }) {
               } else if (e.key === "Enter") {
                 e.preventDefault();
                 pick(idx);
-              } else if (e.key === "Escape") {
-                onOpenChange(false);
               } else if (e.key === "Tab") {
                 e.preventDefault(); // 单输入面板：Tab 留在框内
               }
@@ -166,9 +187,9 @@ function CmdKDialog({ onOpenChange }: { onOpenChange: (v: boolean) => void }) {
           </kbd>
         </div>
 
-        <div ref={listRef} className="max-h-[52vh] overflow-y-auto p-1.5">
+        <div ref={listRef} role="listbox" id="cmdk-result" aria-label="搜索结果" className="max-h-[52vh] overflow-y-auto p-1.5">
           {items.length === 0 && (
-            <p className="px-3 py-8 text-center text-[13px] text-ink-3">没有匹配的结果</p>
+            <p role="presentation" className="px-3 py-8 text-center text-[13px] text-ink-3">没有匹配的结果</p>
           )}
           {items.map((it, i) => {
             const header = it.group !== lastGroup ? it.group : null;
@@ -176,11 +197,15 @@ function CmdKDialog({ onOpenChange }: { onOpenChange: (v: boolean) => void }) {
             return (
               <div key={`${it.group}-${it.label}-${i}`}>
                 {header && (
-                  <p className="px-2.5 pb-1 pt-2.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-3/80">
+                  <p role="presentation" className="px-2.5 pb-1 pt-2.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-3/80">
                     {header}
                   </p>
                 )}
                 <button
+                  role="option"
+                  id={`cmdk-opt-${i}`}
+                  aria-selected={i === idx}
+                  data-active={i === idx || undefined}
                   onClick={() => pick(i)}
                   onMouseEnter={() => setIdx(i)}
                   className={cn(

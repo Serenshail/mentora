@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { dbGet, dbList } from "@/lib/server/db";
+import { dbGet, dbList, dbPut, emailHash } from "@/lib/server/db";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { logEvent } from "@/lib/server/config";
 import type { Goal, KnowledgeItem } from "@/lib/types";
@@ -11,10 +11,9 @@ export const maxDuration = 60;
 /* 首页仪表盘开放接口（Obsidian vault-home 插件的「今日该做什么」数据源）。
  * 鉴权：请求头 x-open-token，sha256 定长后 timing-safe 比对 env MENTORA_OPEN_TOKEN——
  * 与训记 OpenAPI 同一模式：客户端持令牌，服务端按令牌绑定一个用户。
- * 绑定用户：env MENTORA_OPEN_USER_ID 优先；否则按 MENTORA_OPEN_EMAIL（默认本人）扫用户索引。
+ * 绑定用户：env MENTORA_OPEN_USER_ID 优先；否则按 MENTORA_OPEN_EMAIL 反查用户档案。
+ * 二者都缺时显式 503（不能把部署者之外的邮箱当缺省绑定，静默绑错人比报错更糟）。
  * 只读：数据面 = 该用户云端快照的窄投影，绝不接受任何写路径。 */
-
-const DEFAULT_EMAIL = "haow9508@gmail.com";
 
 function tokenOk(req: NextRequest): boolean {
   const expected = process.env.MENTORA_OPEN_TOKEN || "";
@@ -28,6 +27,12 @@ function tokenOk(req: NextRequest): boolean {
 interface DataRecord {
   updatedAt?: string;
   data?: { goals?: Goal[]; knowledge?: KnowledgeItem[] };
+}
+
+interface UserRec {
+  userId: string;
+  email: string;
+  name?: string;
 }
 
 interface OpenTask {
@@ -77,15 +82,42 @@ export async function GET(req: NextRequest) {
    * 也兼容直接填用户 UUID（data/ 键）——先按 users/<id>.json 找档案，找不到再按邮箱扫索引。
    * 此前键空间错位（users/<uuid> 无 .json）导致绑定档案永远查不到（2026-10-24 修复） */
   let userId = process.env.MENTORA_OPEN_USER_ID || "";
-  let email = process.env.MENTORA_OPEN_EMAIL || DEFAULT_EMAIL;
+  /* EMAIL 不再默认绑作者个人邮箱：其他部署者没配 EMAIL 时会静默绑到第三方邮箱（查不到 404），
+   * 与「TOKEN 缺失显式 503」的语义对齐——下面缺配置直接 503。 */
+  let email = process.env.MENTORA_OPEN_EMAIL || "";
   let name = "";
+  /* EMAIL 反查索引：此前每次请求都全量扫描+解密所有用户档案（插件 30/min 轮询 × N 个加密读烧 KV 配额）。
+   * 扫描结果缓存到 open-bind/<sha256(email)> 键（24h），命中后只做 1 次档案校验读；
+   * 档案消失/缓存失效自动回落全量重扫并重写缓存。 */
+  const CACHE_TTL_MS = 24 * 3600_000;
+  const bindCachePath = (mail: string) =>
+    `open-bind/${createHash("sha256").update(mail.toLowerCase()).digest("hex")}.json`;
   const scanByEmail = async (): Promise<boolean> => {
+    if (!email) return false; // 没配邮箱就没有可扫的键
+    try {
+      const cached = await dbGet<{ file: string; at: number }>(bindCachePath(email), { encrypted: true });
+      if (cached?.file && Date.now() - (cached.at || 0) < CACHE_TTL_MS) {
+        const hit = await dbGet<UserRec>(`users/${cached.file}`, { encrypted: true });
+        if (hit) {
+          userId = hit.userId;
+          name = hit.name || "";
+          return true;
+        }
+      }
+    } catch { /* 缓存读失败 → 走全量扫描 */ }
     const files = await dbList("users");
     for (const f of files) {
-      const rec = await dbGet<{ userId: string; email: string; name?: string }>(`users/${f.name}`, { encrypted: true });
+      let rec: UserRec | null;
+      try {
+        rec = await dbGet<UserRec>(`users/${f.name}`, { encrypted: true });
+      } catch {
+        continue; // 单个档案读失败不拖垮整体扫描
+      }
       if (rec && String(rec.email || "").toLowerCase() === email.toLowerCase()) {
         userId = rec.userId;
         name = rec.name || "";
+        // 缓存的是 users/ 目录文件名（f.name 含 .json），不是 UUID——users/ 键空间是邮箱哈希
+        await dbPut(bindCachePath(email), { file: f.name, at: Date.now() }, { encrypted: true }).catch(() => {});
         return true;
       }
     }
@@ -103,7 +135,18 @@ export async function GET(req: NextRequest) {
     } else {
       await scanByEmail();
     }
-  } catch { /* 用户索引读失败 → 下方 404 兜底 */ }
+  } catch (e) {
+    /* 绑定阶段读失败是基础设施故障，不能折叠成 404 误诊为「配置错误」（对齐快照读失败的 503 口径） */
+    logEvent({ ev: "open", msg: "bind-failed", err: e instanceof Error ? e.message : String(e) });
+    return Response.json({ error: "绑定用户读取失败，请稍后再试" }, { status: 503 });
+  }
+  if (!userId && !email) {
+    /* 配置缺失要显式失败（与 TOKEN 缺失 503 同语义），不能静默落到 404 让部署者以为是代码坏了 */
+    return Response.json(
+      { error: "未配置 MENTORA_OPEN_USER_ID / MENTORA_OPEN_EMAIL（二者至少配一个）" },
+      { status: 503 }
+    );
+  }
   if (!userId) return Response.json({ error: "找不到绑定的用户（检查 MENTORA_OPEN_USER_ID / EMAIL）" }, { status: 404 });
 
   /* ---- 云端快照（密文统一走 dbGet 解密） ---- */
@@ -131,7 +174,8 @@ export async function GET(req: NextRequest) {
       days.find((d) => d.status === "active") ??
       days.find((d) => d.status === "passed" && d.pendingUnlock);
     if (!day) continue;
-    const phase = g.plan.phases.find((p) => p.id === day.phaseId);
+    /* phases 缺失的旧快照此前会让整个 GET 500（days 有 ?.,phases 没有防护，口径不一） */
+    const phase = g.plan.phases?.find((p) => p.id === day.phaseId);
     const remainingDays = days.filter((d) => d.status === "active" || d.status === "locked").length;
     const deadlineLeft = g.deadline
       ? Math.round((new Date(g.deadline + "T00:00:00").getTime() - new Date(today + "T00:00:00").getTime()) / 86400000)

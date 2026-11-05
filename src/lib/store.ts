@@ -9,6 +9,11 @@ import type {
   AgentSession,
   Book,
   BookChapter,
+  BookDeposit,
+  BookLearning,
+  BookMap,
+  BookReadStatus,
+  ChapterAssessment,
   ChatMsg,
   CouncilSession,
   CustomPersona,
@@ -21,12 +26,31 @@ import type {
   NodeStatus,
   Plan,
   QuizResult,
+  ReadingGoal,
   Settings,
 } from "./types";
 import { PROVIDERS } from "./ai/providers";
 import { todayISO, uid } from "./utils";
 import { backfillReviewDates, reviewPatch } from "./review";
 import { track } from "./track";
+
+/* 验收记录只保留最近 200 次，长文本按字段截断。
+ * 云端同步是全量快照 + 服务端 4.5MB 硬上限：quizLog 无界增长会让「推不上」
+ * 悄悄变成「本机写盘也失败」，最终丢的是自上次成功落盘以来的全部编辑。 */
+const QUIZ_LOG_MAX = 200;
+const QUIZ_TEXT_MAX = 600;
+
+function trimQuizResult(r: QuizResult): QuizResult {
+  return {
+    ...r,
+    items: r.items.slice(0, 12).map((it) => ({
+      ...it,
+      question: it.question.slice(0, QUIZ_TEXT_MAX),
+      userAnswer: it.userAnswer.slice(0, QUIZ_TEXT_MAX),
+      feedback: it.feedback.slice(0, QUIZ_TEXT_MAX),
+    })),
+  };
+}
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: "demo", // "自动"：跟随服务端配置，无配置时回退演示模式
@@ -141,7 +165,6 @@ interface AppState {
   removeKnowledge: (id: string) => void;
   recordReview: (id: string, ok: boolean) => void;
   linkNotes: (fromId: string, toId: string) => void;
-  unlinkNotes: (fromId: string, toId: string) => void;
 
   addBook: (b: Book) => void;
   updateBook: (id: string, patch: Partial<Book>) => void;
@@ -151,6 +174,30 @@ interface AppState {
   addBookMsg: (id: string, msg: ChatMsg) => void;
   addInsight: (bookId: string, text: string) => void;
   toggleChapter: (bookId: string, chapterId: string) => void;
+  /* ---- 阅读系统 V1.0（PRD 2026-11-05）---- */
+  /** 设定阅读目标：修改目标不清洗任何已有记录（PRD 4.1 验收 4） */
+  setBookGoal: (bookId: string, goal: ReadingGoal) => void;
+  /** 重生成路线：替换 chapters，但把旧章节的验收结果归档进 book.assessments，
+   *  chat/insights/deposits/learning 原样保留（PRD 4.1 验收 4 / 4.3 验收 6） */
+  regenerateBookRoute: (bookId: string, plan: { map?: BookMap; planSummary?: string; chapters: BookChapter[]; routeType?: Book["routeType"] }) => void;
+  /** 节点状态机：todo/reading/done/skipped（PRD 4.3 验收 4/5）。done 时若来自手动标记则不写 masteredAt */
+  setChapterStatus: (bookId: string, chapterId: string, status: BookChapter["status"]) => void;
+  /** 节点顺序调整（上移/下移） */
+  moveChapter: (bookId: string, chapterId: string, dir: -1 | 1) => void;
+  /** 追加单题验收记录（book 级档案，换路线不丢） */
+  addChapterAssessment: (bookId: string, a: ChapterAssessment) => void;
+  /** 节点验收通过：写 masteredAt + 学习证据 */
+  markChapterMastered: (bookId: string, chapterId: string, evidence?: string) => void;
+  /** 沉淀：新增 / 删除（PRD 4.6） */
+  addBookDeposit: (bookId: string, d: Omit<BookDeposit, "id" | "at">) => void;
+  removeBookDeposit: (bookId: string, depositId: string) => void;
+  /** 学习状态增量更新（knownConcepts 去重合并 / misconceptions 追加等，PRD 5.3） */
+  updateBookLearning: (bookId: string, patch: Partial<Omit<BookLearning, "misconceptions" | "evidence">> & {
+    addMisconception?: { concept: string; note: string };
+    addEvidence?: { chapterId?: string; text: string };
+  }) => void;
+  /** 整本书阅读状态机：unread→reading→finished→assessing→mastered（PRD 4.5） */
+  setBookReadStatus: (bookId: string, status: BookReadStatus) => void;
 
   addSession: (s: CouncilSession) => void;
   updateSession: (id: string, patch: Partial<CouncilSession>) => void;
@@ -173,30 +220,35 @@ interface AppState {
   seedSampleGoal: () => string;
 }
 
-/** 通过某天后解锁同阶段下一天 / 下一阶段首天 */
-function unlockNext(goal: Goal, dayId: string) {
-  if (!goal.plan) return;
+/** 通过某天后解锁同阶段下一天 / 下一阶段首天。
+ *  返回值：本次推进是否把整个目标走完了（true = 最后一个阶段最后一天）。
+ *  **不要**在这里直接写 goal.status：调用方传进来的是 `{ ...g, plan }` 临时包装对象，
+ *  赋值落在拷贝上、真实 goal 永远停在 active —— 旧的 web 实现踩过这个坑
+ *  （同 miniprogram/utils/store.js 里那条注释记载的是同一个 bug）。 */
+function unlockNext(goal: Goal, dayId: string): boolean {
+  if (!goal.plan) return false;
   const day = goal.plan.days[dayId];
-  if (!day) return;
+  if (!day) return false;
   const phase = goal.plan.phases.find((p) => p.id === day.phaseId);
-  if (!phase) return;
+  if (!phase) return false;
 
   const idx = phase.dayIds.indexOf(dayId);
   if (idx >= 0 && idx < phase.dayIds.length - 1) {
     const next = goal.plan.days[phase.dayIds[idx + 1]];
     if (next && next.status === "locked") next.status = "active";
-  } else {
-    phase.status = "passed";
-    const pIdx = goal.plan.phases.findIndex((p) => p.id === phase.id);
-    const nextPhase = goal.plan.phases[pIdx + 1];
-    if (nextPhase && nextPhase.status === "locked") {
-      nextPhase.status = "active";
-      const first = goal.plan.days[nextPhase.dayIds[0]];
-      if (first && first.status === "locked") first.status = "active";
-    } else if (!nextPhase) {
-      goal.status = "done";
-    }
+    return false;
   }
+  phase.status = "passed";
+  const pIdx = goal.plan.phases.findIndex((p) => p.id === phase.id);
+  const nextPhase = goal.plan.phases[pIdx + 1];
+  if (nextPhase && nextPhase.status === "locked") {
+    nextPhase.status = "active";
+    const first = goal.plan.days[nextPhase.dayIds[0]];
+    if (first && first.status === "locked") first.status = "active";
+    return false;
+  }
+  // 没有下一阶段了 → 整个目标走完（由调用点落 status）
+  return !nextPhase;
 }
 
 /** 旧版知识条目（v1：{text}）→ v2 双链笔记 */
@@ -221,6 +273,11 @@ export function isStoreDiskStale() {
   return diskStale;
 }
 
+/* 最近一次成功写盘（或回采）的快照原文。本地每次 set 都会同步触发 persist 写盘，
+ * 所以「磁盘原文 === 我们最后写的内容」即内存与磁盘一致——bindStoreSync 据此
+ * 跳过整仓 JSON.stringify 全等比较，只有别的标签页真正写过盘才值得比对。 */
+let lastDiskRaw: string | null = null;
+
 const safeStorage: StateStorage = {
   getItem: (name) => {
     try {
@@ -233,15 +290,24 @@ const safeStorage: StateStorage = {
     try {
       localStorage.setItem(name, value);
       diskStale = false;
+      lastDiskRaw = value;
     } catch (e) {
       const quota =
         e instanceof DOMException &&
         (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED");
-      if (!quota) throw e;
-      // 这次快照没写进磁盘：磁盘从此落后于内存，焦点回采不能再拿它覆盖内存
+      // 非配额失败（私密模式禁写等）同样只放弃本次快照：内存已应用，重抛会以未捕获
+      // 异常穿透 UI 动作链（persist 写路径无兜底）。磁盘落后于内存，统一走告警通道。
       diskStale = true;
       if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("mentora:quota"));
+        if (quota) {
+          window.dispatchEvent(new CustomEvent("mentora:quota"));
+        } else {
+          window.dispatchEvent(
+            new CustomEvent("mentora:store-warning", {
+              detail: "本地存储写入失败，本次改动只保存在内存里，请尽快到设置页导出备份。",
+            })
+          );
+        }
       }
     }
   },
@@ -293,24 +359,119 @@ function withMoc(knowledge: KnowledgeItem[], subject: string): KnowledgeItem[] {
 
 /* 从正文里的 [[双链]] 反解析出 links(仅匹配已存在标题,不建占位)。
  * 让图谱/反链立即反映双链结构——否则正文写了 [[..]] 但 links 字段为空,图谱显示"连接 0"。 */
-function linkifyBodies(knowledge: KnowledgeItem[]): KnowledgeItem[] {
+function linkifyNote(
+  k: KnowledgeItem,
+  byTitle: Map<string, string>,
+  norm: (t: string) => string
+): KnowledgeItem {
+  const found: string[] = [];
+  const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(k.body || ""))) {
+    const id = byTitle.get(norm(m[1]));
+    if (id && id !== k.id) found.push(id);
+  }
+  if (!found.length) return k;
+  const merged = [...new Set([...(k.links ?? []), ...found])];
+  if (merged.length === (k.links?.length ?? 0)) return k;
+  return { ...k, links: merged };
+}
+
+function buildTitleIndex(knowledge: KnowledgeItem[]) {
   const norm = (t: string) => t.trim().toLowerCase();
   const byTitle = new Map<string, string>();
   for (const k of knowledge) if (!k.unresolved) byTitle.set(norm(k.title), k.id);
-  const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
-  return knowledge.map((k) => {
-    const found: string[] = [];
-    let m: RegExpExecArray | null;
-    re.lastIndex = 0;
-    while ((m = re.exec(k.body || ""))) {
-      const id = byTitle.get(norm(m[1]));
-      if (id && id !== k.id) found.push(id);
-    }
-    if (!found.length) return k;
-    const merged = [...new Set([...(k.links ?? []), ...found])];
-    if (merged.length === (k.links?.length ?? 0)) return k;
-    return { ...k, links: merged };
-  });
+  return { norm, byTitle };
+}
+
+function linkifyBodies(knowledge: KnowledgeItem[]): KnowledgeItem[] {
+  const { norm, byTitle } = buildTitleIndex(knowledge);
+  return knowledge.map((k) => linkifyNote(k, byTitle, norm));
+}
+
+/* 单篇版：正文逐键编辑时只重解析当前笔记，避免全库正则扫描造成打字卡顿 */
+function linkifyOne(knowledge: KnowledgeItem[], id: string): KnowledgeItem[] {
+  const target = knowledge.find((k) => k.id === id);
+  if (!target) return knowledge;
+  const { norm, byTitle } = buildTitleIndex(knowledge);
+  const patched = linkifyNote(target, byTitle, norm);
+  if (patched === target) return knowledge;
+  return knowledge.map((k) => (k.id === id ? patched : k));
+}
+
+/* ========= 单一累积式迁移（persist.migrate 与 setStoreUser 手动装载共用） =========
+ * 旧实现两处手工复制且各自漂移：persist.migrate 因 skipHydration 且无 rehydrate 实际不可达，
+ * 手动链是 else-if 逐版判断——v1/v2 仓跳过 v4「Day N：」前缀清洗、漏 v8 书籍迁移。
+ * 收敛成一个函数后按版本号顺序逐级执行，两条加载路径永远一致。 */
+function migrateState(
+  state: Partial<AppState> & { knowledge?: unknown[] },
+  version: number
+): Partial<AppState> {
+  let s = state;
+  // v2:旧版 {text} 知识条目 → 双链笔记结构
+  if (version < 2) s = { ...s, knowledge: migrateKnowledge(s.knowledge ?? []) };
+  // v3:把已有笔记正文里的 [[双链]] 一次性解析进 links,旧图谱立即有连线
+  if (version < 3) s = { ...s, knowledge: linkifyBodies((s.knowledge ?? []) as KnowledgeItem[]) };
+  // v4:清洗历史脏正文——"Day N：Day N：" 重复前缀(早期生成 bug 的残留),一次性自愈
+  if (version < 4) {
+    const fixed = ((s.knowledge ?? []) as KnowledgeItem[]).map((k) =>
+      k.body && /Day\s*\d+[：:]\s*Day\s*\d+[：:]/.test(k.body)
+        ? { ...k, body: k.body.replace(/(Day\s*\d+[：:])\s*Day\s*\d+[：:]\s*/g, "$1 ") }
+        : k
+    );
+    s = { ...s, knowledge: linkifyBodies(fixed) };
+  }
+  // v5:修复分批生成时代产生的重复/乱序天标题——每个阶段按 dayIds 顺序重编 "Day N：",
+  // 重复的天（旧 bug 生成的 Day1,Day2,Day1,Day2…）保留内容、顺序归位。
+  if (version < 5) {
+    const goals = ((s.goals ?? []) as Goal[]).map((g) => {
+      if (!g?.plan) return g;
+      const plan = structuredClone(g.plan);
+      for (const ph of plan.phases) {
+        ph.dayIds.forEach((id, i) => {
+          const d = plan.days[id];
+          if (!d) return;
+          const rest = d.title.replace(/^Day\s*\d+[：:]\s*/, "");
+          d.title = `Day ${i + 1}：${rest}`;
+        });
+      }
+      return { ...g, plan };
+    });
+    s = { ...s, goals };
+  }
+  // v6:首页智能体对话（新增字段，旧仓补空数组）
+  if (version < 6) s = { ...s, agentChat: s.agentChat ?? [] };
+  // v7:主对话框多会话——把旧的单数组 agentChat 包装成一个历史会话，保留全部内容
+  if (version < 7 && !s.agentSessions?.length) {
+    const legacy = (s.agentChat ?? []) as ChatMsg[];
+    const firstUser = legacy.find((m) => m.role === "user")?.content ?? "";
+    const wrapped: AgentSession[] =
+      legacy.length > 0
+        ? [
+            {
+              id: uid("as"),
+              title: firstUser.slice(0, 24) || "历史对话",
+              messages: legacy,
+              createdAt: legacy[0]?.at ?? new Date().toISOString(),
+              updatedAt: legacy[legacy.length - 1]?.at ?? new Date().toISOString(),
+            },
+          ]
+        : [];
+    s = { ...s, agentSessions: wrapped, agentActiveId: wrapped[0]?.id ?? null, agentChat: [] };
+  }
+  // v8:阅读系统 V1.0——旧书补阅读系统字段（status→readStatus 推导；旧章节 status 只有 todo/done 保持原值）
+  if (version < 8) {
+    const books = ((s.books ?? []) as Book[]).map((b) => ({
+      ...b,
+      readStatus:
+        b.readStatus ??
+        (b.status === "done" ? "finished" : b.status === "reading" ? "reading" : "unread"),
+      assessments: b.assessments ?? [],
+      deposits: b.deposits ?? [],
+    }));
+    s = { ...s, books };
+  }
+  return s;
 }
 
 /* ========= 导入校验（备份文件 / 云端快照共用） =========
@@ -408,8 +569,9 @@ function sanitizeBackup(raw: unknown): SanitizedBackup | null {
 }
 
 /* ========= 掌握状态推进（v17 拆至纯模块 mastery.ts，可单测） =========
- * store 内部与外部调用点都从这里拿：行为与原 store 内联版一致，新增复习接线与 apply 迁移证据。 */
-export { advanceMastery, masteryFromQuiz, masteryFromReview, maxStatus } from "./mastery";
+ * store 内部与外部调用点都从这里拿：行为与原 store 内联版一致，新增复习接线与 apply 迁移证据。
+ * masteryFromQuiz 仍被 learn 页经 store 引入；advanceMastery/maxStatus 无消费者，已撤重导出。 */
+export { masteryFromQuiz, masteryFromReview } from "./mastery";
 import { masteryFromReview } from "./mastery";
 
 export const useAppStore = create<AppState>()(
@@ -563,12 +725,18 @@ export const useAppStore = create<AppState>()(
             } else if (status === "passed") {
               delete day.pendingUnlock;
             }
+            let finished = false;
             if ((status === "passed" && !gate) || status === "skipped")
-              unlockNext({ ...g, plan }, dayId);
+              finished = unlockNext({ ...g, plan }, dayId);
             /* 结业标记两条路径都要覆盖：正常过门（completeTransfer）与强制跳过（这里）。
-             * 判定依据是 unlockNext 之后 goal.status 是否变成 done。 */
-            if (g.status === "done" && !g.graduatedAt && !g.needsGraduation) {
-              return { ...g, plan, needsGraduation: true };
+             * status 必须由这里落库——unlockNext 拿的是临时包装对象，写不回来。 */
+            if (finished) {
+              return {
+                ...g,
+                plan,
+                status: "done" as const,
+                ...(g.graduatedAt || g.needsGraduation ? {} : { needsGraduation: true }),
+              };
             }
             return { ...g, plan };
           }),
@@ -583,12 +751,17 @@ export const useAppStore = create<AppState>()(
             if (!day || day.status !== "passed") return g;
             day.pendingUnlock = false;
             day.transferAnswer = answer;
-            unlockNext({ ...g, plan }, dayId);
+            const finished = unlockNext({ ...g, plan }, dayId);
             /* 结业回路（v21）：最后一个阶段过门后 goal.status 变 done。
              * 在这里标记 needsGraduation，由 UI 一次性生成结业笔记+下一步建议——
              * 不在 store 里同步调模型（store 必须保持纯状态）。 */
-            if (g.status === "done" && !g.graduatedAt) {
-              return { ...g, plan, needsGraduation: true };
+            if (finished) {
+              return {
+                ...g,
+                plan,
+                status: "done" as const,
+                ...(g.graduatedAt ? {} : { needsGraduation: true }),
+              };
             }
             return { ...g, plan };
           }),
@@ -644,7 +817,9 @@ export const useAppStore = create<AppState>()(
       logQuiz: (goalId, result) =>
         set((s) => ({
           goals: s.goals.map((g) =>
-            g.id === goalId ? { ...g, quizLog: [result, ...g.quizLog] } : g
+            g.id === goalId
+              ? { ...g, quizLog: [trimQuizResult(result), ...g.quizLog].slice(0, QUIZ_LOG_MAX) }
+              : g
           ),
         })),
 
@@ -671,7 +846,10 @@ export const useAppStore = create<AppState>()(
             masteryStatus: i.masteryStatus,
             masteredAt: todayISO(),
             reviewStage: 0,
-            nextReviewAt: todayISO(),
+            /* 只有学习/读书产出的知识点自动进复习队列：manual（助手收藏、上传文档、
+             * 智能体存笔记）与结业笔记不进——与 review.ts 的 backfillReviewDates 同一口径
+             * （那边也只认 learn/read）。旧实现一律写 nextReviewAt，把这些笔记塞进了队列。 */
+            ...(source === "learn" || source === "read" ? { nextReviewAt: todayISO() } : {}),
             links: [],
             version: 1,
             updatedAt: new Date().toISOString(),
@@ -815,7 +993,7 @@ export const useAppStore = create<AppState>()(
              * 以升级后的整库数组为基底（占位已被原位替换），再接上剩余新占位/新笔记 */
             const keptFresh = fresh.filter((f) => !upgradedFresh.has(f.id));
             const newPlaceholders = placeholders.filter((p) => !upgradedPh.has(p.id));
-            set((s) => ({ knowledge: [...newPlaceholders, ...keptFresh, ...knowledge] }));
+            set(() => ({ knowledge: [...newPlaceholders, ...keptFresh, ...knowledge] }));
             const added = keptFresh.length + upgradedPh.size;
             return { added, skipped: items.length - added };
           }
@@ -867,10 +1045,10 @@ export const useAppStore = create<AppState>()(
           return pid !== selfId ? pid : null;
         };
         let rebuilt = 0;
+        // id→有效性集合：旧版对每条 link 都全库线性扫描（O(N²·L)），降为 O(1) 查表
+        const validIds = new Set(knowledge.filter((k) => !k.unresolved).map((k) => k.id));
         const next = knowledge.map((k) => {
-          const oldValid = new Set(
-            k.links.filter((l) => knowledge.some((t) => t.id === l && !t.unresolved))
-          );
+          const oldValid = new Set(k.links.filter((l) => validIds.has(l)));
           const ids = new Set<string>(oldValid);
           if (!k.unresolved) {
             let m: RegExpExecArray | null;
@@ -886,7 +1064,7 @@ export const useAppStore = create<AppState>()(
           }
           return k;
         });
-        set((s) => ({ knowledge: [...placeholders, ...next] }));
+        set(() => ({ knowledge: [...placeholders, ...next] }));
         return { touched: rebuilt, placeholders: placeholders.length };
       },
       updateKnowledge: (id, patch) =>
@@ -909,8 +1087,8 @@ export const useAppStore = create<AppState>()(
             knowledge = withMoc(knowledge, (old.domain || "").split("/")[0]);
             knowledge = withMoc(knowledge, (patch.domain || "").split("/")[0]);
           }
-          // 正文改了→重新解析 [[双链]] 进 links,图谱/反链实时同步
-          if (patch.body !== undefined) knowledge = linkifyBodies(knowledge);
+          // 正文改了→重解析该篇 [[双链]] 进 links（只扫当前笔记：逐键编辑全库扫描是打字卡顿大头）
+          if (patch.body !== undefined) knowledge = linkifyOne(knowledge, id);
           return { knowledge };
         }),
       enableReview: (id, enabled) =>
@@ -937,7 +1115,7 @@ export const useAppStore = create<AppState>()(
                 ? {
                     ...k,
                     ...info,
-                    lastReviewOk: ok,
+                    // lastReviewOk 只写不读，已删（types 里的可选字段留待小程序侧对齐）
                     nextReviewAt: next,
                   }
                 : k
@@ -984,14 +1162,6 @@ export const useAppStore = create<AppState>()(
               return { ...k, links: [...k.links, toId] };
             return k;
           }),
-        })),
-      unlinkNotes: (fromId, toId) =>
-        set((s) => ({
-          knowledge: s.knowledge.map((k) =>
-            k.id === fromId
-              ? { ...k, links: k.links.filter((l) => l !== toId) }
-              : k
-          ),
         })),
 
       addBook: (b) => set((s) => ({ books: [b, ...s.books] })),
@@ -1043,6 +1213,190 @@ export const useAppStore = create<AppState>()(
                   ? { ...c, status: c.status === "done" ? "todo" : "done" }
                   : c
               ),
+            };
+          }),
+        })),
+
+      /* ---- 阅读系统 V1.0（PRD 2026-11-05）---- */
+      setBookGoal: (bookId, goal) =>
+        set((s) => ({
+          books: s.books.map((b) => (b.id === bookId ? { ...b, goal } : b)),
+        })),
+      regenerateBookRoute: (bookId, plan) =>
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            /* 旧章节的验收结果归档进 book.assessments（带章节标题冗余，换路线后仍可回看）；
+             * 两代记录都要收：旧 verification（分数制）与新版 masteredAt（证据制）。
+             * 对话/洞见/沉淀/学习状态一律不动——目标变化不丢记录（PRD 硬要求）。 */
+            const archived = b.chapters.flatMap((c) => {
+              const items: ChapterAssessment[] = [];
+              if (c.verification) {
+                items.push({
+                  id: uid("as"),
+                  chapterId: c.id,
+                  kind: "explain",
+                  question: `（旧路线归档）${c.focusQuestion}`,
+                  answer: "",
+                  level:
+                    c.verification.level === "understood"
+                      ? "mastered"
+                      : c.verification.level === "partial"
+                        ? "partial"
+                        : "not",
+                  evidence: `举例 ${c.verification.scores.example} / 迁移 ${c.verification.scores.transfer} / 贴合 ${c.verification.scores.similarity}`,
+                  feedback: c.verification.suggestion,
+                  at: c.verification.at,
+                });
+              } else if (c.masteredAt) {
+                items.push({
+                  id: uid("as"),
+                  chapterId: c.id,
+                  kind: "explain",
+                  question: `（旧路线归档）${c.focusQuestion}`,
+                  answer: "",
+                  level: "mastered",
+                  evidence: "该节点在新版验收流程下通过（证据见学习档案）",
+                  feedback: "换路线前已验收掌握。",
+                  at: c.masteredAt,
+                });
+              }
+              return items;
+            });
+            return {
+              ...b,
+              map: plan.map ?? b.map,
+              planSummary: plan.planSummary ?? b.planSummary,
+              routeType: plan.routeType ?? b.routeType,
+              chapters: plan.chapters,
+              assessments: [...(b.assessments ?? []), ...archived],
+            };
+          }),
+        })),
+      setChapterStatus: (bookId, chapterId, status) =>
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            return {
+              ...b,
+              chapters: b.chapters.map((c) =>
+                c.id === chapterId
+                  ? {
+                      ...c,
+                      status,
+                      /* 手动标记完成不算掌握：masteredAt 只能来自验收通过（PRD：已读完≠已掌握）。
+                       * 回退到 todo/reading/skipped 时清掉 masteredAt，保持两态独立。 */
+                      ...(status === "done" ? {} : { masteredAt: undefined }),
+                    }
+                  : c
+              ),
+            };
+          }),
+        })),
+      moveChapter: (bookId, chapterId, dir) =>
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            const idx = b.chapters.findIndex((c) => c.id === chapterId);
+            const to = idx + dir;
+            if (idx < 0 || to < 0 || to >= b.chapters.length) return b;
+            const chapters = [...b.chapters];
+            [chapters[idx], chapters[to]] = [chapters[to], chapters[idx]];
+            return { ...b, chapters };
+          }),
+        })),
+      addChapterAssessment: (bookId, a) =>
+        set((s) => ({
+          books: s.books.map((b) =>
+            b.id === bookId ? { ...b, assessments: [...(b.assessments ?? []), a] } : b
+          ),
+        })),
+      markChapterMastered: (bookId, chapterId, evidence) =>
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            return {
+              ...b,
+              chapters: b.chapters.map((c) =>
+                c.id === chapterId ? { ...c, status: "done" as const, masteredAt: new Date().toISOString() } : c
+              ),
+              learning: {
+                knownConcepts: b.learning?.knownConcepts ?? [],
+                misconceptions: b.learning?.misconceptions ?? [],
+                unresolvedQuestions: b.learning?.unresolvedQuestions ?? [],
+                evidence: [
+                  ...(b.learning?.evidence ?? []),
+                  ...(evidence
+                    ? [{ chapterId, text: evidence, at: new Date().toISOString() }]
+                    : []),
+                ],
+              },
+            };
+          }),
+        })),
+      addBookDeposit: (bookId, d) =>
+        set((s) => ({
+          books: s.books.map((b) =>
+            b.id === bookId
+              ? {
+                  ...b,
+                  deposits: [
+                    { ...d, id: uid("dp"), at: new Date().toISOString() },
+                    ...(b.deposits ?? []),
+                  ],
+                }
+              : b
+          ),
+        })),
+      removeBookDeposit: (bookId, depositId) =>
+        set((s) => ({
+          books: s.books.map((b) =>
+            b.id === bookId
+              ? { ...b, deposits: (b.deposits ?? []).filter((d) => d.id !== depositId) }
+              : b
+          ),
+        })),
+      updateBookLearning: (bookId, patch) =>
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            const cur: BookLearning = {
+              knownConcepts: b.learning?.knownConcepts ?? [],
+              misconceptions: b.learning?.misconceptions ?? [],
+              unresolvedQuestions: b.learning?.unresolvedQuestions ?? [],
+              evidence: b.learning?.evidence ?? [],
+            };
+            const next: BookLearning = {
+              knownConcepts: patch.knownConcepts
+                ? [...new Set([...cur.knownConcepts, ...patch.knownConcepts])]
+                : cur.knownConcepts,
+              misconceptions: patch.addMisconception
+                ? [
+                    { ...patch.addMisconception, at: new Date().toISOString() },
+                    ...cur.misconceptions.filter((m) => m.concept !== patch.addMisconception!.concept),
+                  ].slice(0, 50)
+                : cur.misconceptions,
+              unresolvedQuestions: patch.unresolvedQuestions
+                ? [...new Set([...cur.unresolvedQuestions, ...patch.unresolvedQuestions])]
+                : cur.unresolvedQuestions,
+              evidence: patch.addEvidence
+                ? [{ ...patch.addEvidence, at: new Date().toISOString() }, ...cur.evidence].slice(0, 200)
+                : cur.evidence,
+            };
+            return { ...b, learning: next };
+          }),
+        })),
+      setBookReadStatus: (bookId, status) =>
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            return {
+              ...b,
+              readStatus: status,
+              ...(status === "finished" ? { finishedAt: b.finishedAt ?? new Date().toISOString() } : {}),
+              ...(status === "mastered" ? { masteredAt: new Date().toISOString() } : {}),
+              ...(status === "reading" ? { status: "reading" as const } : {}),
+              ...(status === "mastered" || status === "finished" ? { status: "done" as const } : {}),
             };
           }),
         })),
@@ -1247,7 +1601,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "mentora-store-anon",
-      version: 7,
+      version: 8,
       // 跳过 persist 的自动 rehydrate：水合完全由 setStoreUser() 同步掌控。
       // 否则刷新页面时 persist 会用 anon 仓异步覆盖内存,而此刻 setOptions 已换到用户仓——
       // 空状态随后被写进用户仓,goal 凭空消失(实测:导航后 3s goals 1→0,堆栈指向 persist setState)。
@@ -1266,75 +1620,10 @@ export const useAppStore = create<AppState>()(
         settings: state.settings,
         _storeUserId: state._storeUserId,
       }),
-      migrate: (persisted: unknown, version: number) => {
-        const state = persisted as Partial<AppState> & { knowledge?: unknown[] };
-        if (version < 2) {
-          return {
-            ...state,
-            knowledge: linkifyBodies(migrateKnowledge(state.knowledge ?? [])),
-            customPersonas: state.customPersonas ?? [],
-          } as AppState;
-        }
-        // v3:把已有笔记正文里的 [[双链]] 一次性解析进 links,旧图谱立即有连线
-        if (version < 3) {
-          return { ...state, knowledge: linkifyBodies((state.knowledge ?? []) as KnowledgeItem[]) } as AppState;
-        }
-        // v4:清洗历史脏正文——"Day N：Day N：" 重复前缀(早期生成 bug 的残留),一次性自愈
-        if (version < 4) {
-          const fixed = ((state.knowledge ?? []) as KnowledgeItem[]).map((k) =>
-            k.body && /Day\s*\d+[：:]\s*Day\s*\d+[：:]/.test(k.body)
-              ? { ...k, body: k.body.replace(/(Day\s*\d+[：:])\s*Day\s*\d+[：:]\s*/g, "$1 ") }
-              : k
-          );
-          return { ...state, knowledge: linkifyBodies(fixed) } as AppState;
-        }
-        // v5:修复分批生成时代产生的重复/乱序天标题——每个阶段按 dayIds 顺序重编 "Day N：",
-        // 重复的天（旧 bug 生成的 Day1,Day2,Day1,Day2…）保留内容、顺序归位。
-        if (version < 5) {
-          const goals = (state.goals ?? []).map((g) => {
-            if (!g?.plan) return g;
-            const plan = structuredClone(g.plan);
-            for (const ph of plan.phases) {
-              ph.dayIds.forEach((id, i) => {
-                const d = plan.days[id];
-                if (!d) return;
-                const rest = d.title.replace(/^Day\s*\d+[：:]\s*/, "");
-                d.title = `Day ${i + 1}：${rest}`;
-              });
-            }
-            return { ...g, plan };
-          });
-          return { ...state, goals } as AppState;
-        }
-        // v6:首页智能体对话（新增字段，旧仓补空数组）
-        if (version < 6) {
-          return { ...state, agentChat: state.agentChat ?? [] } as AppState;
-        }
-        // v7:主对话框多会话——把旧的单数组 agentChat 包装成一个历史会话，保留全部内容
-        if (version < 7) {
-          const legacy = ((state as { agentChat?: ChatMsg[] }).agentChat ?? []) as ChatMsg[];
-          const firstUser = legacy.find((m) => m.role === "user")?.content ?? "";
-          const wrapped: AgentSession[] =
-            legacy.length > 0
-              ? [
-                  {
-                    id: uid("as"),
-                    title: firstUser.slice(0, 24) || "历史对话",
-                    messages: legacy,
-                    createdAt: legacy[0]?.at ?? new Date().toISOString(),
-                    updatedAt: legacy[legacy.length - 1]?.at ?? new Date().toISOString(),
-                  },
-                ]
-              : [];
-          return {
-            ...state,
-            agentSessions: wrapped,
-            agentActiveId: wrapped[0]?.id ?? null,
-            agentChat: [],
-          } as AppState;
-        }
-        return state as AppState;
-      },
+      /* 与 setStoreUser 手动装载共用同一个累积式迁移（此前两份手工复制已经漂移，
+       * 改这里修不到真实加载路径——收敛到 migrateState 后只有一份真相） */
+      migrate: (persisted: unknown, version: number) =>
+        migrateState(persisted as Partial<AppState> & { knowledge?: unknown[] }, version) as AppState,
     }
   )
 );
@@ -1355,7 +1644,16 @@ export function setStoreUser(userId: string | null) {
         localStorage.removeItem(LEGACY_STORE_KEY);
       }
     } catch {
-      /* 私密模式/localStorage 满时忽略 */
+      /* 私密模式/配额满：旧数据没搬过来，而紧随其后的 setState 会往新 key 写一份
+       * 小快照，让下次登录的 `!newRaw` 守卫失效、迁移永久关闭（UI 变成全新手空态）。
+       * 旧 key 还留着，但必须让用户知道并先导出备份。 */
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("mentora:store-warning", {
+            detail: "旧版数据没能搬进当前账号（本地存储可能已满）。请先到设置页「导出备份」，清出空间后重新登录。",
+          })
+        );
+      }
     }
   }
 
@@ -1383,73 +1681,37 @@ export function setStoreUser(userId: string | null) {
       const parsed = JSON.parse(raw) as { state?: Record<string, unknown>; version?: number };
       const st = (parsed?.state ?? {}) as Partial<AppState> & { knowledge?: unknown[] };
       const ver = parsed?.version ?? 2;
-      // v7 手动装载迁移：旧仓（version<7）只有单数组 agentChat，包装成一个历史会话。
-      // persist.migrate 不会在这里跑（skipHydration + 直接读盘），必须手动同款迁移。
-      const stAgent = st as Partial<AppState> & { agentSessions?: AgentSession[] };
-      let legacySessions: AgentSession[] | null = null;
-      if (ver < 7 && !stAgent.agentSessions?.length) {
-        const legacy = (st.agentChat ?? []) as ChatMsg[];
-        if (legacy.length > 0) {
-          const firstUser = legacy.find((m) => m.role === "user")?.content ?? "";
-          legacySessions = [
-            {
-              id: uid("as"),
-              title: firstUser.slice(0, 24) || "历史对话",
-              messages: legacy,
-              createdAt: legacy[0]?.at ?? new Date().toISOString(),
-              updatedAt: legacy[legacy.length - 1]?.at ?? new Date().toISOString(),
-            },
-          ];
-        }
-      }
-      // 与 persist.migrate 完全同一套迁移:同步加载路径也要跑(v2/v3 双链解析/v4 Day 前缀清洗/v5 天标题重编)。
-      // 此前 v<2 分支只跑 migrateKnowledge 漏了 linkifyBodies——老用户图谱/反链为空。
-      let knowledge = st.knowledge ?? [];
-      if (ver < 2) knowledge = linkifyBodies(migrateKnowledge(knowledge));
-      else if (ver < 3) knowledge = linkifyBodies(knowledge as KnowledgeItem[]);
-      else if (ver < 4)
-        knowledge = linkifyBodies(
-          (knowledge as KnowledgeItem[]).map((k) =>
-            k.body && /Day\s*\d+[：:]\s*Day\s*\d+[：:]/.test(k.body)
-              ? { ...k, body: k.body.replace(/(Day\s*\d+[：:])\s*Day\s*\d+[：:]\s*/g, "$1 ") }
-              : k
-          )
-        );
-      let goals = st.goals ?? [];
-      if (ver < 5) {
-        goals = (goals as Goal[]).map((g) => {
-          if (!g?.plan) return g;
-          const plan = structuredClone(g.plan);
-          for (const ph of plan.phases) {
-            ph.dayIds.forEach((id, i) => {
-              const d = plan.days[id];
-              if (!d) return;
-              const rest = d.title.replace(/^Day\s*\d+[：:]\s*/, "");
-              d.title = `Day ${i + 1}：${rest}`;
-            });
-          }
-          return { ...g, plan };
-        });
-      }
+      // 与 persist.migrate 共用的累积式迁移：旧手动链是 else-if 逐版判断，
+      // v1/v2 仓跳过 v4 清洗、v7+ 仓漏 v8 书籍迁移——现在两条路径同一份实现。
+      const migrated = migrateState(st, ver);
+      lastDiskRaw = raw;
       /* 脏数据自愈：早期引导路径可能把 topic 写成空串 → 列表卡片标题空白。
        * 用 direction 兜底，再兜「未命名目标」。只补空值，不动正常数据。 */
-      const fixedGoals = (goals as Goal[]).map((g) =>
+      const fixedGoals = ((migrated.goals ?? []) as Goal[]).map((g) =>
         g.topic?.trim()
           ? g
           : { ...g, topic: g.direction?.trim()?.slice(0, 24) || "未命名目标" }
       );
       loaded = {
-        ...st,
-        knowledge: backfillReviewDates(knowledge as KnowledgeItem[], todayISO()),
+        ...migrated,
+        knowledge: backfillReviewDates((migrated.knowledge ?? []) as KnowledgeItem[], todayISO()),
         goals: fixedGoals,
       };
-      if (legacySessions) {
-        loaded.agentSessions = legacySessions;
-        loaded.agentActiveId = legacySessions[0].id;
-      }
     }
   } catch {
-    /* 损坏的仓按空仓处理，绝不写入破坏 */
+    /* 损坏的仓按空仓处理，但绝不静默覆盖：紧接的 setState 会走 persist 把默认值
+     * 写回同一个 key，把可能部分可恢复的内容销毁。先把原始字符串留档，再提示用户。 */
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) localStorage.setItem(`mentora-store-corrupt-${Date.now()}`, raw);
+    } catch { /* 留档失败也不能崩 */ }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("mentora:store-warning", {
+          detail: "本地快照读取失败（数据已留档到 mentora-store-corrupt-*）。可在设置页「从云端恢复」，或用开发者工具导出该留档找回内容。",
+        })
+      );
+    }
   }
   useAppStore.setState({
     ...defaults,
@@ -1458,22 +1720,10 @@ export function setStoreUser(userId: string | null) {
   } as Partial<AppState>);
 }
 
-export function clearLocalStore() {
-  useAppStore.setState({
-    goals: [],
-    knowledge: [],
-    books: [],
-    sessions: [],
-    customPersonas: [],
-    folders: [],
-    settings: DEFAULT_SETTINGS,
-    _storeUserId: useAppStore.getState()._storeUserId,
-  });
-}
-
 /* 多标签页同步：学习窗口是新标签页（独立文档），两个标签各持一份内存状态。
- * 另一个标签写入 localStorage 后，本页在重新可见时采用磁盘上的最新仓——
- * 否则回到计划页看到的还是打开学习窗口前的进度，像"刚学的东西消失了"。 */
+ * 另一个标签写入 localStorage 后（storage 事件即时回采，focus/visibility 兜底），
+ * 本页采用磁盘上的最新仓——否则回到计划页看到的还是打开学习窗口前的进度，
+ * 像"刚学的东西消失了"。 */
 let storeSyncBound = false;
 export function bindStoreSync() {
   if (storeSyncBound || typeof window === "undefined") return;
@@ -1486,6 +1736,10 @@ export function bindStoreSync() {
     try {
       const raw = localStorage.getItem(name);
       if (!raw) return;
+      // 磁盘就是我们最后一次写/回采的内容：本地任何 set 都会同步触发 persist 写盘，
+      // 内存与磁盘必然一致——跳过整仓双重 stringify（大库每次聚焦要阻塞数十 ms）
+      if (raw === lastDiskRaw) return;
+      lastDiskRaw = raw;
       const parsed = JSON.parse(raw) as { state?: Partial<AppState> };
       const st = parsed?.state;
       if (!st) return;
@@ -1526,10 +1780,6 @@ export function bindStoreSync() {
 }
 
 /* ------- 派生选择器 ------- */
-export function useActiveGoal(): Goal | undefined {
-  return useAppStore((s) => s.goals.find((g) => g.status === "active"));
-}
-
 export function useDueReviews(): KnowledgeItem[] {
   return useAppStore(
     useShallow((s) => {

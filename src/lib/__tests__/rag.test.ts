@@ -36,6 +36,20 @@ describe("wikiRetrieve（导航式检索）", () => {
     const hits = wikiRetrieve("间隔重复 遗忘曲线", notes, 2);
     expect(hits.map((h) => h.doc.id)).not.toContain("c");
   });
+  it("悬挂出链与被冲突裁决淘汰的目标不会打崩检索", () => {
+    /* 回归锁：图导航把出链 id 写进候选，但该 id 可能不在 clean 里
+     * （ghost 根本不存在；old 被 dedupeConflicts 按版本淘汰）。旧实现
+     * byId.get(id)! 拿到 undefined 后读 tags 直接 TypeError。 */
+    const docs: WikiNote[] = [
+      { id: "seed", title: "间隔重复 遗忘曲线", body: "间隔重复 遗忘曲线", links: ["ghost", "old"] },
+      { id: "old", title: "重复笔记", body: "旧版", version: 1 },
+      { id: "new", title: "重复笔记", body: "新版", version: 2 },
+    ];
+    expect(() => wikiRetrieve("间隔重复", docs, 3)).not.toThrow();
+    const ids = wikiRetrieve("间隔重复", docs, 3).map((h) => h.doc.id);
+    expect(ids).not.toContain("ghost");
+    expect(ids).not.toContain("old");
+  });
 });
 
 describe("bm25Search", () => {

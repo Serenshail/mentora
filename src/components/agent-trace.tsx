@@ -47,6 +47,7 @@ export function AgentTrace({
 
   const anyRunning = phases.some((p) => p.state === "running");
   const anyFailed = phases.some((p) => p.state === "failed");
+  const anyCancelled = phases.some((p) => p.state === "cancelled");
   const expanded = anyRunning || anyFailed || open;
 
   const summary = phases
@@ -70,7 +71,8 @@ export function AgentTrace({
           className
         )}
       >
-        <Check className="size-3 text-ok/80" />
+        {/* 取消不伪装成功：有取消阶段就不渲染绿勾（契约见文件头） */}
+        {anyCancelled ? <Circle className="size-3 text-ink-dim/50" /> : <Check className="size-3 text-ok/80" />}
         <span className="tabular-nums">{summary}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>

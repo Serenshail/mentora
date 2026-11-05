@@ -37,10 +37,10 @@
     </view>
 
     <view wx:if="{{mode === 'register'}}" class="field-gap">
-      <view class="field-label">内测邀请码</view>
+      <view class="field-label">激活码</view>
       <input
         class="input"
-        placeholder="向作者索取"
+        placeholder="XXXX-XXXX-XXXX"
         placeholder-class="ph"
         value="{{inviteCode}}"
         bindinput="onInvite"
@@ -54,7 +54,7 @@
     </button>
 
     <button class="btn btn-ghost btn-block" style="margin-top: 8rpx" bindtap="switchMode">
-      {{mode === "login" ? "没有账号？用邀请码注册" : "已有账号，直接登录"}}
+      {{mode === "login" ? "没有账号？用激活码注册" : "已有账号，直接登录"}}
     </button>
   </view>
 

@@ -24,41 +24,73 @@
 
   <view class="label" style="margin: 40rpx 0 16rpx">路径</view>
 
-  <view wx:for="{{phases}}" wx:for-item="ph" wx:key="id" wx:for-index="pIdx" class="card phase">
-    <view class="between" data-idx="{{pIdx}}" bindtap="togglePhase">
-      <view class="flex-1">
-        <view class="row gap-12">
-          <view class="dot dot-{{ph.tone}}"></view>
-          <text class="h3">{{ph.title}}</text>
-        </view>
-        <view wx:if="{{ph.outcome}}" class="sub clamp-2" style="margin-top: 8rpx">{{ph.outcome}}</view>
-      </view>
-      <text class="chev {{ph.open ? 'chev-open' : ''}}">›</text>
-    </view>
-
-    <view wx:if="{{ph.open}}" class="days">
-      <view
-        wx:for="{{ph.days}}"
-        wx:for-item="d"
-        wx:key="id"
-        class="day {{d.status === 'locked' ? 'day-off' : ''}}"
-        data-id="{{d.id}}"
-        data-status="{{d.status}}"
-        bindtap="openDay"
-      >
-        <text class="day-idx num">{{d.index}}</text>
-        <view class="flex-1">
-          <view class="day-title">{{d.title}}</view>
-          <view wx:if="{{d.gated}}" class="tiny warn-text" style="margin-top: 6rpx">待迁移题过关</view>
-          <view wx:elif="{{d.stub}}" class="tiny" style="margin-top: 6rpx">详情待展开</view>
-        </view>
-        <view wx:if="{{d.status === 'passed'}}" class="badge badge-ok">过</view>
-        <view wx:elif="{{d.status === 'skipped'}}" class="badge badge-warn">跳过</view>
-        <view wx:elif="{{d.status === 'active'}}" class="badge badge-accent">今日</view>
-        <view wx:else class="badge badge-dim">锁</view>
-      </view>
-    </view>
+  <!-- draft（引导中）目标还没有 plan：空的路径区要有引导，不能光秃秃 -->
+  <view wx:if="{{!phases.length}}" class="card empty">
+    <view class="empty-title">学习路径还没生成</view>
+    <view class="empty-sub">苏格拉底引导在网页版完成，计划会同步到手机；也可以先用示例目标走一遍闭环。</view>
   </view>
 
+  <block wx:else>
+    <view wx:for="{{phases}}" wx:for-item="ph" wx:key="id" wx:for-index="pIdx" class="card phase">
+      <view
+        class="between"
+        data-idx="{{pIdx}}"
+        bindtap="togglePhase"
+        aria-role="button"
+        aria-label="{{ph.open ? '收起' : '展开'}}{{ph.title}}"
+      >
+        <view class="flex-1">
+          <view class="row gap-12">
+            <view class="dot dot-{{ph.tone}}"></view>
+            <text class="h3">{{ph.title}}</text>
+          </view>
+          <view wx:if="{{ph.outcome}}" class="sub clamp-2" style="margin-top: 8rpx">{{ph.outcome}}</view>
+        </view>
+        <text class="chev {{ph.open ? 'chev-open' : ''}}">›</text>
+      </view>
+
+      <view wx:if="{{ph.open}}" class="days">
+        <view
+          wx:for="{{ph.days}}"
+          wx:for-item="d"
+          wx:key="id"
+          class="day {{d.status === 'locked' ? 'day-off' : ''}}"
+          data-id="{{d.id}}"
+          data-status="{{d.status}}"
+          bindtap="openDay"
+          aria-role="button"
+          aria-label="第 {{d.index}} 天 {{d.title}}，{{d.statusLabel}}{{d.status === 'locked' ? '，未解锁' : ''}}"
+        >
+          <text class="day-idx num">{{d.index}}</text>
+          <view class="flex-1">
+            <view class="day-title">{{d.title}}</view>
+            <view wx:if="{{d.gated}}" class="tiny warn-text" style="margin-top: 6rpx">待迁移题过关</view>
+            <view wx:elif="{{d.stub}}" class="tiny" style="margin-top: 6rpx">详情待展开</view>
+          </view>
+          <view wx:if="{{d.status === 'passed'}}" class="badge badge-ok">过</view>
+          <view wx:elif="{{d.status === 'skipped'}}" class="badge badge-warn">跳过</view>
+          <view wx:elif="{{d.status === 'active'}}" class="badge badge-accent">今日</view>
+          <view wx:else class="badge badge-dim">锁</view>
+        </view>
+      </view>
+    </view>
+  </block>
+
   <view class="page-tail"></view>
+</view>
+
+<!-- 目标不存在：旧实现整页空白无任何出口（note 页同场景有空态兜底），对齐它 -->
+<view class="page" wx:else>
+  <view class="empty">
+    <view class="empty-title">目标不存在</view>
+    <view class="empty-sub">可能已被删除，或还没同步到本机</view>
+    <navigator
+      open-type="navigateBack"
+      hover-class="none"
+      class="btn btn-outline"
+      style="margin-top: 28rpx"
+      aria-role="button"
+      aria-label="返回"
+    >返回</navigator>
+  </view>
 </view>

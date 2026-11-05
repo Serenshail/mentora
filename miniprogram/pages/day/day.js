@@ -13,6 +13,24 @@ var VERDICT_LABEL = {
   ungradable: { label: "不计", tone: "dim" }
 };
 
+/* 验收题类型的中文徽标（schema 枚举：explain/apply/oral/essay/build） */
+var KIND_LABEL = {
+  explain: "讲解",
+  apply: "应用",
+  oral: "口述",
+  essay: "写作",
+  build: "构建"
+};
+
+/* 按 itemId 在 day.acceptance 里找题（applyQuizResult 此前同样的循环复制了三遍） */
+function acceptanceOf(day, itemId) {
+  var hit = null;
+  (day.acceptance || []).forEach(function (a) {
+    if (a.id === itemId) hit = a;
+  });
+  return hit;
+}
+
 Page({
   data: {
     goalId: "",
@@ -66,6 +84,13 @@ Page({
     this.render();
   },
 
+  /* 流式中退出本页：中止在途请求，别让它跑到 180s 超时、对死页 setData */
+  onUnload: function () {
+    if (this._cancelLesson) this._cancelLesson();
+    if (this._cancelQa) this._cancelQa();
+    if (this._cancelGrade) this._cancelGrade();
+  },
+
   currentDay: function () {
     var goal = store.goalById(this.data.goalId);
     if (!goal || !goal.plan) return null;
@@ -76,7 +101,20 @@ Page({
     var goal = store.goalById(this.data.goalId);
     var day = this.currentDay();
     if (!goal || !day) {
-      util.toast("目标或学习日不存在");
+      /* 旧实现只弹 2.4s toast 后整页留白，且每次 onShow 重复弹；
+       * 改为模态明确告知并给返回出口（每次进页只提示一次）。 */
+      if (!this._missingWarned) {
+        this._missingWarned = true;
+        wx.showModal({
+          title: "内容不存在",
+          content: "目标或学习日可能已被删除。",
+          confirmText: "返回",
+          cancelText: "留在此页",
+          success: function (res) {
+            if (res.confirm) wx.navigateBack();
+          }
+        });
+      }
       return;
     }
     var readOnly = goal.status !== "active" || day.status === "passed" || day.status === "skipped";
@@ -138,7 +176,14 @@ Page({
       resources: resources,
       qaView: cache._qaView,
       acceptance: (day.acceptance || []).map(function (a) {
-        return { id: a.id, kind: a.kind, question: a.question, hint: a.hint || "" };
+        /* 模板按 item.kindLabel 渲染徽标：缺这个字段每张题卡都是空徽标（同页 resources 早有映射） */
+        return {
+          id: a.id,
+          kind: a.kind,
+          kindLabel: KIND_LABEL[a.kind] || "验收",
+          question: a.question,
+          hint: a.hint || ""
+        };
       }),
       gateQuestion: day.transferQuestion || "",
       gateAnswer: day.transferAnswer || ""
@@ -147,7 +192,13 @@ Page({
 
   copyCode: function (e) {
     var code = e.currentTarget.dataset.code || "";
-    wx.setClipboardData({ data: code });
+    /* 失败也要有反馈：原生剪贴板成功提示在小程序里并不总出现，且用户分不清复制到没 */
+    wx.setClipboardData({
+      data: code,
+      success: function () {
+        util.toast("代码已复制");
+      }
+    });
   },
 
   copyLink: function (e) {
@@ -166,8 +217,13 @@ Page({
       .map(function (l) { return l.url; })
       .filter(function (u) { return u; });
     if (!urls.length) return;
-    wx.setClipboardData({ data: urls.join("\n") });
-    util.toast(urls.length + " 条链接已复制");
+    /* 放进 success 回调：旧实现无条件立即报成功，剪贴板被拒时也在骗人 */
+    wx.setClipboardData({
+      data: urls.join("\n"),
+      success: function () {
+        util.toast(urls.length + " 条链接已复制");
+      }
+    });
   },
 
   /* ---------------- 讲义生成（task=lesson，流式） ---------------- */
@@ -201,7 +257,7 @@ Page({
     Object.keys(goal.plan.days).forEach(function (k) {
       var d = goal.plan.days[k];
       if ((d.status === "passed" || d.status === "skipped") && d.id !== day.id) {
-        d.knowledgePoints.forEach(function (kp) {
+        (d.knowledgePoints || []).forEach(function (kp) {
           mastered.push(kp.text);
         });
       }
@@ -240,6 +296,9 @@ Page({
         args: { ctx: ctx },
         messages: [{ role: "user", content: "生成今天的学习文档。" }],
         temperature: 0.6,
+        register: function (cancel) {
+          that._cancelLesson = cancel;
+        },
         onDelta: function (d) {
           buf += d;
           renderer.push();
@@ -250,7 +309,7 @@ Page({
         renderer.flush();
         var text = full || buf;
         if (text.trim().length > 0) {
-          that.saveLesson(goal, day, text);
+          that.saveLesson(day, text);
         } else {
           util.toast("生成内容为空，稍后再试");
         }
@@ -258,7 +317,7 @@ Page({
       .catch(function (e) {
         renderer.cancel();
         if (buf.trim().length > 200) {
-          that.saveLesson(goal, day, buf);
+          that.saveLesson(day, buf);
           util.toast("生成中断，已保留已生成的内容");
         } else {
           util.toast(e.message || "生成失败");
@@ -269,8 +328,12 @@ Page({
       });
   },
 
-  saveLesson: function (goal, day, text) {
-    // 直接写回 plan.days[dayId].lesson（与 Web saveLesson 同语义）
+  saveLesson: function (day, text) {
+    // 直接写回 plan.days[dayId].lesson（与 Web saveLesson 同语义）。
+    // 写前重取引用：生成讲义的 10-60s 里 pullIfSafe 可能已 adoptCloud 整体替换 goals，
+    // 用开始时捕获的 goal 写会落进孤儿对象——render 重读后内容凭空消失。
+    var goal = store.goalById(this.data.goalId);
+    if (!goal || !goal.plan) return;
     var plan = util.clone(goal.plan);
     if (plan.days[day.id]) {
       plan.days[day.id].lesson = text;
@@ -301,7 +364,15 @@ Page({
     goal.plan = plan;
     store.markDirtyPublic();
     that.setData({
-      qaView: qa.map(function (m) { return { role: m.role, content: m.content }; })
+      /* 与 render() 同款映射：assistant 消息必须带 blocks（模板按 blocks 渲染），
+       * 旧实现拍平成 {role, content} → 发送提问后整段答疑历史变成空白卡片，
+       * 要等下次 render() 才恢复。 */
+      qaView: qa.map(function (m) {
+        if (m.role === "assistant") {
+          return { role: "assistant", blocks: md.parse(m.content).blocks };
+        }
+        return { role: "user", content: m.content };
+      })
     });
     var ctx = JSON.stringify({
       topic: goal.topic,
@@ -319,6 +390,9 @@ Page({
         task: "coach-qa",
         args: { ctx: ctx, ragCtx: "" },
         messages: qa.slice(-6).map(function (m) { return { role: m.role, content: m.content }; }),
+        register: function (cancel) {
+          that._cancelQa = cancel;
+        },
         onDelta: function (d) {
           stream += d;
           renderer.push();
@@ -336,18 +410,59 @@ Page({
         g2.plan = plan2;
         store.markDirtyPublic();
         that.setData({
-          qaView: finalQa.map(function (m) { return { role: m.role, content: m.content }; }),
+          /* 与 render() 同款映射：此前这处仍拍平成 {role, content}，
+           * 回答一到整段历史又变空白卡片（第一处已修，这里漏了）。 */
+          qaView: finalQa.map(function (m) {
+            if (m.role === "assistant") {
+              return { role: "assistant", blocks: md.parse(m.content).blocks };
+            }
+            return { role: "user", content: m.content };
+          }),
           qaStreamBlocks: []
         });
       })
       .catch(function (e) {
         renderer.cancel();
-        util.toast(e.message || "答疑失败");
+        that.qaFail(day.id, e);
         that.setData({ qaStreamBlocks: [] });
       })
       .then(function () {
         that.setData({ qaBusy: false });
       });
+  },
+
+  /* 答疑失败落持久标记：用户消息已入库，只弹 2.4s toast 会让人以为已获回复；
+   * 有半截增量就保留（与讲义同一保留策略），再附失败说明。 */
+  qaFail: function (dayId, e) {
+    var that = this;
+    var g = store.goalById(this.data.goalId);
+    if (!g || !g.plan || !g.plan.days[dayId]) return;
+    var partial = (e && e.partial) || "";
+    var content = partial
+      ? "（生成中断，以下是已生成的部分）\n\n" + partial
+      : "（本次回答生成失败" + (e && e.message ? "：" + e.message : "") + "。请重新提问重试。）";
+    var qa = (g.plan.days[dayId].qa || []).concat([
+      {
+        id: util.uid("m"),
+        role: "assistant",
+        content: content,
+        failed: true,
+        at: new Date().toISOString()
+      }
+    ]);
+    var plan = util.clone(g.plan);
+    plan.days[dayId].qa = qa;
+    g.plan = plan;
+    store.markDirtyPublic();
+    that.setData({
+      qaView: qa.map(function (m) {
+        if (m.role === "assistant") {
+          return { role: "assistant", blocks: md.parse(m.content).blocks };
+        }
+        return { role: "user", content: m.content };
+      })
+    });
+    util.toast((e && e.message) || "答疑失败");
   },
 
   /* ---------------- 验收（task=quiz-grade） ---------------- */
@@ -358,12 +473,17 @@ Page({
 
   onAnswer: function (e) {
     var id = e.currentTarget.dataset.id;
+    var value = e.detail.value;
+    /* 路径更新：旧实现每次输入都把整张 answers 表（含所有长文答案）全量 setData，
+     * 长答案时每敲一个字都要跨线程序列化一遍，输入发卡。 */
+    var patch = {};
+    patch["answers." + id] = value;
     var answers = Object.assign({}, this.data.answers);
-    answers[id] = e.detail.value;
-    var all = this.data.acceptance.every(function (a) {
+    answers[id] = value;
+    patch.canSubmitQuiz = this.data.acceptance.every(function (a) {
       return (answers[a.id] || "").trim();
     });
-    this.setData({ answers: answers, canSubmitQuiz: all });
+    this.setData(patch);
   },
 
   submitQuiz: function () {
@@ -394,6 +514,9 @@ Page({
         args: { ctx: ctx },
         messages: [{ role: "user", content: "开始评分。" }],
         temperature: 0.3,
+        register: function (cancel) {
+          that._cancelGrade = cancel;
+        },
         onDelta: function () {}
       })
       .then(function (full) {
@@ -411,10 +534,7 @@ Page({
   applyQuizResult: function (goal, day, g) {
     var that = this;
     var items = g.items.map(function (it) {
-      var q = null;
-      (day.acceptance || []).forEach(function (a) {
-        if (a.id === it.itemId) q = a;
-      });
+      var q = acceptanceOf(day, it.itemId);
       return {
         itemId: it.itemId,
         question: q ? q.question : "",
@@ -426,22 +546,23 @@ Page({
         evidence: it.evidence
       };
     });
-    store.incrementAttempts(goal.id, day.id);
     if (g.overall === "pass") {
-      store.setDayStatus(goal.id, day.id, "passed", {
-        pendingUnlock: true,
-        transferQuestion: g.transferQuestion || ""
-      });
+      var mStatus = mastery.masteryFromQuiz(
+        g.items.map(function (it) {
+          var a = acceptanceOf(day, it.itemId);
+          return { verdict: it.verdict, hintLevel: it.hintLevel, kind: a ? a.kind : null };
+        })
+      );
+      /* 一次 clone 写全 attempts/passed/迁移门/掌握度：
+       * 原先 incrementAttempts → setDayStatus → updatePlanKpMastery 三步串行三次深拷贝。 */
+      store.applyQuizPass(goal.id, day.id, mStatus, g.transferQuestion || "");
       store.logQuiz(goal.id, {
         dayId: day.id,
         date: new Date().toISOString().slice(0, 10),
         passed: true,
         forced: false,
         items: g.items.map(function (it) {
-          var q = null;
-          (day.acceptance || []).forEach(function (a) {
-            if (a.id === it.itemId) q = a;
-          });
+          var q = acceptanceOf(day, it.itemId);
           return {
             itemId: it.itemId,
             question: q ? q.question : "",
@@ -452,17 +573,7 @@ Page({
           };
         })
       });
-      var mStatus = mastery.masteryFromQuiz(
-        g.items.map(function (it) {
-          var kind = null;
-          (day.acceptance || []).forEach(function (a) {
-            if (a.id === it.itemId) kind = a.kind;
-          });
-          return { verdict: it.verdict, hintLevel: it.hintLevel, kind: kind };
-        })
-      );
       store.addLearnKnowledge(goal, day, mStatus);
-      store.updatePlanKpMastery(goal.id, day.id, mStatus);
       util.toast("验收判过。答迁移题解锁下一天", "success");
     } else {
       util.toast("这遍没过。按反馈补齐再来一次");
@@ -477,24 +588,17 @@ Page({
         transferQuestion: g.transferQuestion || ""
       }
     });
-    // 状态变了（passed/解锁链），整页刷新
+    // 状态变了（passed/解锁链），整页刷新（render 不碰 quizMode，上面这次 setData 已经是 result 视图）
     that.render();
-    // render 会重置 quizMode 相关展示，重新置为 result 视图
-    that.setData({ quizMode: "result" });
   },
 
   onGateInput: function (e) {
     this.setData({ gateAnswer: e.detail.value });
   },
 
-  commitTransfer: function () {
-    var that = this;
-    var answer = that.data.gateAnswer.trim();
-    if (!answer) return;
-    store.completeTransfer(this.data.goalId, this.data.dayId, answer);
-    util.toast("过关。下一天已解锁", "success");
-    that.render();
-    // 解锁的下一天直接切过去（与 Web onGoToDay 同语义）
+  /* 解锁跳转（commitTransfer/forceSkip 此前整段复制）：下一天已 active 就 redirect 过去 */
+  goNextDayIfUnlocked: function () {
+    var self = this;
     var goal = store.goalById(this.data.goalId);
     if (goal && goal.plan) {
       var day = goal.plan.days[this.data.dayId];
@@ -506,10 +610,22 @@ Page({
       var nextId = idx >= 0 ? phase.dayIds[idx + 1] : "";
       if (nextId && goal.plan.days[nextId] && goal.plan.days[nextId].status === "active") {
         wx.redirectTo({
-          url: "/pages/day/day?goalId=" + this.data.goalId + "&dayId=" + nextId
+          url: "/pages/day/day?goalId=" + self.data.goalId + "&dayId=" + nextId
         });
+        return true;
       }
     }
+    return false;
+  },
+
+  commitTransfer: function () {
+    var answer = this.data.gateAnswer.trim();
+    if (!answer) return;
+    store.completeTransfer(this.data.goalId, this.data.dayId, answer);
+    util.toast("过关。下一天已解锁", "success");
+    this.render();
+    // 解锁的下一天直接切过去（与 Web onGoToDay 同语义）
+    this.goNextDayIfUnlocked();
   },
 
   onSkipInput: function (e) {
@@ -531,23 +647,7 @@ Page({
       items: []
     });
     util.toast("已跳过。解锁了下一天，继续。", "success");
-    var goal = store.goalById(this.data.goalId);
-    if (goal && goal.plan) {
-      var day = goal.plan.days[this.data.dayId];
-      var phase = null;
-      goal.plan.phases.forEach(function (ph) {
-        if (ph.id === day.phaseId) phase = ph;
-      });
-      var idx = phase ? phase.dayIds.indexOf(day.id) : -1;
-      var nextId = idx >= 0 ? phase.dayIds[idx + 1] : "";
-      if (nextId && goal.plan.days[nextId] && goal.plan.days[nextId].status === "active") {
-        wx.redirectTo({
-          url: "/pages/day/day?goalId=" + this.data.goalId + "&dayId=" + nextId
-        });
-        return;
-      }
-    }
-    that.render();
+    if (!this.goNextDayIfUnlocked()) that.render();
   },
 
   backToLearn: function () {

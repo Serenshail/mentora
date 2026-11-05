@@ -30,11 +30,14 @@ function IntakeInner() {
   const resumeId = params.get("goal");
   const userName = useAppStore((s) => s.settings.userName);
 
-  const { messages, setMessages, pending, thinking, streaming, error, send } = useChat();
+  const { messages, setMessages, pending, thinking, streaming, error, setError, send } = useChat();
   const [input, setInput] = useState("");
   const [card, setCard] = useState<GoalCard | null>(null);
   const [stage, setStage] = useState<"chat" | "confirm" | "planning">("chat");
   const [topic, setTopic] = useState(topicParam || "");
+  /* 无 ?topic 直接访问：不预建草稿，先让用户填想学什么 */
+  const [awaitingTopic, setAwaitingTopic] = useState(false);
+  const [topicInput, setTopicInput] = useState("");
   const hydrated = useHydrated();
   const kicked = useRef(false);
 
@@ -56,6 +59,36 @@ function IntakeInner() {
   };
 
   const handleSkip = (full: string) => handleDone(full, true);
+
+  /* 新建草稿并开场（?topic= 直达，或用户在入口框填写后开始） */
+  const startNew = (t: string) => {
+    const store = useAppStore.getState();
+    const goalId = uid("goal");
+    store.addGoal({
+      id: goalId,
+      topic: t,
+      direction: "",
+      domainKind: "other",
+      motivation: "",
+      background: "",
+      weeklyHours: 8,
+      successCriteria: [],
+      status: "draft",
+      createdAt: new Date().toISOString(),
+      quizLog: [],
+      intakeTranscript: [],
+    });
+    track("intake_start", { topic: t, resumed: false });
+    setTopic(t);
+    setAwaitingTopic(false);
+    history.replaceState(null, "", `/learn/new?goal=${goalId}`);
+    void send({
+      args: { topic: t, userName },
+      userText: `我想学${t}`,
+      task: "intake",
+      onDone: handleDone,
+    });
+  };
 
   // 挂载：恢复草稿 或 新建草稿后开场。
   // 必须等 store 水合（useHydrated）：persist 是 skipHydration、由 setStoreUser 同步装载，
@@ -141,31 +174,13 @@ function IntakeInner() {
         return;
       }
 
-      const t = topicParam || "Python";
-      const goalId = uid("goal");
-      store.addGoal({
-        id: goalId,
-        topic: t,
-        direction: "",
-        domainKind: "other",
-        motivation: "",
-        background: "",
-        weeklyHours: 8,
-        successCriteria: [],
-        status: "draft",
-        createdAt: new Date().toISOString(),
-        quizLog: [],
-        intakeTranscript: [],
-      });
-      track("intake_start", { topic: t, resumed: false });
-      setTopic(t);
-      history.replaceState(null, "", `/learn/new?goal=${goalId}`);
-      void send({
-        args: { topic: t, userName },
-        userText: `我想学${t}`,
-        task: "intake",
-        onDone: handleDone,
-      });
+      // 无 ?topic 访问：旧版直接 addGoal 一条 "Python" 草稿并烧一次 intake AI 调用，
+      // 多次访问累积垃圾草稿。现在先展示输入引导，用户填了才建草稿
+      if (!topicParam) {
+        setAwaitingTopic(true);
+        return;
+      }
+      startNew(topicParam);
     });
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -190,6 +205,22 @@ function IntakeInner() {
     void send({
       args: { topic, userName },
       userText: text,
+      task: "intake",
+      onDone: handleDone,
+    });
+  };
+
+  /* 失败后可重试：把最后一条用户消息原样再发一次（历史里去掉它，避免重复上屏）。
+   * 只有真的有一条待重试的提问时才出现按钮，避免误导。 */
+  const retryable = messages.length > 0 && messages[messages.length - 1]?.role === "user";
+  const retryLast = () => {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "user" || streaming) return;
+    setError(null);
+    void send({
+      args: { topic, userName },
+      userText: last.content,
+      history: messages.slice(0, -1),
       task: "intake",
       onDone: handleDone,
     });
@@ -238,7 +269,7 @@ function IntakeInner() {
       // 否则界面永远停在"计划生成中…"（旧实现依赖 onDone，失败就再也不触发）。
       if (!full) {
         setMessages(beforeMessages);
-        toast.error("总纲要生成失败——目标已保存，可从目标列表进入该目标重试。");
+        toast.error("总纲要生成失败——目标已保存，点下面「确认，生成总纲要」再试一次。");
         setStage("confirm");
         return;
       }
@@ -288,7 +319,7 @@ function IntakeInner() {
           <Compass className="size-5" />
         </div>
         <div>
-          <h1 className="text-lg font-bold text-ink">方向引导：学{topic}</h1>
+          <h1 className="text-lg font-bold text-ink">方向引导：学{topic || "…"}</h1>
           <p className="text-xs text-ink-dim">
             教练想真正了解你，会多问几句。对话自动保存，想走就走。
           </p>
@@ -297,24 +328,52 @@ function IntakeInner() {
         {resumeId && stage === "chat" && messages.length > 0 && (
           <Badge tone="ok">已恢复上次对话</Badge>
         )}
-        {/* 退出入口：草稿已实时落盘，随时可走，回来从上次对话继续 */}
-        {stage !== "planning" && (
-          <button
-            onClick={() => router.push("/learn")}
-            className="ml-auto cursor-pointer rounded-lg border border-border px-3 py-1.5 text-xs text-ink-dim transition hover:border-accent/50 hover:text-accent"
-          >
-            退出引导
-          </button>
-        )}
+        {/* 退出入口：草稿已实时落盘随时可走；planning 也不收回——
+         * 旧版生成中只剩刷新一条路（离页会中止在途流并回滚，目标已保存可重试） */}
+        <button
+          onClick={() => router.push("/learn")}
+          className="ml-auto cursor-pointer rounded-lg border border-border px-3 py-1.5 text-xs text-ink-dim transition hover:border-accent/50 hover:text-accent"
+        >
+          退出引导
+        </button>
       </div>
 
+      {/* 无 ?topic 直达：先问想学什么，不再预建 "Python" 垃圾草稿 */}
+      {awaitingTopic ? (
+        <Card className="mt-2">
+          <p className="text-sm font-semibold text-ink">想学什么？</p>
+          <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+            一句话告诉教练，比如「我想学 Python」「我要考雅思」。
+          </p>
+          <div className="mt-4 flex gap-2">
+            <Input
+              value={topicInput}
+              onChange={(e) => setTopicInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.nativeEvent.isComposing && topicInput.trim()) {
+                  startNew(topicInput.trim());
+                }
+              }}
+              placeholder="想学的东西…"
+              autoFocus
+            />
+            <Button
+              onClick={() => topicInput.trim() && startNew(topicInput.trim())}
+              disabled={!topicInput.trim()}
+            >
+              开始引导
+            </Button>
+          </div>
+        </Card>
+      ) : (
+      <>
       {/* 对话区 */}
       <div className="space-y-4">
         {messages.map((m) => {
           if (m.role === "user") {
             return (
               <div key={m.id} className="flex justify-end">
-                <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-4 py-2.5 text-sm text-white">
+                <div className="max-w-[80%] rounded-2xl rounded-br-md bg-ink px-4 py-2.5 text-sm text-white">
                   {m.content}
                 </div>
               </div>
@@ -348,7 +407,15 @@ function IntakeInner() {
           </div>
         )}
         {error && (
-          <p className="text-sm text-bad">{error} —— 可在设置页检查 Key / 网络。</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-bad">{error}</p>
+            {/* 文案说"点重试即可"，旧页面却没有重试按钮——弱网错误态下用户无路可走 */}
+            {retryable && (
+              <Button size="sm" variant="outline" onClick={retryLast} disabled={streaming}>
+                重试
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -451,7 +518,10 @@ function IntakeInner() {
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doSend()}
+              onKeyDown={(e) => {
+                // isComposing：中文输入法选词回车不算发送
+                if (e.key === "Enter" && !e.nativeEvent.isComposing) doSend();
+              }}
               placeholder="回答教练的问题…（Enter 发送）"
               disabled={streaming}
             />
@@ -475,6 +545,8 @@ function IntakeInner() {
             ⏭️ 不想再答了 —— 让教练按现有信息直接生成目标与计划
           </button>
         </div>
+      )}
+      </>
       )}
       </>
       )}

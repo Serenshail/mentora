@@ -63,14 +63,16 @@ Page({
     var today = new Date().toISOString().slice(0, 10);
 
     /* 摘要缓存：md.plain 是全正文正则清洗，几百篇笔记每次按键全跑一遍
-     * 是明显的输入卡顿源。缓存放页面实例上（跟着页面生命周期），键 = 笔记 id。 */
+     * 是明显的输入卡顿源。缓存放页面实例上（跟着页面生命周期）。
+     * 键 = id + updatedAt：withMoc 原地更新 MOC 正文或云端 pull 后，旧摘要不该继续展示。 */
     if (!this._excerptCache) this._excerptCache = {};
     var cache = this._excerptCache;
     function excerptOf(k) {
-      if (!cache[k.id]) {
-        cache[k.id] = md.plain((k.body || "").replace(/^#{1,6}\s+/gm, "")).slice(0, 80);
+      var key = k.id + "|" + (k.updatedAt || "");
+      if (!cache[key]) {
+        cache[key] = md.plain((k.body || "").replace(/^#{1,6}\s+/gm, "")).slice(0, 80);
       }
-      return cache[k.id];
+      return cache[key];
     }
 
     var notes = st.knowledge

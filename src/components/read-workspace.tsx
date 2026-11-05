@@ -3,11 +3,12 @@
 /* 读书伙伴工作台（v23.3 从 /read 列表页抽取）：作为「学习」页的第二个 tab 渲染；
  * /read 列表入口重定向到 /learn?tab=read，书籍详情 /read/[id] 保留原路由。 */
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Textarea, Skeleton } from "@/components/ui";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { extractJson, readingPlanSchema } from "@/lib/ai/client";
+import { READING_GOAL_LABELS } from "@/lib/types";
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { BookOpen, Plus, Trash2 } from "lucide-react";
@@ -26,12 +27,19 @@ export function ReadWorkspace() {
   /* 删除确认：与学习页同约定——删书会连章节进度/洞见/对话一起删，且随云同步双端丢失 */
   const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
 
+  /* 生成中的取消手柄：旧实现弹窗可被 Esc/遮罩随时关掉而生成照跑，
+   * 成功后又 addBook + 强制跳转——用户明明"取消"了却凭空多出一本书（删除还得再点一次）。 */
+  const createAbortRef = useRef<AbortController | null>(null);
+  const cancelCreate = () => createAbortRef.current?.abort();
+
   const create = async () => {
     if (!title.trim()) {
       toast.error("先写个书名");
       return;
     }
     setCreating(true);
+    const ctrl = new AbortController();
+    createAbortRef.current = ctrl;
     const id = uid("book");
     const desc = `书名：《${title.trim()}》${author.trim() ? ` 作者：${author.trim()}` : ""}${
       pasted.trim() ? `\n用户粘贴的内容/笔记：\n${pasted.trim().slice(0, 6000)}` : ""
@@ -44,15 +52,30 @@ export function ReadWorkspace() {
         messages: [{ role: "user", content: "生成阅读计划。" }],
         temperature: 0.5,
         task: "reading-plan",
+        signal: ctrl.signal,
         onDelta: () => {},
       });
       plan = readingPlanSchema.parse(extractJson(full));
+      /* v25：新链路给 map（认知地图），旧输出只有 bookProfile——转换兼容，两代数据都接 */
+      const map = plan.map
+        ? { ...plan.map, generatedAt: new Date().toISOString() }
+        : plan.bookProfile
+          ? {
+              coreProblem: plan.bookProfile.positioning,
+              authorStance: plan.bookProfile.author,
+              lineage: plan.bookProfile.lineage,
+              controversies: plan.bookProfile.controversies,
+              generatedAt: new Date().toISOString(),
+            }
+          : undefined;
       addBook({
         id,
         title: title.trim(),
         author: author.trim() || undefined,
         pastedText: pasted.trim() || undefined,
         status: "reading",
+        readStatus: "reading",
+        map,
         profile: plan.bookProfile || undefined,
         planSummary: plan.planSummary,
         chapters: plan.chapters.map((c) => ({
@@ -61,6 +84,10 @@ export function ReadWorkspace() {
           coreIdea: c.coreIdea || undefined,
           perspectives: c.perspectives || undefined,
           capture: c.capture || undefined,
+          keyConcepts: c.keyConcepts || undefined,
+          prerequisites: c.prerequisites || undefined,
+          expectedOutcome: c.expectedOutcome || undefined,
+          assessFocus: c.assessFocus || undefined,
           id: uid("ch"),
           status: "todo" as const,
         })),
@@ -75,8 +102,10 @@ export function ReadWorkspace() {
       toast.success("阅读计划已生成，开读！");
       router.push(`/read/${id}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "生成阅读计划失败");
+      if (e instanceof DOMException && e.name === "AbortError") toast("已取消生成，没有创建这本书");
+      else toast.error(e instanceof Error ? e.message : "生成阅读计划失败");
     } finally {
+      createAbortRef.current = null;
       setCreating(false);
     }
   };
@@ -111,6 +140,16 @@ export function ReadWorkspace() {
         <div className="grid gap-4 md:grid-cols-2">
           {books.map((b) => {
             const doneCh = b.chapters.filter((c) => c.status === "done").length;
+            const masteredCh = b.chapters.filter((c) => c.masteredAt).length;
+            const readStatus = b.readStatus ?? (b.status === "done" ? "finished" : b.status === "reading" ? "reading" : "unread");
+            const statusMeta: Record<string, { label: string; tone: "ok" | "accent" | "warn" | "default" }> = {
+              unread: { label: "未开始", tone: "default" },
+              reading: { label: "在读", tone: "accent" },
+              finished: { label: "已读完", tone: "warn" },
+              assessing: { label: "验收中", tone: "warn" },
+              mastered: { label: "已掌握", tone: "ok" },
+            };
+            const sm = statusMeta[readStatus] ?? statusMeta.reading;
             return (
               <Card
                 key={b.id}
@@ -133,18 +172,25 @@ export function ReadWorkspace() {
                     >
                       <Trash2 className="size-3.5" />
                     </button>
-                    <Badge tone={b.status === "done" ? "ok" : "accent"}>
-                      {b.status === "done" ? "读完" : b.status === "reading" ? "在读" : "想读"}
-                    </Badge>
+                    {/* 已读完 ≠ 已掌握：两态分开显示（PRD 4.5） */}
+                    <Badge tone={sm.tone === "default" ? "default" : sm.tone}>{sm.label}</Badge>
                   </div>
                 </div>
+                {b.goal && (
+                  <p className="mt-2 text-[11.5px] text-ink-dim">
+                    目标：<span className="font-semibold text-accent">{READING_GOAL_LABELS[b.goal.primary].label}</span>
+                    {b.goal.secondary?.length ? ` + ${b.goal.secondary.map((g) => READING_GOAL_LABELS[g].label).join("、")}` : ""}
+                    {b.goal.intent ? <span className="ml-1.5">· {b.goal.intent.slice(0, 30)}</span> : null}
+                  </p>
+                )}
                 {b.planSummary && (
                   <p className="mt-2 line-clamp-2 text-xs text-ink-dim">{b.planSummary}</p>
                 )}
                 <div className="mt-3 flex items-center gap-3 text-xs text-ink-dim">
                   <span>
-                    章节 {doneCh}/{b.chapters.length}
+                    节点 {doneCh}/{b.chapters.length}
                   </span>
+                  {masteredCh > 0 && <span className="text-ok">已掌握 {masteredCh}</span>}
                   <span>洞见 {b.insights.length} 条</span>
                   {b.chat.length > 0 && <span>对话 {b.chat.length} 轮</span>}
                 </div>
@@ -154,20 +200,34 @@ export function ReadWorkspace() {
         </div>
       )}
 
-      <Modal open={open} onClose={() => setOpen(false)} title="添加书籍">
+      <Modal
+        open={open}
+        /* 生成期间不允许关窗：关了也拦不住请求，成功照样建书跳转——那种"取消了却多出一本书"最恼人 */
+        onClose={() => {
+          if (creating) return;
+          setOpen(false);
+        }}
+        title="添加书籍"
+      >
         <div className="space-y-3">
-          <Input placeholder="书名（必填）" value={title} onChange={(e) => setTitle(e.target.value)} />
-          <Input placeholder="作者（可选）" value={author} onChange={(e) => setAuthor(e.target.value)} />
+          <Input placeholder="书名（必填）" value={title} onChange={(e) => setTitle(e.target.value)} disabled={creating} />
+          <Input placeholder="作者（可选）" value={author} onChange={(e) => setAuthor(e.target.value)} disabled={creating} />
           <Textarea
             rows={5}
             placeholder="粘贴原文片段 / 你的笔记 / 目录（可选）——有的话阅读计划会围绕它安排"
             value={pasted}
             onChange={(e) => setPasted(e.target.value)}
+            disabled={creating}
           />
-          <div className="flex justify-end">
-            <Button onClick={create} loading={creating}>
-              生成阅读计划
-            </Button>
+          <div className="flex items-center justify-end gap-2">
+            {creating && <span className="mr-auto text-xs text-ink-dim">正在拆解这本书…（约 1 分钟，请别关窗）</span>}
+            {creating ? (
+              <Button variant="outline" onClick={cancelCreate}>
+                取消生成
+              </Button>
+            ) : (
+              <Button onClick={create}>生成阅读计划</Button>
+            )}
           </div>
         </div>
       </Modal>

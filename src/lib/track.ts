@@ -18,12 +18,13 @@ export function track(name: string, props: Record<string, unknown> = {}): void {
     });
     const blob = new Blob([body], { type: "application/json" });
     if (navigator.sendBeacon && navigator.sendBeacon("/api/track", blob)) return;
+    /* 兜底 fetch 的 rejection 也要接住：fire-and-forget 不许产生 unhandled rejection */
     void fetch("/api/track", {
       method: "POST",
       body,
       keepalive: true,
       headers: { "Content-Type": "application/json" },
-    });
+    }).catch(() => {});
   } catch {
     /* 埋点失败不影响产品 */
   }

@@ -19,7 +19,7 @@
       <view class="hero-sub">回忆一次比重读十遍有用。答不出来不丢人，那是数据。</view>
       <view class="hero-cta">
         <text class="on-ink-dim" style="font-size: 24rpx">约 {{estimate}} 分钟</text>
-        <view class="hero-btn" bindtap="start">
+        <view class="hero-btn" bindtap="start" aria-role="button" aria-label="开始这轮复习">
           开始这轮
           <view class="hero-btn-chev"></view>
         </view>
@@ -61,6 +61,7 @@
         class="btn btn-ink btn-block {{answer && !gradeBusy ? '' : 'disabled'}}"
         style="margin-top: 24rpx"
         bindtap="{{answer && !gradeBusy ? 'submit' : ''}}"
+        aria-disabled="{{!answer || gradeBusy}}"
       >
         {{gradeBusy ? "判卷中…" : "提交，判卷"}}
       </button>

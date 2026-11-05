@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { dbGet, dbDelete, dbDeleteDir, emailHash } from "@/lib/server/db";
 import { verifySession, verifyPassword, clearSessionCookie } from "@/lib/server/auth";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
+import { dropRefCode } from "@/lib/server/referral";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -33,6 +34,7 @@ export async function DELETE(req: NextRequest) {
 
   try {
     await dbDelete(path, record._sha ?? null);
+    await dropRefCode(session.email);
   } catch {
     return Response.json({ error: "删除失败，稍后再试" }, { status: 502 });
   }

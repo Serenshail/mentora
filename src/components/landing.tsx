@@ -6,6 +6,9 @@ import { useTypewriter } from "@/lib/use-typewriter";
 import { usePopText } from "@/lib/use-poptext";
 import { QRCodeSVG } from "qrcode.react";
 import { ArrowRight, BookOpen, Brain, Check, Compass, GraduationCap } from "lucide-react";
+import { Modal } from "@/components/ui";
+import { PLANS, priceLabel } from "@/lib/pricing";
+import { toast } from "sonner";
 
 /* ================= Mainframe 规格资产 ================= */
 
@@ -178,16 +181,23 @@ const NAV_LINKS = [
   { href: "#brain", label: "大脑" },
   { href: "#read", label: "读书" },
   { href: "#council", label: "圆桌" },
+  { href: "#pricing", label: "价格" },
 ];
 
 const TYPE_TEXT = "很高兴你来了。会学习的人，最后总会走到这里。现在，你想学会什么？";
 
 export default function Landing() {
   const { displayed, done } = useTypewriter(TYPE_TEXT, 38, 600);
-  const { elRef: popRef } = usePopText("Mentora", 300);
+  const { elRef: popRef, failed: popFailed } = usePopText("Mentora", 300);
   const [showPills, setShowPills] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyNote, setCopyNote] = useState(""); // 空串=无提示；成功/失败都让读屏与视力用户感知到
+  const [trialOpen, setTrialOpen] = useState(false);
+  const [trialEmail, setTrialEmail] = useState("");
+  const [trialContact, setTrialContact] = useState("");
+  const [trialNote, setTrialNote] = useState("");
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trialSent, setTrialSent] = useState(false);
 
   /* 药丸：载入 400ms 后淡入上滑（不等打字机） */
   useEffect(() => {
@@ -214,8 +224,38 @@ export default function Landing() {
         ok = false;
       }
     }
-    setCopied(ok);
-    setTimeout(() => setCopied(false), 2400);
+    setCopyNote(ok ? "已复制" : "复制失败，请手动选择邮箱");
+    setTimeout(() => setCopyNote(""), 2400);
+  };
+
+  const submitTrial = async () => {
+    if (trialBusy) return;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trialEmail.trim())) {
+      toast.error("邮箱看起来不太对");
+      return;
+    }
+    setTrialBusy(true);
+    try {
+      const res = await fetch("/api/trial-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trialEmail.trim(), contact: trialContact.trim(), note: trialNote.trim() }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || "提交失败");
+      }
+      setTrialSent(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "提交失败");
+    } finally {
+      setTrialBusy(false);
+    }
+  };
+
+  const openTrial = () => {
+    setTrialSent(false);
+    setTrialOpen(true);
   };
 
   return (
@@ -260,6 +300,7 @@ export default function Landing() {
         <button
           type="button"
           aria-label="菜单"
+          aria-expanded={menuOpen}
           onClick={() => setMenuOpen((v) => !v)}
           className="flex cursor-pointer flex-col gap-[5px] md:hidden"
         >
@@ -318,7 +359,10 @@ export default function Landing() {
             className="pop-text font-brand pointer-events-auto mb-3 select-none leading-none text-white sm:mb-5"
             style={{ fontSize: "clamp(76px, 10vw, 132px)", minHeight: "1.25em" }}
             aria-label="Mentora"
-          />
+          >
+            {/* PopText 加载失败时 h1 无文本子节点会永久空白：渲染纯文本兜底（成功路径无此节点，视觉不变） */}
+            {popFailed && "Mentora"}
+          </h1>
 
           {/* 磨砂引言（blur 4px） */}
           <p
@@ -334,6 +378,7 @@ export default function Landing() {
           <p
             className="font-body-display mb-5 text-white sm:mb-6"
             style={{ fontSize: "clamp(18px, 4vw, 26px)", lineHeight: 1.35, minHeight: 54 }}
+            aria-label={TYPE_TEXT}
           >
             {displayed}
             {!done && <span className="type-cursor" />}
@@ -348,17 +393,21 @@ export default function Landing() {
               transition: "opacity 0.4s ease, transform 0.4s ease",
             }}
           >
-            <Pill href="/login?mode=register">说出你想学的</Pill>
+            <Pill onClick={openTrial}>申请 7 天体验</Pill>
+            <Pill href="/login?mode=register" outline>
+              我有激活码
+            </Pill>
             <Pill href="#method">看看怎么运转</Pill>
-            <Pill href="#council">认识 12 位伙伴</Pill>
-            <Pill href="#read">读一本书试试</Pill>
+            <Pill href="#pricing">价格</Pill>
             <Pill outline onClick={copyEmail}>
               <span className="underline underline-offset-1">{CONTACT_EMAIL}</span>
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
                 <rect x="0.5" y="0.5" width="7" height="7" rx="1" stroke="currentColor" />
                 <rect x="4.5" y="4.5" width="7" height="7" rx="1" stroke="currentColor" />
               </svg>
-              {copied && <span className="text-[11px] opacity-70">已复制</span>}
+              <span aria-live="polite">
+                {copyNote && <span className="text-[11px] opacity-70">{copyNote}</span>}
+              </span>
             </Pill>
           </div>
         </div>
@@ -413,6 +462,90 @@ export default function Landing() {
           </div>
         </section>
 
+        {/* 定价：买一张激活码，兑换后计时；续费在原到期日上累加 */}
+        <section id="pricing" className="scroll-mt-16 border-y border-border bg-surface/50 px-4 py-16">
+          <div className="mx-auto max-w-4xl">
+            <h2 className="font-heading text-center text-xl font-bold tracking-[-0.02em] text-ink">
+              一张激活码，换一段认真学的时间
+            </h2>
+            <p className="mx-auto mt-3 max-w-xl text-center text-sm leading-relaxed text-ink-dim">
+              没有自动续费，也不会偷偷扣款。到期前会提醒你；到期后笔记和数据都还在，随时可以导出。
+              <br />
+              已经有账号了？把会员页里的邀请码发给朋友，他注册时填上，<b className="text-ink">你多一个月</b>。
+            </p>
+            <div className="mt-10 grid gap-4 md:grid-cols-2">
+              {(["month", "year"] as const).map((id) => {
+                const p = PLANS[id];
+                return (
+                  <div
+                    key={id}
+                    className={`relative rounded-2xl border bg-white p-6 ${
+                      id === "year" ? "border-accent/40 shadow-[0_8px_32px_-16px_rgba(120,100,255,0.45)]" : "border-border"
+                    }`}
+                  >
+                    {id === "year" && (
+                      <span className="absolute -top-2.5 left-5 rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold text-white">
+                        更划算
+                      </span>
+                    )}
+                    <p className="font-heading text-base font-bold text-ink">{p.name}</p>
+                    <p className="mt-3 flex items-baseline gap-1">
+                      <span className="text-4xl font-bold tracking-tight text-ink">¥{priceLabel(p.price)}</span>
+                      <span className="text-xs text-ink-dim">/ {p.days === 30 ? "月" : "年"}</span>
+                    </p>
+                    <p className="mt-2 text-xs leading-relaxed text-ink-dim">{p.tagline}</p>
+                    <ul className="mt-4 space-y-1.5">
+                      {["教练 / 第二大脑 / 读书 / 圆桌 全部功能", "换设备登录同一账号即可恢复", "到期自动转免费版：数据保留，AI 限免费额度"].map((t) => (
+                        <li key={t} className="flex items-start gap-2 text-[13px] text-ink-dim">
+                          <Check className="mt-0.5 size-3.5 shrink-0 text-ok" />
+                          {t}
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={openTrial}
+                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-black/80"
+                      >
+                        先试 7 天 <ArrowRight className="size-3.5" />
+                      </button>
+                      <Link
+                        href="/login?mode=register"
+                        className="inline-flex items-center rounded-full border border-border px-4 py-2 text-[13px] text-ink transition-colors hover:bg-black/[0.04]"
+                      >
+                        我有激活码
+                      </Link>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mx-auto mt-10 max-w-2xl space-y-3">
+              {[
+                {
+                  q: "到期后会怎样？",
+                  a: "自动转入免费版：账号、学习计划、笔记和导出都保留；AI 按月度免费额度受限，学习教练限前两个阶段。续费一张新卡密，天数从原到期日往后累加，完整额度立刻恢复。",
+                },
+                {
+                  q: "数据归谁？",
+                  a: "归你。密码单向加密、云端数据加密存储，随时可以一键导出全部内容带走。",
+                },
+                {
+                  q: "换设备要再买吗？",
+                  a: "不用。登录同一个账号，数据自动同步；时长跟着账号走，不跟设备走。",
+                },
+              ].map((f) => (
+                <div key={f.q} className="rounded-xl border border-border bg-white px-4 py-3">
+                  <p className="text-[13px] font-semibold text-ink">{f.q}</p>
+                  <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">{f.a}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* 态度 */}
         <section className="mx-auto max-w-3xl px-4 py-20 text-center">
           <p className="font-heading text-lg leading-relaxed text-ink">它不负责哄你开心，负责让你变清醒。</p>
@@ -420,12 +553,13 @@ export default function Landing() {
             第一句话就是判断，没有「取决于」和「各有道理」。
             你错的时候它直说，你焦虑的时候它把情绪翻译成可以动手做的事。
           </p>
-          <Link
-            href="/login?mode=register"
-            className="mt-8 inline-flex items-center gap-2 rounded-full bg-[#1d1d1f] px-6 py-3 text-[15px] font-medium text-white transition-colors duration-200 hover:bg-black/80"
+          <button
+            type="button"
+            onClick={openTrial}
+            className="mt-8 inline-flex cursor-pointer items-center gap-2 rounded-full bg-ink px-6 py-3 text-[15px] font-medium text-white transition-colors duration-200 hover:bg-black/80"
           >
-            说出你想学的东西 <ArrowRight className="size-4" />
-          </Link>
+            申请 7 天体验 <ArrowRight className="size-4" />
+          </button>
         </section>
 
         <footer className="border-t border-border px-4 py-10 text-center text-xs text-ink-dim/60">
@@ -442,6 +576,72 @@ export default function Landing() {
           </div>
         </footer>
       </div>
+
+      {/* 体验申请：留资 → 后台一键发码（冷启动阶段每个申请都过一遍人眼） */}
+      <Modal open={trialOpen} onClose={() => setTrialOpen(false)} title={trialSent ? "申请收到" : "申请 7 天体验"}>
+        {trialSent ? (
+          <div className="py-2">
+            <p className="text-sm leading-relaxed text-ink">
+              收到，我会尽快把 7 天体验码发到 <b>{trialEmail}</b>
+              {trialContact ? `（或通过 ${trialContact}）` : ""}。
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-ink-dim">
+              如果半天内没收到，直接写信到 {CONTACT_EMAIL}，别干等。
+            </p>
+            <button
+              type="button"
+              onClick={() => setTrialOpen(false)}
+              className="mt-5 w-full cursor-pointer rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-white hover:bg-black/80"
+            >
+              好
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3 py-1">
+            <p className="text-[13px] leading-relaxed text-ink-dim">
+              留下邮箱，我人工发一张 7 天体验码给你。不需要绑卡，也不会自动续费。
+            </p>
+            <label className="block text-xs text-ink-dim">
+              邮箱（必填）
+              <input
+                type="email"
+                value={trialEmail}
+                onChange={(e) => setTrialEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="mt-1.5 w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent/60"
+              />
+            </label>
+            <label className="block text-xs text-ink-dim">
+              微信 / 手机（可选，方便直接发你）
+              <input
+                value={trialContact}
+                onChange={(e) => setTrialContact(e.target.value)}
+                placeholder="微信号或手机号"
+                className="mt-1.5 w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent/60"
+              />
+            </label>
+            <label className="block text-xs text-ink-dim">
+              想学什么？（可选，我会按你的目标给建议）
+              <textarea
+                value={trialNote}
+                onChange={(e) => setTrialNote(e.target.value)}
+                rows={3}
+                placeholder="比如：三个月内能独立做数据分析"
+                className="mt-1.5 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent/60"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={submitTrial}
+              disabled={trialBusy}
+              className="w-full cursor-pointer rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-black/80 disabled:cursor-default disabled:opacity-50"
+            >
+              {trialBusy ? "提交中…" : "提交申请"}
+            </button>
+            <p className="text-center text-[11px] text-ink-dim/60">只用于发放体验码，不会群发。</p>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

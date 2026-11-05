@@ -5,13 +5,13 @@ import { deployEnv } from "./deploy-env";
 
 /* ============================================================
  * 邮箱验证码：生成/校验。
+ * 【休眠管线】当前生产无调用方（注册/找回均走邀请码，send-code 路由已移除）；
+ * 保留作为「邮箱所有权验证」的现成基础设施，复用前先修回退语义。
  * v17 起存远端 KV（D1/Upstash），跨 isolate 一致——
- * 旧实现在进程内存，Vercel 多实例下 send-code 和 register 落在不同
- * isolate 时验证码必然查不到（注册时好时坏的隐性根因）。
+ * 无远端 KV 或远端读写失败时回退进程内存（issue/verify 两侧对称）。
  * RESEND_API_KEY 存在 → 真实发信；不存在 → dev 模式：
  *   · 非生产：验证码回给前端自动填入（本地全链路可测）；
  *   · 生产：绝不外发验证码（send-code 路由负责 503 挡住）。
- * 无远端 KV 时（纯本地开发）回退进程内存，行为与旧版一致。
  * ============================================================ */
 
 export type CodePurpose = "register" | "reset";
@@ -53,48 +53,61 @@ export async function issueCode(email: string, purpose: CodePurpose): Promise<st
 export async function verifyCode(email: string, purpose: CodePurpose, input: string): Promise<boolean> {
   const given = input.trim();
   if (!given) return false;
-  if (!hasHealthyRemoteDb()) {
-    const key = `${purpose}:${email.toLowerCase()}`;
-    const e = MEM.get(key);
-    if (!e || e.expiresAt < Date.now()) {
-      MEM.delete(key);
-      return false;
+  const key = `${purpose}:${email.toLowerCase()}`;
+  if (hasHealthyRemoteDb()) {
+    const path = codePath(purpose, email);
+    let entry: CodeEntry | null = null;
+    try {
+      entry = await dbGet<CodeEntry>(path, { encrypted: true });
+    } catch {
+      /* 远端读失败 → 落到内存兜底（与写入侧「写失败回退 MEM」对称） */
     }
-    e.attempts++;
-    if (e.attempts > MAX_ATTEMPTS) {
-      MEM.delete(key);
-      return false;
+    if (entry) {
+      if (entry.expiresAt < Date.now()) {
+        await dbDelete(path, null).catch(() => {});
+        return false;
+      }
+      if (entry.attempts >= MAX_ATTEMPTS) {
+        await dbDelete(path, null).catch(() => {});
+        return false;
+      }
+      if (entry.code !== given) {
+        entry.attempts++;
+        await dbPut(path, entry, { encrypted: true }).catch(() => {});
+        return false;
+      }
+      await dbDelete(path, null).catch(() => {}); // 一次性
+      return true;
     }
-    if (e.code !== given) return false;
-    MEM.delete(key); // 一次性
-    return true;
   }
-  const path = codePath(purpose, email);
-  let entry: CodeEntry | null = null;
-  try {
-    entry = await dbGet<CodeEntry>(path, { encrypted: true });
-  } catch {
+  return memVerify(key, given);
+}
+
+/** 内存兜底校验（进程内）：过期/超次/一次性语义与远端路径一致 */
+function memVerify(key: string, given: string): boolean {
+  const e = MEM.get(key);
+  if (!e || e.expiresAt < Date.now()) {
+    MEM.delete(key);
     return false;
   }
-  if (!entry || entry.expiresAt < Date.now()) {
-    await dbDelete(path, null).catch(() => {});
+  e.attempts++;
+  if (e.attempts > MAX_ATTEMPTS) {
+    MEM.delete(key);
     return false;
   }
-  if (entry.attempts >= MAX_ATTEMPTS) {
-    await dbDelete(path, null).catch(() => {});
-    return false;
-  }
-  if (entry.code !== given) {
-    entry.attempts++;
-    await dbPut(path, entry, { encrypted: true }).catch(() => {});
-    return false;
-  }
-  await dbDelete(path, null).catch(() => {}); // 一次性
+  if (e.code !== given) return false;
+  MEM.delete(key); // 一次性
   return true;
 }
 
+/* 通道可用性判定收敛一处：hasSmtp 守卫与 sendEmail 路由共用同一来源，
+ * 杜绝「守卫放行（配了 SMN）却落 Resend 分支以空 Key 发信」的必败错位 */
+function channelUsable(c: MailChannel): boolean {
+  return c === "huawei" ? hasHuaweiMail() : Boolean(process.env.RESEND_API_KEY);
+}
+
 export function hasSmtp(): boolean {
-  return Boolean(process.env.RESEND_API_KEY) || hasHuaweiMail();
+  return channelUsable("resend") || channelUsable("huawei");
 }
 
 /* ---- 发信双轨（T-069，HW-S-07）：EMAIL_CHANNEL 显式切换，缺省 resend 行为与历史逐字节一致 ----
@@ -124,6 +137,8 @@ async function sendViaHuawei(to: string, subject: string, html: string): Promise
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ to, subject, html }),
+    /* 中继挂起会拖死调用方（weekly-digest 逐用户串行）直到平台 maxDuration */
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     console.error("[mail:huawei] send failed", res.status, (await res.text()).slice(0, 200));
@@ -132,14 +147,20 @@ async function sendViaHuawei(to: string, subject: string, html: string): Promise
   return { sent: true };
 }
 
-/** 通用发信：EMAIL_CHANNEL=huawei 且配置中继 → 华为云通道；否则 Resend（配 Key）；
+/** 通用发信：显式通道可用就用它；否则退到任一可用通道（修「只配 SMN_* 漏配
+ *  EMAIL_CHANNEL 时守卫放行、却以 Bearer undefined 打 Resend」的必败路径）；
  *  都未配 → dev 打日志、返回 sent:false。发送失败抛错（调用方决定是否吞）。 */
 export async function sendEmail(to: string, subject: string, html: string): Promise<{ sent: boolean }> {
-  if (!hasSmtp()) {
+  const pref = emailChannel();
+  let ch: MailChannel | null = null;
+  if (channelUsable(pref)) ch = pref;
+  else if (channelUsable("resend")) ch = "resend";
+  else if (channelUsable("huawei")) ch = "huawei";
+  if (!ch) {
     console.log(`[dev-mail] ${subject} → ${to}`);
     return { sent: false };
   }
-  if (emailChannel() === "huawei" && hasHuaweiMail()) {
+  if (ch === "huawei") {
     return sendViaHuawei(to, subject, html);
   }
   const res = await fetch("https://api.resend.com/emails", {
@@ -154,6 +175,7 @@ export async function sendEmail(to: string, subject: string, html: string): Prom
       subject,
       html,
     }),
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     console.error("[mail] send failed", res.status, (await res.text()).slice(0, 200));

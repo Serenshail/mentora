@@ -1,18 +1,12 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { rateLimit } from "@/lib/server/rate-limit";
+import { clientIp, rateLimit } from "@/lib/server/rate-limit";
 
 const COOKIE = "mentora_session";
 
 /* 已知 AI 抓取/训练机器人 UA：直接拒（礼貌机器人遵守 robots，恶意机器人靠这层+限流+鉴权叠加） */
 const AI_SCRAPER_UA =
   /(gptbot|chatgpt-user|oai-searchbot|ccbot|perplexitybot|claudebot|anthropic-ai|google-extended|applebot-extended|meta-externalagent|bytespider|cohere-ai|diffbot|youbot|scrapy|python-requests|go-http-client)/i;
-
-function clientIpOf(req: NextRequest): string {
-  const fwd = req.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0].trim();
-  return req.headers.get("x-real-ip") ?? "unknown";
-}
 
 /* 以下路径无需登录即可访问；其余全部重定向到登录页 */
 const PUBLIC_PATHS = new Set([
@@ -48,14 +42,19 @@ export function proxy(req: NextRequest) {
   // 全站禁止搜索引擎/AI 爬虫索引
   res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
 
-  // CORS：允许外部后台管理系统跨域调用 admin/health API（凭 x-admin-password 头鉴权）。
-  // 默认放开来源（密钥在请求头而非 cookie，故跨域读响应仍需持有密码）；可用 ADMIN_CORS_ORIGINS 收紧。
-  if (pathname.startsWith("/api/admin") || pathname === "/api/health") {
+  // CORS：允许外部后台管理系统跨域调用 admin API（凭 x-admin-password 头鉴权）。
+  // admin：默认放开来源（密钥在请求头而非 cookie，故跨域读响应仍需持有密码）；可用 ADMIN_CORS_ORIGINS 收紧。
+  // health：无鉴权，响应能读出部署画像（缺哪个 env=哪个子系统降级）——与 admin 共用
+  // 「未配置即全放」会让任意跨域 JS 免费拿到画像，故只在显式配置来源时才反射。
+  const isAdminApi = pathname.startsWith("/api/admin");
+  if (isAdminApi || pathname === "/api/health") {
     const origin = req.headers.get("origin");
     const cfg = process.env.ADMIN_CORS_ORIGINS;
-    const allow = cfg ? cfg.split(",").map((s) => s.trim()).includes(origin ?? "") : true;
+    const allow = cfg
+      ? cfg.split(",").map((s) => s.trim()).includes(origin ?? "")
+      : isAdminApi;
     const cors: Record<string, string> = {
-      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, x-admin-password",
       "Access-Control-Max-Age": "600",
     };
@@ -79,11 +78,11 @@ export function proxy(req: NextRequest) {
   if (pathname.startsWith("/api/")) {
     // admin 接口专项限流：外部后台走密码鉴权，严打爆破（30 次/分/IP）
     if (pathname.startsWith("/api/admin")) {
-      if (!rateLimit(`admin:${clientIpOf(req)}`, { capacity: 30, refillPerSec: 0.5 })) {
+      if (!rateLimit(`admin:${clientIp(req)}`, { capacity: 30, refillPerSec: 0.5 })) {
         return NextResponse.json({ error: "请求过于频繁" }, { status: 429 });
       }
     }
-    if (!rateLimit(`api:${clientIpOf(req)}`, { capacity: 120, refillPerSec: 2 })) {
+    if (!rateLimit(`api:${clientIp(req)}`, { capacity: 120, refillPerSec: 2 })) {
       return NextResponse.json({ error: "请求过于频繁" }, { status: 429 });
     }
   }
@@ -93,17 +92,19 @@ export function proxy(req: NextRequest) {
     res.headers.set("Cache-Control", "no-store, max-age=0");
     return res;
   }
-  // 内部资源不走登录墙
-  if (pathname.startsWith("/_next/") || pathname === "/_vercel/insights") return res;
+  // 内部资源不走登录墙（/_vercel/insights 死特判已删：项目未启用 Vercel Analytics，
+  // 统计走自有漏斗出口 /api/track，见 admin/stats 注释）
+  if (pathname.startsWith("/_next/")) return res;
 
   // 静态资源、公开页面放行
   if (isPublic(pathname)) return res;
 
-  // 未登录则全部重定向到登录页（参数名与 app-shell/登录页一致用 next，登录完回原页）
+  // 未登录则全部重定向到登录页（参数名与 app-shell/登录页一致用 next，登录完回原页。
+  // 必须带上 query：brain ?note=&tab=、learn ?focus=1&day=N 等深链状态都在 search 里）
   const hasSession = req.cookies.get(COOKIE)?.value;
   if (!hasSession) {
     const login = new URL("/login", req.url);
-    login.searchParams.set("next", pathname);
+    login.searchParams.set("next", pathname + req.nextUrl.search);
     return NextResponse.redirect(login);
   }
 

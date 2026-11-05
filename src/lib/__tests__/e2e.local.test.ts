@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractJson, masterPlanSchema, phasePlanSchema, phaseListSchema, quizGradeSchema } from "../ai/client";
+import { extractJson, masterPlanSchema, phasePlanSchema, phaseListSchema, quizGradeSchema, readingGoalSchema, readingPlanSchema, readingStrategySchema, readingAssessGenSchema, readingAssessGradeSchema } from "../ai/client";
 
 /* 端到端冒烟(真模型):本地 `E2E=1 npx vitest run e2e` 且 dev 服务器在跑时执行。
  * 目的:改完任何 AI 链路,先在本地把"引导→总纲要→天级计划→资源修复"整条跑一遍,
@@ -152,5 +152,96 @@ describe.skipIf(!run)("E2E 学习教练全链路(需 E2E=1 + dev server)", () =>
     const reps = extractJson<Array<{ title: string; url: string | null }>>(full);
     expect(Array.isArray(reps)).toBe(true);
     expect(reps.length).toBe(bad.length); // 数量对齐,替换或置空,不许丢项
+  }, 120_000);
+
+  /* ---- 阅读系统 V1.0（PRD 2026-11-05）：六个新任务 + 路线 v2 ---- */
+  it("阅读路线 v2:认知地图四区域 + 节点新字段(目标导向路线)", async () => {
+    const full = await chat(
+      {
+        task: "reading-plan",
+        args: {
+          desc: "书名：《思考，快与慢》 作者：丹尼尔·卡尼曼",
+          goal: { primary: "思考", secondary: "应用", intent: "想少被直觉骗着做决定" },
+          routeType: "goal",
+        },
+        messages: [{ role: "user", content: "生成阅读路线（只要 JSON）。" }],
+      },
+      300_000 // 地图+5-8节点全字段是长生成任务，qwen 小模型可达 2-4 分钟
+    );
+    const plan = readingPlanSchema.parse(extractJson(full));
+    expect(plan.map).toBeTruthy(); // 认知地图四区域
+    expect(plan.map!.coreProblem.length).toBeGreaterThan(8);
+    expect(plan.map!.controversies.length).toBeGreaterThan(4);
+    expect(plan.chapters.length).toBeGreaterThanOrEqual(3);
+    expect(plan.chapters.some((c) => (c.keyConcepts ?? []).length > 0)).toBe(true); // 关键概念
+    expect(plan.chapters.some((c) => (c.expectedOutcome ?? "").length > 0)).toBe(true); // 预期成果
+  }, 320_000);
+
+  it("目标推荐:reading-goal 能出合法目标", async () => {
+    const full = await chat({
+      task: "reading-goal",
+      args: { title: "原则", author: "瑞·达利欧", desc: "生活与工作的原则体系" },
+      messages: [{ role: "user", content: "推荐阅读目标。" }],
+    });
+    const g = readingGoalSchema.parse(extractJson(full));
+    expect(["understand", "think", "apply", "retain"]).toContain(g.primary);
+  }, 120_000);
+
+  it("策略调度:reading-strategy 能出五模式之一并给理由", async () => {
+    const full = await chat({
+      task: "reading-strategy",
+      args: {
+        goal: "主目标 思考",
+        chapter: JSON.stringify({ title: "反方怎么说", knowledgeType: "judgment", coreIdea: "批评方认为结构化方法机械化", focusQuestion: "最强的批评是什么?" }),
+        learning: JSON.stringify({ misconceptions: [], unresolvedQuestions: ["结构化是不是伪命题"] }),
+        recentTurns: "",
+        currentMode: "",
+      },
+      messages: [{ role: "user", content: "推荐策略。" }],
+    });
+    const r = readingStrategySchema.parse(extractJson(full));
+    expect(["socratic", "feynman", "collision", "close-read", "recall-check"]).toContain(r.mode);
+    expect((r.reason ?? "").length).toBeGreaterThan(2);
+  }, 120_000);
+
+  it("三重验收出题:按应用型目标出 3 题,apply 占比最高且不出'举个例子'空指令", async () => {
+    const full = await chat({
+      task: "reading-assess-gen",
+      args: {
+        book: "思考，快与慢",
+        chapter: JSON.stringify({ title: "核心概念的第一性", knowledgeType: "concept", coreIdea: "系统1快而省力系统2慢而费力", focusQuestion: "这个概念在解释什么现象?", keyConcepts: ["系统1", "系统2"], assessFocus: "双系统的分工", expectedOutcome: "能向外行解释双系统" }),
+        goal: "主目标 应用",
+      },
+      messages: [{ role: "user", content: "出验收题。" }],
+    });
+    const r = readingAssessGenSchema.parse(extractJson(full));
+    expect(r.questions).toHaveLength(3);
+    const kinds = r.questions.map((q) => q.kind);
+    expect(kinds.filter((k) => k === "apply").length).toBeGreaterThanOrEqual(2); // 应用型 → apply ×2 + connect ×1
+    expect(r.questions.every((q) => !/^(举个例子|举例说明)[。？?]?$/.test(q.question.trim()))).toBe(true);
+  }, 120_000);
+
+  it("三重验收判分:证据必须引用用户原话,partial/not 点名缺口", async () => {
+    const full = await chat({
+      task: "reading-assess-grade",
+      args: {
+        book: "思考，快与慢",
+        chapter: JSON.stringify({ title: "核心概念的第一性", coreIdea: "系统1快而省力系统2慢而费力", focusQuestion: "双系统怎么分工?", keyConcepts: ["系统1", "系统2"] }),
+        goal: "主目标 应用",
+        qa: JSON.stringify([
+          { kind: "explain", question: "合上书:双系统是什么?", answer: "系统1就是直觉反应很快，系统2要动脑子比较慢，平时都是系统1先上。" },
+          { kind: "apply", question: "你这周哪件事能用上它?", answer: "" },
+        ]),
+      },
+      messages: [{ role: "user", content: "评分。" }],
+      temperature: 0.2,
+    });
+    const g = readingAssessGradeSchema.parse(extractJson(full));
+    expect(g.results).toHaveLength(2);
+    const first = g.results[0]!;
+    expect(["mastered", "partial", "not"]).toContain(first.level);
+    expect((first.evidence ?? "").length).toBeGreaterThan(2); // 证据纪律:判而不解释=无效判
+    const blank = g.results[1]!;
+    expect(blank.level).toBe("not"); // 空白回答必须判 not,不放水
   }, 120_000);
 });

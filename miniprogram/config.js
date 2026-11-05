@@ -13,10 +13,28 @@ var BASES = {
 
 var KEY = "mentora-mp-base";
 
+/* 只在开发版/体验版暴露 tunnel 与 local。
+ * 正式包以前带着 localhost 与隧道地址发布，用户误切后 reLaunch 到登录页，
+ * 而登录页没有切回入口——等于把小程序锁死，只能删掉重装。 */
+function isDev() {
+  try {
+    var info = wx.getAccountInfoSync && wx.getAccountInfoSync();
+    var env = (info && info.miniProgram && info.miniProgram.envVersion) || "";
+    return env !== "release"; // develop / trial / 读不到信息时按开发处理
+  } catch (e) {
+    return true;
+  }
+}
+
+/** 当前环境允许的后端（正式包只有 prod） */
+function availableBases() {
+  return isDev() ? BASES : { prod: BASES.prod };
+}
+
 function current() {
   try {
     var saved = wx.getStorageSync(KEY);
-    if (saved && BASES[saved]) return BASES[saved];
+    if (saved && availableBases()[saved]) return BASES[saved];
   } catch (e) { /* 存储不可用时用默认 */ }
   return BASES.prod;
 }
@@ -24,13 +42,13 @@ function current() {
 function currentId() {
   try {
     var saved = wx.getStorageSync(KEY);
-    if (saved && BASES[saved]) return saved;
+    if (saved && availableBases()[saved]) return saved;
   } catch (e) { /* 同上 */ }
   return "prod";
 }
 
 function set(id) {
-  if (!BASES[id]) return;
+  if (!availableBases()[id]) return;
   try {
     wx.setStorageSync(KEY, id);
   } catch (e) { /* 忽略 */ }
@@ -38,6 +56,8 @@ function set(id) {
 
 module.exports = {
   BASES: BASES,
+  availableBases: availableBases,
+  isDev: isDev,
   current: current,
   currentId: currentId,
   set: set

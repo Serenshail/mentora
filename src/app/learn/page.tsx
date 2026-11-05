@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Empty, Input, PageHeader, ProgressRing, StatusDot, Skeleton } from "@/components/ui";
+import { Badge, Button, Card, Empty, Input, Modal, PageHeader, ProgressRing, StatusDot, Skeleton } from "@/components/ui";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS, type DomainKind } from "@/lib/types";
@@ -40,7 +40,12 @@ export default function LearnPage() {
   /* v23.3：学习 = 教练 + 读书伙伴 两个功能合一个工作台；?tab=read 直达读书 */
   const [tab, setTab] = useState<"coach" | "read">("coach");
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("tab") === "read") setTab("read");
+    /* 只认 ?tab=read；setState 放进 rAF（effect 里同步 setState 会被 React Compiler
+     * 判为「触发级联渲染」，且 URL 是外部状态，首帧读不到 window 也不能崩）。
+     * 这里同时把 setTab 用上，避免 lint 报未使用。 */
+    if (new URLSearchParams(window.location.search).get("tab") !== "read") return;
+    const id = requestAnimationFrame(() => setTab("read"));
+    return () => cancelAnimationFrame(id);
   }, []);
 
   const start = () => {
@@ -194,57 +199,58 @@ export default function LearnPage() {
         </>
       )}
 
-      {confirmId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px] p-4" onClick={() => setConfirmId(null)}>
-          <Card className="max-w-sm animate-rise" onClick={(e) => e.stopPropagation()}>
-            <p className="font-bold text-ink">删除这个学习目标？</p>
-            <p className="mt-2 text-sm text-ink-dim">计划与验收记录会一并删除。</p>
-            <div className="mt-3 space-y-2">
-              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-surface-2/50 p-2.5 text-sm">
-                <input
-                  type="checkbox"
-                  checked={alsoNotes}
-                  onChange={(e) => setAlsoNotes(e.target.checked)}
-                  className="mt-0.5 size-4 accent-[#5b54e6]"
-                />
-                <span className="text-ink-dim">
-                  同时删除该科目的计划类笔记（总纲要 / 阶段计划 / 目录）。
-                  <span className="block text-xs text-ink-dim/70">不勾选则只删目标，笔记全保留。</span>
-                </span>
-              </label>
-              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-warn/30 bg-warn/[0.06] p-2.5 text-sm">
-                <input
-                  type="checkbox"
-                  checked={alsoKnowledge}
-                  onChange={(e) => setAlsoKnowledge(e.target.checked)}
-                  className="mt-0.5 size-4 accent-[#b45309]"
-                />
-                <span className="text-ink-dim">
-                  连知识点笔记一起删（含复习队列里的待复习项）。
-                  <span className="block text-xs text-ink-dim/70">这是你的学习成果，默认保留；确认不再需要再勾。</span>
-                </span>
-              </label>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setConfirmId(null)}>
-                取消
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  if (alsoNotes) useAppStore.getState().removeGoalAndNotes(confirmId, alsoKnowledge);
-                  else removeGoal(confirmId);
-                  setConfirmId(null);
-                  setAlsoNotes(true);
-                  setAlsoKnowledge(false);
-                }}
-              >
-                删除
-              </Button>
-            </div>
-          </Card>
+      {/* 删除确认：改用设计系统 Modal（手搓 fixed 层没有 role=dialog/焦点陷阱/Esc/滚动锁） */}
+      <Modal
+        open={!!confirmId}
+        onClose={() => setConfirmId(null)}
+        title="删除这个学习目标？"
+      >
+        <p className="text-sm text-ink-dim">计划与验收记录会一并删除。</p>
+        <div className="mt-3 space-y-2">
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-surface-2/50 p-2.5 text-sm">
+            <input
+              type="checkbox"
+              checked={alsoNotes}
+              onChange={(e) => setAlsoNotes(e.target.checked)}
+              /* 用主题令牌：写死色值不会跟随时段主题重映射 */
+              className="mt-0.5 size-4 accent-accent"
+            />
+            <span className="text-ink-dim">
+              同时删除该科目的计划类笔记（总纲要 / 阶段计划 / 目录）。
+              <span className="block text-xs text-ink-dim/70">不勾选则只删目标，笔记全保留。</span>
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-warn/30 bg-warn/[0.06] p-2.5 text-sm">
+            <input
+              type="checkbox"
+              checked={alsoKnowledge}
+              onChange={(e) => setAlsoKnowledge(e.target.checked)}
+              className="mt-0.5 size-4 accent-warn"
+            />
+            <span className="text-ink-dim">
+              连知识点笔记一起删（含复习队列里的待复习项）。
+              <span className="block text-xs text-ink-dim/70">这是你的学习成果，默认保留；确认不再需要再勾。</span>
+            </span>
+          </label>
         </div>
-      )}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setConfirmId(null)}>
+            取消
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              if (alsoNotes) useAppStore.getState().removeGoalAndNotes(confirmId!, alsoKnowledge);
+              else removeGoal(confirmId!);
+              setConfirmId(null);
+              setAlsoNotes(true);
+              setAlsoKnowledge(false);
+            }}
+          >
+            删除
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -258,14 +264,20 @@ function DirectionGuideCard() {
   const [pending, setPending] = useState("");
   const [phases, setPhases] = useState<TracePhase[]>([]);
   const boxRef = useRef<HTMLDivElement>(null);
+  /* 代际标记：收起面板再重开后旧流可能还在跑，回来时会用过期闭包里的 turns
+   * 整体覆盖当前对话（把用户新说的内容抹掉）。只有代际未变才允许写 UI。 */
+  const genRef = useRef(0);
 
   useEffect(() => {
-    boxRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [turns.length, busy]);
+    /* scrollIntoView 挂在滚动容器自身上只滚外层、不动内部 scrollTop：直接滚到底 */
+    const el = boxRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns.length, busy, pending]);
 
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
+    const gen = ++genRef.current;
     setInput("");
     const next = [...turns, { role: "user" as const, content: text }];
     setTurns(next);
@@ -287,13 +299,17 @@ function DirectionGuideCard() {
         onThink: (t) => setPending((p) => p + t),
       });
       setPhases((prev) => prev.map((p) => (p.state === "running" ? { ...p, state: "done", durationMs: Date.now() - t1 } : p)));
+      if (gen !== genRef.current) return; // 陈旧流：不覆盖当前对话
       setTurns([...next, { role: "assistant", content: full || pending || "（没收到回复，再试一次）" }]);
     } catch {
+      if (gen !== genRef.current) return;
       setPhases((prev) => prev.map((p) => (p.state === "running" ? { ...p, state: "failed" } : p)));
       setTurns([...next, { role: "assistant", content: "网络出问题了，稍后再聊。" }]);
     } finally {
-      setPending("");
-      setBusy(false);
+      if (gen === genRef.current) {
+        setPending("");
+        setBusy(false);
+      }
     }
   };
 

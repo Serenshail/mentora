@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { collectMarkdownFiles, parseVault, type ParsedNote } from "@/lib/obsidian-import";
 import { useAppStore } from "@/lib/store";
@@ -22,8 +22,17 @@ export function ObsidianImport({
   iconOnly?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const addKnowledge = useAppStore((s) => s.addKnowledge);
   const importKnowledge = useAppStore((s) => s.importKnowledge);
+  /* safeStorage 把 QuotaExceededError 吞掉并派发 mentora:quota（这是有意的：写满不崩）。
+   * 所以导入的 catch 根本等不到配额异常——必须监听这个事件，否则「已导入 N 篇」是假成功。 */
+  const quotaHitRef = useRef(false);
+  useEffect(() => {
+    const onQuota = () => {
+      quotaHitRef.current = true;
+    };
+    window.addEventListener("mentora:quota", onQuota);
+    return () => window.removeEventListener("mentora:quota", onQuota);
+  }, []);
   const [parsing, setParsing] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [parsed, setParsed] = useState<ParsedNote[] | null>(null);
@@ -81,9 +90,12 @@ export function ObsidianImport({
     return [...m.entries()];
   };
 
-  const confirm = () => {
-    if (selected.length === 0) return;
+  const confirm = async () => {
+    if (selected.length === 0 || importing) return;
     setImporting(true);
+    /* importKnowledge 是同步重活：先让一帧把 loading 画出来，否则 true/false
+     * 同批合并、importing 永不渲染，按钮 loading 与 Modal 守卫都是死状态 */
+    await new Promise((r) => setTimeout(r, 30));
     try {
       const { added, skipped } = importKnowledge(
         selected.map((n) => ({
@@ -95,9 +107,16 @@ export function ObsidianImport({
           tags: n.tags,
         }))
       );
-      toast.success(
-        `已导入 ${added} 篇（跳过 ${skipped} 篇重复）${structureOnly ? " · 仅结构" : ""}`
-      );
+      if (quotaHitRef.current) {
+        quotaHitRef.current = false;
+        toast.error(
+          `已导入 ${added} 篇，但本机存储已满——本地快照没写全，请先「导出备份」或改用「仅结构」再试。`
+        );
+      } else {
+        toast.success(
+          `已导入 ${added} 篇（跳过 ${skipped} 篇重复）${structureOnly ? " · 仅结构" : ""}`
+        );
+      }
       setParsed(null);
       onDone?.();
     } catch {
@@ -154,7 +173,7 @@ export function ObsidianImport({
                       else next.delete(d);
                       setPickedDomains(next);
                     }}
-                    className="size-3.5 accent-[#6c5ce7]"
+                    className="size-3.5 accent-accent"
                   />
                   <span className="flex-1 text-ink">{d}</span>
                   <span className="tabular text-ink-dim">{s.n} 篇</span>
@@ -170,7 +189,7 @@ export function ObsidianImport({
                 type="checkbox"
                 checked={structureOnly}
                 onChange={(e) => setStructureOnly(e.target.checked)}
-                className="mt-0.5 size-3.5 accent-[#6c5ce7]"
+                className="mt-0.5 size-3.5 accent-accent"
               />
               <span>
                 <b className="text-ink">仅导入结构</b>（全部标题 + 双链关系，不含正文）——

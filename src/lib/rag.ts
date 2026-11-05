@@ -34,6 +34,20 @@ function tokenize(text: string): string[] {
   return tokens;
 }
 
+/** 分词缓存：一条消息里的检索链路会多次遍历同一批语料（基线 + 融合 + 图导航），
+ *  每次都对每篇标题+正文重分词是纯浪费——笔记内容不变时结果必然相同。
+ *  键带 version/updatedAt，改动过的笔记自动失效；超过上限整表清空（够用且不泄漏）。 */
+const tokenCache = new Map<string, string[]>();
+function cachedTokens(d: RagDoc): string[] {
+  const key = `${d.id}|${d.version ?? 0}|${d.updatedAt ?? ""}`;
+  const hit = tokenCache.get(key);
+  if (hit) return hit;
+  const t = tokenize(`${d.title} ${d.title} ${d.body}`); // 标题权重 ×2
+  if (tokenCache.size > 5000) tokenCache.clear();
+  tokenCache.set(key, t);
+  return t;
+}
+
 /** BM25（k1=1.5, b=0.75） */
 export function bm25Search(
   query: string,
@@ -44,7 +58,7 @@ export function bm25Search(
   if (docs.length === 0) return [];
   const { k1 = 1.5, b = 0.75 } = opts;
 
-  const docsTokens = docs.map((d) => tokenize(`${d.title} ${d.title} ${d.body}`)); // 标题权重 ×2
+  const docsTokens = docs.map((d) => cachedTokens(d));
   const avgLen = docsTokens.reduce((a, t) => a + t.length, 0) / docs.length || 1;
   const df = new Map<string, number>();
   for (const tokens of docsTokens) {
@@ -210,22 +224,25 @@ export function wikiRetrieve(query: string, notes: WikiNote[], k = 3): RagHit[] 
   }
 
   const qTokens = new Set(tokenize(query));
-  const ranked = [...scores.entries()]
-    .map(([id, score]) => {
-      const n = byId.get(id)!;
-      let s = score;
-      if ((n.tags ?? []).includes("MOC")) s += 0.3; // hub/目录页加权
-      if ((n.tags ?? []).some((t) => qTokens.has(t.toLowerCase()))) s += 0.5;
-      const ts = n.updatedAt ? Date.parse(n.updatedAt) : 0;
-      if (ts) s += Math.min(0.3, ts / 1e13);
-      return {
-        doc: { id: n.id, title: n.title, body: n.body, domain: n.domain, version: n.version, updatedAt: n.updatedAt, tags: n.tags },
-        score: s,
-      };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k);
-  return ranked;
+  /* 图导航会把出链/入链 id 写进 scores，但这些 id 不保证仍在 clean 里
+   * （MOC 被调用方过滤、dedupeConflicts 淘汰的旧版仍留在 reverse 索引）。
+   * 旧实现用 byId.get(id)! 非空断言，拿到 undefined 后读 tags 直接 TypeError，
+   * 常规笔记内容就能把整条检索链路打崩。这里直接跳过不在 byId 的候选。 */
+  const ranked: RagHit[] = [];
+  for (const [id, score] of scores) {
+    const n = byId.get(id);
+    if (!n) continue;
+    let s = score;
+    if ((n.tags ?? []).includes("MOC")) s += 0.3; // hub/目录页加权
+    if ((n.tags ?? []).some((t) => qTokens.has(t.toLowerCase()))) s += 0.5;
+    const ts = n.updatedAt ? Date.parse(n.updatedAt) : 0;
+    if (ts) s += Math.min(0.3, ts / 1e13);
+    ranked.push({
+      doc: { id: n.id, title: n.title, body: n.body, domain: n.domain, version: n.version, updatedAt: n.updatedAt, tags: n.tags },
+      score: s,
+    });
+  }
+  return ranked.sort((a, b) => b.score - a.score).slice(0, k);
 }
 
 /* ========= 上下文构建（回答质量的第一道闸，2026-10-26 重构）=========

@@ -82,7 +82,9 @@ export async function setSessionCookie(user: SessionUser) {
 
 export async function clearSessionCookie() {
   const jar = await cookies();
-  jar.set(COOKIE, "", { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 0 });
+  /* secure 判定与 setSessionCookie 同源（isProdDeploy）：分叉会让本地 http 部署的
+   * 登出 Set-Cookie 带 Secure 被拒收，会话静默残留 */
+  jar.set(COOKIE, "", { httpOnly: true, sameSite: "lax", secure: isProdDeploy(), path: "/", maxAge: 0 });
 }
 
 export async function getSessionUser(): Promise<SessionUser | null> {

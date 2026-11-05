@@ -104,17 +104,62 @@ function LiveBlocks({
   const blocks = useMemo(() => splitBlocks(body), [body]);
   const [active, setActive] = useState<number | null>(null);
   const [text, setText] = useState("");
+  /* 块级 AI 改写：旧实现既无门也无失败反馈——可以连点发起并发调用，返回后 setText
+   * 覆盖用户等待期间敲的内容，失败还静默吞掉（同文件其它 AI 按钮都有门）。 */
+  const [rewriting, setRewriting] = useState(false);
+
+  /* 尚未提交的草稿。空笔记（blocks=[]）走整篇 textarea 分支，active 恒为 null——
+   * 旧实现的 commit() 首行 `if (active == null) return` 让这条默认路径的正文永远不落库，
+   * 切到另一篇笔记时组件卸载、局部 state 销毁，用户输入静默丢失。 */
+  const pendingRef = useRef<
+    | { mode: "whole"; text: string }
+    | { mode: "block"; index: number; text: string; blocks: string[] }
+    | null
+  >(null);
+  /* 卸载兜底必须用最新回调；onCommit 闭包绑定的是当前这篇笔记的 id，切走时不会写错对象 */
+  const commitRef = useRef(onCommit);
+  useEffect(() => {
+    commitRef.current = onCommit;
+  });
+
+  const commit = () => {
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    if (pending) {
+      if (pending.mode === "whole") {
+        if (pending.text !== body) onCommit(pending.text);
+      } else if (pending.text !== pending.blocks[pending.index]) {
+        const next = [...pending.blocks];
+        next[pending.index] = pending.text;
+        onCommit(next.join("\n\n"));
+      }
+    }
+    setActive(null);
+  };
+
+  /* 兜底：失焦没触发（键盘/程序化跳转、直接切笔记）时也把草稿写回去 */
+  useEffect(
+    () => () => {
+      const pending = pendingRef.current;
+      pendingRef.current = null;
+      if (!pending) return;
+      if (pending.mode === "whole") {
+        commitRef.current(pending.text);
+      } else if (pending.text !== pending.blocks[pending.index]) {
+        const next = [...pending.blocks];
+        next[pending.index] = pending.text;
+        commitRef.current(next.join("\n\n"));
+      }
+    },
+    []
+  );
 
   const open = (i: number) => {
+    // 先落上一段未提交的改动，再切换编辑目标（防止程序化跳转绕过 blur）
+    if (pendingRef.current) commit();
     setActive(i);
     setText(blocks[i] ?? "");
-  };
-  const commit = () => {
-    if (active == null) return;
-    const next = [...blocks];
-    next[active] = text;
-    onCommit(next.join("\n\n"));
-    setActive(null);
+    pendingRef.current = null;
   };
 
   return (
@@ -125,7 +170,10 @@ function LiveBlocks({
           className="min-h-[40vh] w-full resize-none bg-transparent px-2 font-mono text-[13px] leading-relaxed text-ink outline-none"
           value={text}
           placeholder="像聊天一样写就行——点别处自动排版。输入 [[ 可链接其他笔记…"
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            pendingRef.current = { mode: "whole", text: e.target.value };
+          }}
           onBlur={commit}
         />
       ) : (
@@ -136,17 +184,24 @@ function LiveBlocks({
                 <div className="mb-1 flex justify-end">
                   <button
                     onMouseDown={(e) => e.preventDefault()}
+                    disabled={rewriting}
                     onClick={async () => {
+                      setRewriting(true);
                       try {
-                        setText(await onRewrite(text));
-                      } catch {
-                        /* 忽略单次失败 */
+                        const rewritten = await onRewrite(text);
+                        setText(rewritten);
+                        // 改写结果也是未提交草稿：否则切走时会被当成"没改过"
+                        pendingRef.current = { mode: "block", index: i, text: rewritten, blocks };
+                      } catch (e) {
+                        toast.error(e instanceof Error ? e.message : "AI 改写失败，原文未改动");
+                      } finally {
+                        setRewriting(false);
                       }
                     }}
-                    className="rounded-md px-1.5 py-0.5 text-[10.5px] text-accent transition hover:bg-accent/[0.08] cursor-pointer"
+                    className="rounded-md px-1.5 py-0.5 text-[10.5px] text-accent transition hover:bg-accent/[0.08] cursor-pointer disabled:opacity-50"
                     title="AI 改写这一段（不改原意）"
                   >
-                    ✨ AI 改写这段
+                    {rewriting ? "改写中…" : "✨ AI 改写这段"}
                   </button>
                 </div>
               )}
@@ -155,7 +210,10 @@ function LiveBlocks({
               rows={Math.max(2, text.split("\n").length + 1)}
               className="my-1 w-full resize-none rounded-lg border border-accent/40 bg-white px-3 py-2 font-mono text-[13px] leading-relaxed text-ink outline-none"
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                pendingRef.current = { mode: "block", index: i, text: e.target.value, blocks };
+              }}
               onBlur={commit}
               onKeyDown={(e) => {
                 if (e.key === "Escape") commit();
@@ -165,7 +223,17 @@ function LiveBlocks({
           ) : (
             <div
               key={i}
+              role="button"
+              tabIndex={0}
               onClick={() => open(i)}
+              onKeyDown={(e) => {
+                /* 键盘也能进块编辑；内部链接按钮的回车不在这里截胡 */
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  open(i);
+                }
+              }}
               title="点击编辑这一段（其余保持排版）"
               className="prose-mentora cursor-text rounded-lg px-3 py-1.5 transition hover:bg-black/[0.035]"
             >
@@ -307,10 +375,11 @@ export function NoteWorkspace({
       args: { mode, text },
       messages: [{ role: "user", content: "执行。" }],
       temperature: 0.3,
+      /* 弱网下不设超时会让 aiBusy 恒为 true，按钮永久锁死且无法取消 */
+      signal: AbortSignal.timeout(45_000),
       onDelta: () => {},
     });
   };
-  const [domain, setDomain] = useState("all");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("backlinks");
   const [tagEdit, setTagEdit] = useState(false);
@@ -319,8 +388,15 @@ export function NoteWorkspace({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
+  const [docBusy, setDocBusy] = useState(false);
   /* 上传文档 → Markdown 笔记（进当前笔记所在科目/笔记,否则 笔记/笔记） */
   const uploadDoc = async (file: File) => {
+    if (docBusy) return; // .docx 转换数秒级，防重复触发
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error("文件超过 20MB——请拆分后再导入");
+      return;
+    }
+    setDocBusy(true);
     try {
       const body = await fileToMarkdown(file);
       const title = docTitleFromFilename(file.name);
@@ -329,6 +405,8 @@ export function NoteWorkspace({
       const dup = store.knowledge.find((k) => k.title === title);
       if (dup) {
         // 同名文档 = 更新：addKnowledge 按标题去重会把新内容静默丢弃，还提示"已导入"
+        // 覆盖不可恢复，与删除/AI 润色同一档确认
+        if (!confirm(`已有同名笔记《${title}》，用新文档覆盖它的正文？`)) return;
         store.updateKnowledge(dup.id, { body, domain: `${subj}/笔记` });
         onOpenNote(dup.id);
         onModeChange("preview");
@@ -347,6 +425,8 @@ export function NoteWorkspace({
       toast.success(`已导入《${title}》`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "导入失败");
+    } finally {
+      setDocBusy(false);
     }
   };
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
@@ -369,16 +449,7 @@ export function NoteWorkspace({
 
   const note = knowledge.find((k) => k.id === openId) ?? null;
 
-  /* 文件夹树 = 用户自建文件夹 ∪ 笔记的一级目录（domain 即文件夹） */
-  const treeFolders = useMemo(() => {
-    const set = new Set(folders);
-    for (const k of knowledge) set.add(k.domain);
-    return [...set];
-  }, [folders, knowledge]);
-
   /* ---- 派生 ---- */
-  const domains = useMemo(() => Array.from(new Set(knowledge.map((k) => k.domain))), [knowledge]);
-
   const allTags = useMemo(() => {
     const m = new Map<string, number>();
     for (const k of knowledge) for (const t of TAGS_OF(k)) m.set(t, (m.get(t) ?? 0) + 1);
@@ -388,12 +459,11 @@ export function NoteWorkspace({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return knowledge.filter((k) => {
-      if (domain !== "all" && k.domain !== domain) return false;
       if (activeTag && !TAGS_OF(k).some((t) => t.toLowerCase() === activeTag.toLowerCase())) return false;
       if (!q) return true;
       return k.title.toLowerCase().includes(q) || k.body.toLowerCase().includes(q);
     });
-  }, [knowledge, query, domain, activeTag]);
+  }, [knowledge, query, activeTag]);
 
   const backlinks = useMemo(
     () => (note ? knowledge.filter((k) => k.id !== note.id && k.links.includes(note.id)) : []),
@@ -411,13 +481,20 @@ export function NoteWorkspace({
   const outline = useMemo(() => (note && mode === "preview" ? outlineOf(note.body) : []), [note, mode]);
   const noteTags = note ? TAGS_OF(note) : [];
 
-  /* 未链接提及：正文里写了 [[当前标题]] 但还没建立 id 链接的笔记 */
+  /* 未链接提及：正文里写了 [[当前标题]] 但还没建立 id 链接的笔记。
+     用完整闭合匹配（与 setBody 解析一致）——前缀子串会把《机器学习》
+     误报成 [[机器学习基础]] 的提及 */
   const unlinkedMentions = useMemo(() => {
     if (!note) return [];
-    const t = note.title.toLowerCase();
-    return knowledge.filter(
-      (k) => k.id !== note.id && !k.links.includes(note.id) && k.body.toLowerCase().includes(`[[${t}`)
-    );
+    const t = normTitle(note.title);
+    const re = /\[\[([^\[\]|#]+)(?:#[^\[\]|]*)?(?:\|[^\[\]]*)?\]\]/g;
+    return knowledge.filter((k) => {
+      if (k.id === note.id || k.links.includes(note.id)) return false;
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(k.body))) if (normTitle(m[1]) === t) return true;
+      return false;
+    });
   }, [knowledge, note]);
 
   /* ---- 打开 / 新建 ---- */
@@ -442,6 +519,7 @@ export function NoteWorkspace({
     const id = createKnowledge({ domain: domain ?? "笔记" });
     onOpenNote(id);
     onModeChange("edit");
+    setMobilePane("editor"); // 手机上新建后直接进编辑，与其它打开笔记路径一致
     if (!domain) toast.success("已新建，标题点一下就能改。");
     else setExpanded((s) => new Set(s).add(domain));
   };
@@ -450,17 +528,24 @@ export function NoteWorkspace({
   /* ---- 编辑器：自动保存 + [[ 补全 + 工具栏 ---- */
   const setBody = (body: string) => {
     if (!note) return;
-    /* 敲 [[标题]] 时自动把双链解析进 links（标题→id），反链/图谱即时生效；
-       保留手动/AI 建立的 id 链接 */
+    /* 敲 [[标题]] 时自动把双链解析进 links（标题→id），反链/图谱即时生效。
+       删掉正文里的 [[...]] 时同步移除对应链接（只增不减会让陈旧反链永久误导）：
+       以「旧正文解析出的链接」为界，之外的都是无文本来源的手动/AI 链接，保留。 */
     const byTitle = new Map(knowledge.map((k) => [normTitle(k.title), k.id]));
-    const resolved: string[] = [];
-    const re = /!?\\?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(body))) {
-      const id = byTitle.get(m[1].trim().toLowerCase());
-      if (id && id !== note.id) resolved.push(id);
-    }
-    updateKnowledge(note.id, { body, links: [...new Set([...resolved, ...note.links])] });
+    const parse = (s: string) => {
+      const out: string[] = [];
+      const re = /!?\\?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(s))) {
+        const id = byTitle.get(m[1].trim().toLowerCase());
+        if (id && id !== note.id) out.push(id);
+      }
+      return out;
+    };
+    const resolved = parse(body);
+    const textLinks = new Set(parse(note.body));
+    const manual = note.links.filter((id) => !textLinks.has(id));
+    updateKnowledge(note.id, { body, links: [...new Set([...resolved, ...manual])] });
   };
 
   const onTaChange = (body: string, caret: number) => {
@@ -537,16 +622,12 @@ export function NoteWorkspace({
     });
   };
 
-  const renameNote = (title: string) => {
-    if (!note) return;
-    const t = title.trim();
-    if (!t) return;
-    if (knowledge.some((k) => k.id !== note.id && normTitle(k.title) === normTitle(t))) {
-      toast.error("已有同名笔记");
-      return;
-    }
-    updateKnowledge(note.id, { title: t });
-  };
+  /* 标题重命名：逐键校验撞名会把中间前缀卡死（已有《机器学习》时打不出《机器学习基础》）。
+     草稿绑定笔记 id（切笔记自动失效，无需 effect 重置）：唯一即实时落库，
+     撞名只在 blur/回车提交时报错回退 */
+  const [titleDraft, setTitleDraft] = useState<{ id: string; text: string } | null>(null);
+  const titleTaken = (t: string) =>
+    knowledge.some((k) => k.id !== note?.id && normTitle(k.title) === normTitle(t));
 
   const deleteNote = () => {
     if (!note) return;
@@ -571,7 +652,12 @@ export function NoteWorkspace({
 
   /* AI 建联（沿 brain 页原有 AUTOLINK 能力）：为当前笔记找有思想联系的笔记 */
   const [linking, setLinking] = useState(false);
-  const [suggests, setSuggests] = useState<{ targetId: string; reason: string }[] | null>(null);
+  /* 建联建议绑定生成它的那篇笔记（切笔记自动失效，无需 effect 重置）：
+     否则「＋连接」会把上一篇的建议错连到当前笔记 */
+  const [suggests, setSuggests] = useState<{
+    forNote: string;
+    links: { targetId: string; reason: string }[];
+  } | null>(null);
 
   const autoLink = async () => {
     if (!note) return;
@@ -597,11 +683,12 @@ export function NoteWorkspace({
         },
         messages: [{ role: "user", content: "建立联系。" }],
         temperature: 0.3,
+        signal: AbortSignal.timeout(45_000),
         onDelta: () => {},
       });
       const parsed = autolinkSchema.parse(extractJson(full));
       if (parsed.links.length === 0) toast("暂时没有真正有联系的笔记——宁缺毋滥。");
-      else setSuggests(parsed.links);
+      else setSuggests({ forNote: note.id, links: parsed.links });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "建联失败");
     } finally {
@@ -646,10 +733,12 @@ export function NoteWorkspace({
       }
       return cur;
     };
-    for (const f of folders) ensure(f); // 自建的空文件夹
-    for (const k of knowledge) ensure(k.domain).notes.push(k);
+    /* 列表真正消费筛选结果：搜索/标签筛选时只铺命中笔记（此前 filtered 只喂页脚计数，
+       「0 篇可见」与铺满列表自相矛盾）；无筛选时保留自建的空文件夹 */
+    if (!query.trim() && !activeTag) for (const f of folders) ensure(f);
+    for (const k of filtered) ensure(k.domain).notes.push(k);
     return root;
-  }, [folders, knowledge]);
+  }, [folders, filtered, query, activeTag]);
 
   const countNotes = (dir: TreeDir): number => {
     let n = dir.notes.length;
@@ -708,6 +797,7 @@ export function NoteWorkspace({
           </button>
           <button
             title="文件夹操作"
+            aria-label="文件夹操作"
             onClick={(e) => {
               e.stopPropagation();
               setMenuFor(menuFor === dir.path ? null : dir.path);
@@ -801,6 +891,7 @@ export function NoteWorkspace({
             </button>
             <button
               title="删除这篇笔记"
+              aria-label="删除这篇笔记"
               onClick={(e) => {
                 e.stopPropagation();
                 if (!confirm(`删除《${k.title}》？此操作不可撤销。`)) return;
@@ -891,10 +982,11 @@ export function NoteWorkspace({
             }}
           />
           <button
-            title="上传文档（.docx / .md / .txt → 笔记；旧 .doc/.wps 请先另存为 .docx）"
-            aria-label="上传文档"
+            title={docBusy ? "正在转换文档…" : "上传文档（.docx / .md / .txt → 笔记；旧 .doc/.wps 请先另存为 .docx）"}
+            aria-label={docBusy ? "正在转换文档" : "上传文档"}
+            disabled={docBusy}
             onClick={() => docInputRef.current?.click()}
-            className="rounded-md p-1 text-ink-dim/70 transition hover:text-ink cursor-pointer"
+            className="rounded-md p-1 text-ink-dim/70 transition hover:text-ink cursor-pointer disabled:opacity-40"
           >
             <Upload className="size-3.5" />
           </button>
@@ -975,6 +1067,7 @@ export function NoteWorkspace({
             </button>
             <button
               title="删除这篇笔记"
+              aria-label="删除这篇笔记"
               onClick={(e) => {
                 e.stopPropagation();
                 if (!confirm(`删除《${k.title}》？此操作不可撤销。`)) return;
@@ -988,6 +1081,10 @@ export function NoteWorkspace({
             </button>
           </div>
         ))}
+        {/* 搜索/标签筛选无命中时给空态（此前列表永远铺满，「0 篇可见」自相矛盾） */}
+        {filtered.length === 0 && (query.trim() || activeTag) && (
+          <p className="px-2 py-6 text-center text-[12px] text-ink-dim/60">没有匹配的笔记</p>
+        )}
       </div>
       <p className="pt-1.5 text-[10px] text-ink-dim/60">
         {knowledge.length} 篇 · {filtered.length} 篇可见 · 拖动笔记到文件夹即可移动
@@ -1102,7 +1199,7 @@ export function NoteWorkspace({
                 >
                   #{t}
                   {(note.tags ?? []).includes(t) && (
-                    <button onClick={() => removeTag(t)} className="text-ink-dim/60 hover:text-bad cursor-pointer">
+                    <button onClick={() => removeTag(t)} aria-label={`删除标签 ${t}`} className="text-ink-dim/60 hover:text-bad cursor-pointer">
                       <X className="size-3" />
                     </button>
                   )}
@@ -1177,19 +1274,20 @@ export function NoteWorkspace({
       >
         {/* 左缘 ribbon（Obsidian 式竖排图标） */}
         <div className="hidden h-full w-11 shrink-0 flex-col items-center gap-1.5 border-r border-border py-3 lg:flex">
-          <button title="新建笔记" onClick={() => createNote()} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] cursor-pointer">
+          <button title="新建笔记" aria-label="新建笔记" onClick={() => createNote()} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] cursor-pointer">
             <Plus className="size-4.5" />
           </button>
           {importSlot}
-          <button title="开始复习" onClick={onReview} disabled={dueCount === 0} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] disabled:opacity-30 cursor-pointer">
+          <button title="开始复习" aria-label="开始复习" onClick={onReview} disabled={dueCount === 0} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] disabled:opacity-30 cursor-pointer">
             <RefreshCcw className="size-4.5" />
           </button>
-          <button title="关系图谱" onClick={onGraph} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] cursor-pointer">
+          <button title="关系图谱" aria-label="关系图谱" onClick={onGraph} className="rounded-lg p-2 text-ink transition hover:bg-black/[0.05] cursor-pointer">
             <Zap className="size-4.5" />
           </button>
           <div className="mt-auto flex flex-col items-center gap-1">
             <button
               title={rightOpen ? "收起功能面板" : "展开功能面板"}
+              aria-label={rightOpen ? "收起功能面板" : "展开功能面板"}
               onClick={() => setRightOpen((v) => !v)}
               className={cn(
                 "rounded-lg p-2 transition cursor-pointer",
@@ -1230,9 +1328,24 @@ export function NoteWorkspace({
               <div ref={headerRef} className="flex items-center gap-2 border-b border-border px-4 py-2.5">
                 <input
                   className="min-w-0 flex-1 bg-transparent text-[17px] font-bold tracking-[-0.01em] text-ink outline-none"
-                  value={note.title}
-                  onChange={(e) => renameNote(e.target.value)}
+                  value={titleDraft && titleDraft.id === note.id ? titleDraft.text : note.title}
                   spellCheck={false}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setTitleDraft({ id: note.id, text: v });
+                    const t = v.trim();
+                    if (t && !titleTaken(t)) updateKnowledge(note.id, { title: t });
+                  }}
+                  onBlur={() => {
+                    const t = titleDraft && titleDraft.id === note.id ? titleDraft.text.trim() : "";
+                    setTitleDraft(null);
+                    if (!t || t === note.title) return;
+                    if (titleTaken(t)) toast.error("已有同名笔记");
+                    else updateKnowledge(note.id, { title: t });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                  }}
                 />
                 <div className="flex shrink-0 gap-0.5 rounded-lg border border-border bg-white p-0.5">
                   <button
@@ -1260,6 +1373,7 @@ export function NoteWorkspace({
                 <button
                   onClick={deleteNote}
                   title="删除这篇笔记"
+                  aria-label="删除这篇笔记"
                   className="shrink-0 rounded-md p-1 text-ink-dim/50 transition hover:text-bad cursor-pointer"
                 >
                   <Trash2 className="size-3.5" />
@@ -1269,19 +1383,24 @@ export function NoteWorkspace({
               {/* 工具栏（编辑态）：手机可横向滚动，每个工具命中盒 ≥44px（M3-1/M5-2） */}
               {mode === "edit" && (
                 <div className="flex items-center gap-0.5 overflow-x-auto border-b border-border bg-surface-2/60 px-2 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:flex-wrap md:px-3 md:py-1.5">
-                  {TOOLBAR.map((b) => (
-                    <button
-                      key={b.title}
-                      title={b.title}
-                      aria-label={b.title}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => b.run(h)}
-                      disabled={b.id === "autolink" && linking}
-                      className="grid size-11 shrink-0 place-items-center rounded-md text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40 md:size-8"
-                    >
-                      <b.icon className="size-4" />
-                    </button>
-                  ))}
+                  {TOOLBAR.map((b) => {
+                    /* live 模式没有源码光标（taRef 只挂源码分支），包裹/双链按钮无从下手——
+                       隐藏而不是静默无操作 */
+                    if (editStyle === "live" && b.id !== "autolink") return null;
+                    return (
+                      <button
+                        key={b.title}
+                        title={b.title}
+                        aria-label={b.title}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => b.run(h)}
+                        disabled={b.id === "autolink" && linking}
+                        className="grid size-11 shrink-0 place-items-center rounded-md text-ink-dim transition hover:bg-black/[0.05] hover:text-ink cursor-pointer disabled:opacity-40 md:size-8"
+                      >
+                        <b.icon className="size-4" />
+                      </button>
+                    );
+                  })}
                   <button
                     disabled={!note}
                     title={note?.nextReviewAt ? "把这篇文章移出间隔复习队列" : "把这篇加入间隔复习队列（导入/手写笔记默认不进）"}
@@ -1373,17 +1492,17 @@ export function NoteWorkspace({
                 </div>
               )}
 
-              {/* AI 建联建议 */}
-              {mode === "edit" && suggests && suggests.length > 0 && (
+              {/* AI 建联建议（只显示给生成它的那篇笔记） */}
+              {mode === "edit" && note && suggests && suggests.forNote === note.id && suggests.links.length > 0 && (
                 <div className="border-b border-accent/20 bg-accent/[0.04] px-4 py-2">
                   <div className="mb-1 flex items-center justify-between">
                     <p className="text-[11px] font-semibold text-accent">AI 觉得这些笔记和本篇有联系</p>
-                    <button onClick={() => setSuggests(null)} className="text-ink-dim/60 hover:text-ink cursor-pointer">
+                    <button onClick={() => setSuggests(null)} aria-label="关闭建议面板" className="text-ink-dim/60 hover:text-ink cursor-pointer">
                       <X className="size-3.5" />
                     </button>
                   </div>
                   <div className="space-y-1">
-                    {suggests.map((s) => {
+                    {suggests.links.map((s) => {
                       const target = knowledge.find((k) => k.id === s.targetId);
                       if (!target || !note) return null;
                       const already = note.links.includes(s.targetId);
@@ -1394,7 +1513,9 @@ export function NoteWorkspace({
                             disabled={already}
                             onClick={() => {
                               linkNotes(note.id, s.targetId);
-                              setSuggests((p) => (p ? p.filter((x) => x.targetId !== s.targetId) : null));
+                              setSuggests((p) =>
+                                p ? { ...p, links: p.links.filter((x) => x.targetId !== s.targetId) } : null
+                              );
                             }}
                             className={cn(
                               "rounded-md border px-1.5 py-0.5 text-[11px] cursor-pointer",

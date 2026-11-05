@@ -1,5 +1,6 @@
 import { verifySession } from "@/lib/server/auth";
 import { dbGet, emailHash } from "@/lib/server/db";
+import { computeEntitlement, type UserPlanRecord } from "@/lib/server/entitlement";
 
 export const runtime = "nodejs";
 
@@ -9,17 +10,24 @@ export async function GET() {
   if (!session) return Response.json({ user: null });
 
   // 头像存在用户档案里（base64 data-URL），为守住 cookie 4096 上限不进会话；
-  // 这里按需回读补头像。数据库不可用时降级为仅会话信息——绝不因此判定未登录。
+  // 这里按需回读补头像与会员状态。数据库不可用时降级为仅会话信息——绝不因此判定未登录。
   try {
-    const record = await dbGet<{ avatar?: string }>(
+    const record = await dbGet<{ avatar?: string } & UserPlanRecord>(
       `users/${emailHash(session.email)}.json`,
       { encrypted: true }
     );
-    if (record?.avatar) {
-      return Response.json({ user: { ...session, avatar: record.avatar } });
-    }
+    const entitlement = computeEntitlement(record);
+    return Response.json({
+      user: {
+        ...session,
+        ...(record?.avatar ? { avatar: record.avatar } : {}),
+        ...(record?.plan ? { plan: record.plan } : {}),
+        ...(record?.planExpiresAt ? { planExpiresAt: record.planExpiresAt } : {}),
+        entitlement,
+      },
+    });
   } catch {
-    /* 降级：仅返回会话信息 */
+    /* 降级：仅返回会话信息——不因存储故障把人判成过期 */
   }
   return Response.json({ user: session });
 }

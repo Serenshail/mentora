@@ -5,7 +5,7 @@
  * 悬浮按钮可拖到任意位置（指针拖动），位置记住在 localStorage；轻点（未移动）才开合面板。 */
 
 import { useEffect, useRef, useState } from "react";
-import { MessageCircleQuestion, Send, X } from "lucide-react";
+import { MessageCircleQuestion, Send, Square, X } from "lucide-react";
 import { useChat } from "@/lib/use-chat";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/lib/store";
@@ -24,16 +24,20 @@ const FEATURE_CTX = `- 第二大脑 = 内嵌 Obsidian：三栏（文件夹树/�
 - 管理后台：/admin，独立密码进入（与账号登录无关）。
 - 常见问题：页面空白先强刷（Ctrl+F5）；数据没同步点侧栏「退出」重登；Obsidian 导入后笔记不进复习队列是设计如此（参考类笔记）。`;
 
-function defaultPos() {
-  /* 右下角，但必须落在移动底栏+safe-area 之上（PRD §5.10）：
-   * --mobile-nav-h(60) + --safe-bottom + 间距，桌面无底栏时只有 16px 边距。 */
-  if (typeof window === "undefined") return { x: 600, y: 600 };
+/* 移动底栏+safe 的避让间距：defaultPos/loadPos/拖拽下边界三处共用一份（此前 12/8 各写各的已漂移）。
+ * 桌面无底栏只留 desktop 间距；手机 = --mobile-nav-h + --safe-bottom + mobile 间距（PRD §5.10） */
+function bottomGap(desktop: number, mobile: number): number {
+  if (typeof window === "undefined" || window.innerWidth >= 768) return desktop;
   const rootStyle = getComputedStyle(document.documentElement);
   const navH = parseFloat(rootStyle.getPropertyValue("--mobile-nav-h")) || 60;
   const safeBottom = parseFloat(rootStyle.getPropertyValue("--safe-bottom")) || 0;
-  const isDesktop = window.innerWidth >= 768;
-  const bottomGap = isDesktop ? 16 : navH + safeBottom + 12;
-  return { x: window.innerWidth - BTN - 16, y: window.innerHeight - BTN - bottomGap };
+  return navH + safeBottom + mobile;
+}
+
+function defaultPos() {
+  /* 右下角，但必须落在移动底栏+safe-area 之上（PRD §5.10） */
+  if (typeof window === "undefined") return { x: 600, y: 600 };
+  return { x: window.innerWidth - BTN - 16, y: window.innerHeight - BTN - bottomGap(16, 12) };
 }
 
 function loadPos() {
@@ -43,13 +47,9 @@ function loadPos() {
       const p = JSON.parse(raw) as { x: number; y: number };
       if (typeof p.x === "number" && typeof p.y === "number") {
         /* 旧版本存的位置可能压在移动底栏下（v22 前 defaultPos 没有底栏概念）：迁移一次 */
-        const rootStyle = getComputedStyle(document.documentElement);
-        const navH = parseFloat(rootStyle.getPropertyValue("--mobile-nav-h")) || 60;
-        const safeBottom = parseFloat(rootStyle.getPropertyValue("--safe-bottom")) || 0;
-        const bottomGap = window.innerWidth >= 768 ? 8 : navH + safeBottom + 8;
         return {
           x: clamp(p.x, 8, window.innerWidth - BTN - 8),
-          y: clamp(p.y, 8, window.innerHeight - BTN - bottomGap),
+          y: clamp(p.y, 8, window.innerHeight - BTN - bottomGap(8, 8)),
         };
       }
     }
@@ -63,16 +63,19 @@ export function AssistantWidget() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [pos, setPos] = useState(loadPos);
-  const { messages, pending, streaming, send } = useChat();
+  /* error 要渲染（失败不可见=白烧一次调用用户却不知道）、stop 给流式取消入口 */
+  const { messages, pending, streaming, error, stop, send } = useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const drag = useRef<{ px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  /* 拖拽/轻点后的 click 只服务键盘开合（Enter/Space 不触发 pointer 事件），指针路径要压掉它防二次切换 */
+  const skipClick = useRef(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, pending, open]);
+  }, [messages.length, pending, open, error]);
 
   /* 三种关闭方式：右上 ✕、Esc、点面板外部（面板曾盖住悬浮球，只靠再点一次关不掉） */
   useEffect(() => {
@@ -101,6 +104,7 @@ export function AssistantWidget() {
   }, [pos]);
 
   const onPointerDown = (e: React.PointerEvent) => {
+    skipClick.current = false;
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { px: e.clientX, py: e.clientY, ox: pos.x, oy: pos.y, moved: false };
   };
@@ -113,13 +117,26 @@ export function AssistantWidget() {
     d.moved = true;
     setPos({
       x: clamp(d.ox + dx, 8, window.innerWidth - BTN - 8),
-      y: clamp(d.oy + dy, 8, window.innerHeight - BTN - bottomLimit()),
+      y: clamp(d.oy + dy, 8, window.innerHeight - BTN - bottomGap(8, 8)),
     });
   };
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
+    skipClick.current = true; // 指针路径在 pointerup 开合，随后的 click 压掉（防二次切换）
     if (d && !d.moved) setOpen((v) => !v); // 轻点 = 开合
+  };
+  const onToggleClick = () => {
+    if (skipClick.current) {
+      skipClick.current = false;
+      return;
+    }
+    setOpen((v) => !v); // 键盘 Enter/Space 走这里（pointer 事件不触发，只能靠 click）
+  };
+  /* 系统手势/来电等打断拖拽时会走 pointercancel 而不是 pointerup：
+   * 不复位 drag 的话，之后鼠标从球上划过（超过 5px）就会被陈旧偏移拖着走。 */
+  const onPointerCancel = () => {
+    drag.current = null;
   };
 
   /* 把助手的一条回答存进第二大脑（帮用户记笔记） */
@@ -128,16 +145,6 @@ export function AssistantWidget() {
     const title = firstLine.slice(0, 30);
     useAppStore.getState().addKnowledge([{ title, body: content, domain: "笔记" }], "manual", "AI 助手");
     toast.success(`已存为笔记「${title}」`);
-  };
-
-  /* 拖拽/初始定位的下边界：手机不得越过底栏+safe（固定浮层避让，PRD §5.10） */
-  const bottomLimit = () => {
-    if (typeof window === "undefined") return 8;
-    if (window.innerWidth >= 768) return 8;
-    const rootStyle = getComputedStyle(document.documentElement);
-    const navH = parseFloat(rootStyle.getPropertyValue("--mobile-nav-h")) || 60;
-    const safeBottom = parseFloat(rootStyle.getPropertyValue("--safe-bottom")) || 0;
-    return navH + safeBottom + 8;
   };
 
   const doSend = () => {
@@ -152,12 +159,14 @@ export function AssistantWidget() {
     });
   };
 
-  /* 面板优先放在按钮上方，空间不够则放下方；水平方向夹在视口内 */
+  /* 面板优先放在按钮上方，空间不够则放下方；水平方向夹在视口内。
+   * 高度自适应：矮视口（vh < ~576）时固定 560px 会把底部输入行推出屏幕。 */
   const vw = typeof window === "undefined" ? 1280 : window.innerWidth;
   const vh = typeof window === "undefined" ? 800 : window.innerHeight;
+  const panelH = Math.min(PANEL_H, vh - 16);
   const panelLeft = clamp(pos.x, 8, vw - PANEL_W - 8);
-  const above = pos.y - PANEL_H - 12 >= 8;
-  const panelTop = above ? pos.y - PANEL_H - 12 : clamp(pos.y + BTN + 12, 8, vh - PANEL_H - 8);
+  const above = pos.y - panelH - 12 >= 8;
+  const panelTop = above ? pos.y - panelH - 12 : clamp(pos.y + BTN + 12, 8, vh - panelH - 8);
 
   return (
     <>
@@ -167,11 +176,14 @@ export function AssistantWidget() {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onClick={onToggleClick}
+        aria-label={open ? "关闭助手" : "打开助手"}
         title="问点啥（可拖动）"
         style={{ left: pos.x, top: pos.y, width: BTN, height: BTN, touchAction: "none" }}
         className={cn(
           "fixed z-40 flex items-center justify-center rounded-full shadow-lg transition-colors select-none",
-          open ? "bg-ink text-white" : "bg-[#1d1d1f] text-white hover:bg-black/80 cursor-grab active:cursor-grabbing"
+          open ? "bg-ink text-white" : "bg-ink text-white hover:bg-black/80 cursor-grab active:cursor-grabbing"
         )}
       >
         {open ? <X className="size-5" /> : <MessageCircleQuestion className="size-5" />}
@@ -181,7 +193,7 @@ export function AssistantWidget() {
       {open && (
         <div
           ref={panelRef}
-          style={{ left: panelLeft, top: panelTop, width: `min(${PANEL_W}px, calc(100vw - 1rem))`, maxHeight: PANEL_H }}
+          style={{ left: panelLeft, top: panelTop, width: `min(${PANEL_W}px, calc(100vw - 1rem))`, maxHeight: panelH }}
           className="fixed z-40 flex flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
         >
           <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
@@ -208,7 +220,7 @@ export function AssistantWidget() {
             {messages.map((m) => (
               <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                 {m.role === "user" ? (
-                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-3 py-2 text-[12.5px] text-white">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-ink px-3 py-2 text-[12.5px] text-white">
                     {m.content}
                   </div>
                 ) : (
@@ -233,6 +245,12 @@ export function AssistantWidget() {
                 <span className="stream-cursor" />
               </div>
             )}
+            {/* 失败要可见：use-chat 的人话错误文案在此渲染，用户消息不再悬空无回应 */}
+            {error && (
+              <div role="alert" className="rounded-xl border border-bad/25 bg-bad/[0.05] px-3 py-2 text-[12px] leading-relaxed text-bad">
+                {error}
+              </div>
+            )}
             <div ref={bottomRef} />
           </div>
           <div className="border-t border-border p-2.5">
@@ -242,15 +260,30 @@ export function AssistantWidget() {
                 placeholder="问点什么…"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && doSend()}
+                onKeyDown={(e) => {
+                  // isComposing：中文输入法选词回车不算发送
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) doSend();
+                }}
               />
-              <button
-                onClick={doSend}
-                disabled={streaming || !input.trim()}
-                className="shrink-0 rounded-xl bg-[#1d1d1f] px-3 text-white transition hover:bg-black/80 disabled:opacity-40 cursor-pointer"
-              >
-                <Send className="size-4" />
-              </button>
+              {streaming ? (
+                <button
+                  onClick={stop}
+                  aria-label="停止生成"
+                  title="停止生成"
+                  className="shrink-0 rounded-xl border border-border bg-white px-3 text-ink-dim transition hover:text-ink cursor-pointer"
+                >
+                  <Square className="size-3.5 fill-current" />
+                </button>
+              ) : (
+                <button
+                  onClick={doSend}
+                  disabled={!input.trim()}
+                  aria-label="发送"
+                  className="shrink-0 rounded-xl bg-ink px-3 text-white transition hover:bg-black/80 disabled:opacity-40 cursor-pointer"
+                >
+                  <Send className="size-4" />
+                </button>
+              )}
             </div>
           </div>
         </div>

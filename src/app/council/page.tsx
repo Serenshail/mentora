@@ -86,7 +86,7 @@ export default function CouncilPage() {
     activeIdRef.current = activeId;
   }, [activeId]);
   const [picking, setPicking] = useState(false);
-  const { messages, setMessages, pending, streaming, send } = useChat();
+  const { messages, setMessages, pending, streaming, error, send, stop } = useChat();
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -122,7 +122,20 @@ export default function CouncilPage() {
   };
   const persona = active ? resolvePersona(active.personaId) : undefined;
 
+  /* 贴底守卫：流式期间每个 delta 都会触发滚底，用户上滑回读时会被一直拽回底部。
+   * 只在「用户本来就在底部附近」时跟随滚动；上滑离开底部即停手。 */
+  const stickBottomRef = useRef(true);
   useEffect(() => {
+    const onScroll = () => {
+      const el = bottomRef.current;
+      if (!el) return;
+      stickBottomRef.current = el.getBoundingClientRect().top - window.innerHeight < 160;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  useEffect(() => {
+    if (!stickBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, pending, rtTakes, rtHost]);
 
@@ -130,6 +143,10 @@ export default function CouncilPage() {
     if (active) setMessages(active.messages);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
+
+  /* 切路由离开本页时中止在途圆桌：否则 N+1 路请求会跑完并继续写全局 store，
+   * 重进同一会话再提问就是两轮并发交叉写入（use-chat.ts:108 已有同款清理）。 */
+  useEffect(() => () => rtAbortRef.current?.abort(), []);
 
   const allPersonaOptions = [
     ...ALL_SEAT_METAS.map((p) => ({ id: p.id, name: p.name, color: p.color, custom: false })),
@@ -207,7 +224,12 @@ export default function CouncilPage() {
     const text = input.trim();
     if (!text || streaming || !active) return;
     if (isRoundtable) {
-      if (rtBusyRef.current) return; // 圆桌跑动中不接新问题（重试入口在下方提示条）
+      /* 圆桌同一时刻只跑一桌（全局互斥）。但必须给反馈：
+       * 旧实现静默 return，用户在另一桌跑动时按 Enter 完全没动静，以为是卡了。 */
+      if (rtBusyRef.current) {
+        toast("另一张圆桌还在出纪要，等它跑完再发。");
+        return;
+      }
       void roundtableSend(text);
       setInput("");
       return;
@@ -333,19 +355,23 @@ export default function CouncilPage() {
       const nameOf = (id: string) => seatNames.get(id) ?? resolvePersona(id)?.name ?? "与会者";
       const validIds = Object.keys(takesMap).filter((id) => takesMap[id]);
       if (validIds.length < 2) {
+        const failedSeats = participants.filter((p) => !takesMap[p.id]);
+        /* 补答后仍凑不够 2 席（席位全失效 / 只剩 1 席）时不留重试入口：
+         * 否则「重试主持人纪要」会带着同样的 1 席再来一轮，永远空转成死局。 */
+        const retryable = validIds.length + failedSeats.length >= 2;
         addSessionMsg(sessionId, {
           id: uid("m"),
           role: "assistant",
-          content: `> 本轮有效发言不足 2 席（${validIds.length}/${participants.length + Object.keys(retry?.goodTakes ?? {}).length}），主持人不强行综合。失败席位可单独重试，补齐后再出纪要。`,
+          content: retryable
+            ? `> 本轮有效发言不足 2 席（${validIds.length}/${participants.length + Object.keys(retry?.goodTakes ?? {}).length}），主持人不强行综合。失败席位可单独重试，补齐后再出纪要。`
+            : "> 这张圆桌凑不出 2 席有效发言（与会者已被删除或席位全部失效），无法生成纪要。请新建一张圆桌重新选人。",
           at: new Date().toISOString(),
         });
-        setRtRetry({
-          sessionId,
-          question,
-          seats: participants.filter((p) => !takesMap[p.id]),
-          goodTakes: takesMap,
-          note: `${participants.filter((p) => !takesMap[p.id]).length} 席发言失败`,
-        });
+        setRtRetry(
+          retryable
+            ? { sessionId, question, seats: failedSeats, goodTakes: takesMap, note: `${failedSeats.length} 席发言失败` }
+            : null
+        );
         return;
       }
 
@@ -390,7 +416,20 @@ export default function CouncilPage() {
           content: "> 主持人纪要生成失败：各席发言已完整保留，可点「重试主持人纪要」。",
           at: new Date().toISOString(),
         });
-        setRtRetry({ sessionId, question, seats: [], goodTakes: takesMap, note: "主持人纪要失败" });
+        /* 合并而非覆盖：若本轮已有失败席位的补答入口（上面刚 setRtRetry），
+         * 直接 seats:[] 会把它们抹掉，失败席位永远补不齐（与 353 行承诺相悖）。 */
+        setRtRetry((prev) =>
+          prev && prev.sessionId === sessionId && prev.question === question
+            ? {
+                ...prev,
+                goodTakes: takesMap,
+                note:
+                  prev.seats.length > 0
+                    ? `${prev.seats.length} 席发言失败 + 主持人纪要失败（先补答失败席位，再重出纪要）`
+                    : "主持人纪要失败",
+              }
+            : { sessionId, question, seats: [], goodTakes: takesMap, note: "主持人纪要失败" }
+        );
       }
     } finally {
       // 只有当前轮才能收尾：旧轮不许清掉新轮的 live 状态（多轮并发隔离的关键）
@@ -435,12 +474,29 @@ export default function CouncilPage() {
 
   /* ---- 自定义智能体锻造 ---- */
   const [forgeOpen, setForgeOpen] = useState(false);
+  /* 删除自建人物要二次确认：removeCustomPersona 会级联删掉与 TA 的全部单聊记录，
+   * 且 2.5s 后自动推上云——误触一次就是跨设备不可逆丢失。 */
+  const [deletingPersona, setDeletingPersona] = useState<{ id: string; name: string } | null>(null);
+  /* 会话删除同样二次确认：整段对话记录，删了就找不回来。 */
+  const [deletingSession, setDeletingSession] = useState<{ id: string; title: string } | null>(null);
   const [forgeName, setForgeName] = useState("");
   const [forgeHint, setForgeHint] = useState("");
   const [forging, setForging] = useState(false);
+  const forgeAbortRef = useRef<AbortController | null>(null);
+  const forgeGenRef = useRef(0); // 关窗即换代：迟到的蒸馏结果不许复活
   const [forged, setForged] = useState<null | {
     identityNote: string; name: string; tag: string; bio: string; color: string; system: string;
   }>(null);
+
+  /* 关窗即中止本轮蒸馏：旧实现无 signal 也无丢弃检查，关掉弹窗后迟到的结果会在
+   * 下次打开时「复活」，用户可能误把已放弃的人物存进圆桌。 */
+  const closeForge = () => {
+    forgeGenRef.current += 1;
+    forgeAbortRef.current?.abort();
+    setForgeOpen(false);
+    setForged(null);
+    setForging(false);
+  };
 
   const forge = async () => {
     if (!forgeName.trim()) {
@@ -449,14 +505,20 @@ export default function CouncilPage() {
     }
     setForging(true);
     setForged(null);
+    const gen = ++forgeGenRef.current;
+    forgeAbortRef.current?.abort(); // 掐掉可能还在飞的上一轮
+    const ac = new AbortController();
+    forgeAbortRef.current = ac;
     try {
       const full = await streamChat({
         task: "persona-distill",
         args: { name: forgeName.trim(), hint: forgeHint.trim() },
         messages: [{ role: "user", content: `蒸馏：${forgeName.trim()}` }],
         temperature: 0.5,
+        signal: ac.signal,
         onDelta: () => {},
       });
+      if (gen !== forgeGenRef.current) return; // 已关窗/已换代：结果作废
       const p = personaDistillSchema.parse(extractJson(full));
       setForged({
         identityNote: p.identityNote,
@@ -467,9 +529,10 @@ export default function CouncilPage() {
         system: p.system,
       });
     } catch (e) {
+      if (gen !== forgeGenRef.current || ac.signal.aborted) return; // 主动中止不是失败
       toast.error(e instanceof Error ? e.message : "蒸馏失败，请重试");
     } finally {
-      setForging(false);
+      if (gen === forgeGenRef.current) setForging(false);
     }
   };
 
@@ -532,19 +595,31 @@ export default function CouncilPage() {
             <div className="space-y-1">
               {sessions.map((s) => {
                 const p = resolvePersona(s.personaId);
+                /* 会话行补键盘语义：div+onClick 时代键盘/读屏用户打不开历史会话。
+                 * 行内含删除按钮，故不能换成真 button，用 role+tabIndex+Enter/Space。 */
+                const openSession = () => {
+                  // 点会话必须同时退出选择页：newChat 会把 picking 置 true，
+                  // 只设 activeId 的话界面仍停在会话选择页（点旧会话看起来"没反应"）
+                  setPicking(false);
+                  setActiveId(s.id);
+                  setSessionsOpen(false); // 手机折叠条：选完即收，消息区回首屏
+                };
                 return (
                   <div
                     key={s.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`打开对话：${s.title}`}
                     className={cn(
-                      "group flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition cursor-pointer",
+                      "group flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
                       activeId === s.id ? "bg-accent/[0.08] font-medium text-accent" : "text-ink-dim hover:bg-black/[0.04]"
                     )}
-                    onClick={() => {
-                      // 点会话必须同时退出选择页：newChat 会把 picking 置 true，
-                      // 只设 activeId 的话界面仍停在会话选择页（点旧会话看起来"没反应"）
-                      setPicking(false);
-                      setActiveId(s.id);
-                      setSessionsOpen(false); // 手机折叠条：选完即收，消息区回首屏
+                    onClick={openSession}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openSession();
+                      }
                     }}
                   >
                     {s.personaId === "roundtable" ? (
@@ -554,16 +629,13 @@ export default function CouncilPage() {
                     )}
                     <span className="truncate">{s.title}</span>
                     <button
-                      className="ml-auto opacity-60 transition hover:text-bad cursor-pointer"
+                      className="tap-target ml-auto flex items-center justify-center opacity-60 transition hover:text-bad cursor-pointer"
+                      aria-label="删除会话"
                       onClick={(e) => {
                         e.stopPropagation();
-                        // 正在跑的圆桌先停掉再删，防止飞行中的请求继续写
-                        if (rtBusyRef.current && rtSessionId === s.id) rtAbortRef.current?.abort();
-                        removeSession(s.id);
-                        if (activeId === s.id) {
-                          setActiveId(null);
-                          setMessages([]);
-                        }
+                        /* 二次确认：会话里是完整对话记录，且删除会随云同步推到其他设备——
+                         * 误触一次就不可逆。 */
+                        setDeletingSession({ id: s.id, title: s.title });
                       }}
                     >
                       <Trash2 className="size-3.5" />
@@ -577,7 +649,9 @@ export default function CouncilPage() {
 
         {/* 主区 */}
         <div className="min-w-0">
-          {picking || (!active && !pending && !rtBusy) ? (
+          {/* 无 active 即回选择页：旧条件在「active 为空但流式未结束（pending / rtBusy）」
+              时留在对话区，删除当前会话后就出现 "?" 头像、空名称的幽灵聊天。 */}
+          {picking || !active ? (
             <div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <button
@@ -624,10 +698,7 @@ export default function CouncilPage() {
                       <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-ink-dim">{c.bio}</p>
                     </button>
                     <button
-                      onClick={() => {
-                        removeCustomPersona(c.id);
-                        toast.success(`已移除 ${c.name}`);
-                      }}
+                      onClick={() => setDeletingPersona({ id: c.id, name: c.name })}
                       className="absolute right-2 top-2 rounded-lg p-1.5 text-ink-dim/60 hover:bg-bad/10 hover:text-bad cursor-pointer"
                       title="删除该人物"
                     >
@@ -782,11 +853,17 @@ export default function CouncilPage() {
                     </span>
                   </div>
                 )}
+                {error && !isRoundtable && (
+                  <p className="mb-2 rounded-lg border border-bad/25 bg-bad/[0.05] px-3 py-2 text-xs leading-relaxed text-bad">
+                    {error}
+                  </p>
+                )}
                 <div className="flex gap-2">
                   <Input
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && doSend()}
+                    /* 中文输入法选词回车不该当发送：isComposing 期间放行给输入法 */
+                    onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && doSend()}
                     placeholder={
                       isRoundtable
                         ? "把问题扔到圆桌上…"
@@ -796,7 +873,18 @@ export default function CouncilPage() {
                     }
                     disabled={streaming || (rtBusy && rtSessionId === activeId)}
                   />
-                  <Button onClick={doSend} loading={streaming || rtBusy} className="h-11 shrink-0 sm:h-10">
+                  {streaming && !isRoundtable && (
+                    <Button variant="outline" onClick={stop} className="h-11 shrink-0 sm:h-10">
+                      停止
+                    </Button>
+                  )}
+                  <Button
+                    onClick={doSend}
+                    /* 忙碌状态按会话维度：旧实现用页面级 rtBusy，他桌跑动时本会话发送按钮
+                     * 假装 loading/禁用而输入框照常可输，Enter 又真的能用——按钮状态撒谎。 */
+                    loading={streaming || (rtBusy && rtSessionId === activeId)}
+                    className="h-11 shrink-0 sm:h-10"
+                  >
                     发送
                   </Button>
                 </div>
@@ -823,6 +911,7 @@ export default function CouncilPage() {
             return (
               <button
                 key={p.id}
+                aria-pressed={checked}
                 onClick={() =>
                   setRtParticipants((prev) =>
                     checked ? prev.filter((x) => x !== p.id) : [...prev, p.id]
@@ -849,8 +938,81 @@ export default function CouncilPage() {
         </div>
       </Modal>
 
+      {/* 删除会话确认 */}
+      <Modal
+        open={!!deletingSession}
+        onClose={() => setDeletingSession(null)}
+        title="删除这次对话？"
+      >
+        <p className="text-sm leading-relaxed text-ink">
+          「{deletingSession?.title}」的全部消息会一起删除，并同步到其他设备。删了找不回来。
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setDeletingSession(null)}>
+            取消
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              if (!deletingSession) return;
+              // 正在跑的圆桌先停掉再删，防止飞行中的请求继续写
+              if (rtBusyRef.current && rtSessionId === deletingSession.id) rtAbortRef.current?.abort();
+              // 单人对话在流式时也先停掉：否则 pending 仍在累积，onDone 还会往已删会话写消息
+              if (streaming && deletingSession.id === activeId) stop();
+              removeSession(deletingSession.id);
+              if (activeId === deletingSession.id) {
+                setActiveId(null);
+                setMessages([]);
+              }
+              setDeletingSession(null);
+              toast.success("已删除这次对话");
+            }}
+          >
+            删除
+          </Button>
+        </div>
+      </Modal>
+
+      {/* 删除自建人物确认：明示级联删除范围（单聊记录会一起没） */}
+      <Modal
+        open={!!deletingPersona}
+        onClose={() => setDeletingPersona(null)}
+        title="删除这个人物？"
+      >
+        <p className="text-sm leading-relaxed text-ink">
+          删除「{deletingPersona?.name}」会同时删除你和 TA 的全部单聊记录。
+          圆桌历史里的发言还在，但席位不再可选。这个动作会同步到其他设备，找不回来。
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setDeletingPersona(null)}>
+            取消
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              if (!deletingPersona) return;
+              const personaId = deletingPersona.id;
+              /* 级联清理圆桌 participants：只删 personaId 命中的单聊会话会留下悬空 id，
+               * 圆桌头部人数、实际席位卡、进度分母三处对不上。 */
+              for (const s of useAppStore.getState().sessions) {
+                if (s.personaId !== "roundtable") continue;
+                if (!(s.participants ?? []).includes(personaId)) continue;
+                updateSession(s.id, {
+                  participants: (s.participants ?? []).filter((x) => x !== personaId),
+                });
+              }
+              removeCustomPersona(personaId);
+              toast.success(`已移除 ${deletingPersona.name}`);
+              setDeletingPersona(null);
+            }}
+          >
+            删除
+          </Button>
+        </div>
+      </Modal>
+
       {/* 自定义智能体锻造 */}
-      <Modal open={forgeOpen} onClose={() => { setForgeOpen(false); setForged(null); }} title="添加人物" wide>
+      <Modal open={forgeOpen} onClose={closeForge} title="添加人物" wide>
         {!forged ? (
           <div className="space-y-3">
             <p className="text-sm text-ink-dim">

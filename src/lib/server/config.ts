@@ -16,8 +16,8 @@ const OPTIONAL = [
   "AI_CHEAP_MODEL",
   /* 复习召回：Cron 鉴权 + 发信 + 站点链接 */
   "CRON_SECRET", "RESEND_API_KEY", "MAIL_FROM", "APP_URL",
-  /* 注册邀请码通道 */
-  "INVITE_CODE",
+  /* 免费版月度 AI token 预算（PRD §3，默认 200000） */
+  "FREE_MONTHLY_TOKENS",
   /* 部署环境标识与构建版本（容器/华为云注入；Vercel 平台自动注入同义变量） */
   "DEPLOY_ENV", "APP_BUILD_SHA",
 ];
