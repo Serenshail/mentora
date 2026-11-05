@@ -270,7 +270,95 @@ async function runReadTool(name: ToolName, args: Record<string, unknown>): Promi
     }
   }
 
+  if (name === "memory" || name === "reminders") {
+    return runPersonalTool(name, args);
+  }
+
   return { result: { ok: false, content: "未知只读工具", summary: "未知工具" } };
+}
+
+/* ========= 个人扩展工具（v24.0 二期）：读走 API 直查，写产 action 待确认 ========= */
+
+async function runPersonalTool(name: ToolName, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const action = str(args.action);
+
+  if (name === "memory") {
+    if (action === "recall") {
+      const q = str(args.query);
+      const res = await fetch(`/api/memory?q=${encodeURIComponent(q)}&limit=20`);
+      const j = (await res.json().catch(() => ({}))) as { entries?: { id: string; text: string; tags: string[] }[]; total?: number };
+      const entries = j.entries ?? [];
+      if (entries.length === 0)
+        return { result: { ok: true, content: q ? "没有检索到相关记忆。" : "还没有长期记忆。", summary: "0 条" } };
+      return {
+        result: {
+          ok: true,
+          content: entries.map((m) => `- ${m.text}${m.tags.length ? `（${m.tags.join("/")}）` : ""}`).join("\n"),
+          summary: `${entries.length} 条（共 ${j.total ?? entries.length}）`,
+        },
+      };
+    }
+    if (action === "remember") {
+      const text = str(args.text);
+      if (text.length < 4) return { result: { ok: false, content: "text 太短", summary: "参数不足" } };
+      return draftAction("memory", "记住一条事实", cut(text, 40), {
+        action: "remember",
+        text,
+        tags: Array.isArray(args.tags) ? args.tags.map((t) => str(t)).filter(Boolean).slice(0, 5) : [],
+      });
+    }
+    if (action === "forget") {
+      const id = str(args.id);
+      if (!id) return { result: { ok: false, content: "需要 id（先用 action=recall 拿到）", summary: "参数不足" } };
+      return draftAction("memory", "忘掉一条记忆", cut(str(args.text) || id, 40), { action: "forget", id });
+    }
+    return { result: { ok: false, content: "action 只支持 recall/remember/forget", summary: "参数不合法" } };
+  }
+
+  /* reminders */
+  if (action === "list") {
+    const res = await fetch("/api/reminders");
+    const j = (await res.json().catch(() => ({}))) as {
+      reminders?: { id: string; title: string; time: string; days: number[]; enabled: boolean }[];
+    };
+    const list = j.reminders ?? [];
+    if (list.length === 0) return { result: { ok: true, content: "还没有定时提醒。", summary: "0 条" } };
+    const dayNames = ["日", "一", "二", "三", "四", "五", "六"];
+    return {
+      result: {
+        ok: true,
+        content: list
+          .map(
+            (r) =>
+              `- ${r.title}：${r.time}${r.days.length ? `，周${r.days.map((d) => dayNames[d]).join("")}` : "，每天"}${r.enabled ? "" : "（已停用）"}（id: ${r.id}）`
+          )
+          .join("\n"),
+        summary: `${list.length} 条`,
+      },
+    };
+  }
+  if (action === "create") {
+    const title = str(args.title);
+    const time = str(args.time);
+    if (!title || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time))
+      return { result: { ok: false, content: "需要 title 和 HH:mm 格式的 time", summary: "参数不足" } };
+    const days = Array.isArray(args.days)
+      ? args.days.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+      : [];
+    return draftAction("reminders", "新建定时提醒", `${cut(title, 20)} · ${time}`, {
+      action: "create",
+      title,
+      prompt: str(args.prompt) || title,
+      time,
+      days,
+    });
+  }
+  if (action === "delete") {
+    const id = str(args.id);
+    if (!id) return { result: { ok: false, content: "需要 id（先用 action=list 拿到）", summary: "参数不足" } };
+    return draftAction("reminders", "删除定时提醒", cut(str(args.title) || id, 30), { action: "delete", id });
+  }
+  return { result: { ok: false, content: "action 只支持 list/create/delete", summary: "参数不合法" } };
 }
 
 /* ========= 写入工具：校验 + 生成待确认 action（不执行） ========= */
@@ -530,6 +618,49 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
       const patch = (p.patch ?? {}) as Record<string, unknown>;
       store.setSettings(patch as never);
       return { ok: true, content: `设置已更新：${Object.keys(patch).join("、")}。`, summary: "已更新" };
+    }
+    /* ---- 个人扩展（v24.0 二期）：批准后写服务端 KV（技能/记忆/提醒都在云端，跨设备生效） ---- */
+    case "memory": {
+      const action = str(p.action);
+      if (action === "forget") {
+        const res = await fetch(`/api/memory?id=${encodeURIComponent(str(p.id))}`, { method: "DELETE" });
+        if (!res.ok) return { ok: false, content: "删除记忆失败", summary: "删除失败" };
+        return { ok: true, content: "已忘掉这条记忆。", summary: "已遗忘" };
+      }
+      const res = await fetch("/api/memory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: p.text, tags: p.tags, source: "agent" }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok || j.error) return { ok: false, content: `记忆保存失败：${j.error ?? res.status}`, summary: "保存失败" };
+      return { ok: true, content: `记住了：${str(p.text)}`, summary: "已记住" };
+    }
+    case "reminders": {
+      const action = str(p.action);
+      if (action === "delete") {
+        const res = await fetch(`/api/reminders?id=${encodeURIComponent(str(p.id))}`, { method: "DELETE" });
+        if (!res.ok) return { ok: false, content: "删除提醒失败", summary: "删除失败" };
+        return { ok: true, content: "提醒已删除。", summary: "已删除" };
+      }
+      const res = await fetch("/api/reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: p.title,
+          prompt: p.prompt,
+          time: p.time,
+          days: p.days,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai",
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { error?: string; reminder?: { time: string; days: number[] } };
+      if (!res.ok || j.error) return { ok: false, content: `提醒创建失败：${j.error ?? res.status}`, summary: "创建失败" };
+      return {
+        ok: true,
+        content: `定时提醒已创建：${str(p.title)} —— ${str(p.time)}${Array.isArray(p.days) && p.days.length ? ` 每周${(p.days as number[]).join("、")}` : " 每天"}（到点发到你的注册邮箱）。`,
+        summary: "已创建",
+      };
     }
     default:
       return { ok: false, content: "未知动作类型", summary: "未知动作" };

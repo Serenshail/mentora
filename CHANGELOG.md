@@ -2,6 +2,34 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v24.0 — 2026-11-05（二期：长期记忆 + 定时提醒，技能按用户裁定不做）
+
+主线：让智能体记住人、到点提醒人。技能（声明式指令安装）已按用户决定移除，代码零残留。
+
+- **长期记忆**：`memory/<userId>/<entryId>.json`（加密 KV，userId 取自会话）；`/api/memory` GET(关键词/标签检索，2-gram 相关度) / POST / DELETE；条目上限 500、单条 500 字、文本去重。
+- **智能体 `memory` 工具**：recall（读，自动）/ remember / forget（写，走审批卡）。写入链路：模型起草 → 用户批准 → 落云端 KV。
+- **记忆注入**：agent 任务组装系统提示词时带上"最近 20 条记忆摘要"（服务端组装、1.5s 硬预算，KV 慢就注入空、不拖首字节）。
+- **定时提醒**：`automations/<userId>/<id>.json`（title/prompt/time/days/timezone/enabled/lastRunKey）；`/api/reminders` CRUD；`/api/cron/tick`（CRON_SECRET fail-closed）按用户时区判定到期、幂等水位（当天同一时刻只发一次、跨天不追发）、单次上限 20 条、确定性邮件（复用 sendEmail，不再调模型，零 token 成本）。
+- **调度**：腾讯云 systemd `mentora-tick.timer` 每 60s 触发（主力）+ vercel.json 每日 07:00 北京兜底；应用内横幅显示"今日已触发的提醒"（按天可关闭）——邮件之外的第二通道。
+- **验证**：`personal.test.ts` 12 条（时区换算/到期判定/幂等/星期限定/输入校验）；真模型 e2e 6/6（记忆与提醒都经审批卡落库、注入后被模型复述、关键词检索命中、cron 无 secret 一律 403、探针数据清理）；tsc 0 错 / eslint 0 error / vitest 206 通过 / build 通过。
+- **部署纪律**：本期只上传本会话涉及的文件——并发会话的会员门禁（`lib/server/entitlement` 等未提交改动）不入生产；`/api/chat/route.ts` 用 git 干净版 + 个人上下文注入拼出可部署版本。
+- 回退：`v23.3.1`。
+
+## v23.4 — 2026-11-05（商业化闭环：激活码 / 会员到期 / 后台运营）
+
+从"一个共享内测码"升级为可售卖的一人一码体系，并把运营后台并入 Clarity Admin。
+
+- **激活码（卡密）**：一张码 = 一次兑换 = 给账号充值 N 天，30 字符表（去掉 0O1IL）3 组 4 位；`licenses/<hash>.json` 单码记录 + `licenses/index/<批次>.json` 批次索引。新增 `dbPutIfAbsent()`（Upstash/DCS `SET NX`、RDS/D1 `INSERT ... ON CONFLICT DO NOTHING RETURNING`、GitHub 201/422）做原子占用，`claim/<hash>.json` 保证一码只有一个赢家；注册写库失败会回滚占用，用户可立刻用同一张码重试。
+- **会员到期 = 只读宽限**：到期立刻停 AI（chat/search/fetch-page 返回 402 `MEMBERSHIP_EXPIRED`），但账号、笔记、导出、云同步全部保留，数据永不自动删除。老用户档案没有 `planExpiresAt` 一律视为长期有效，绝不误锁；KV 读取故障/超时降级放行——故障不该变成付费墙。
+- **注册怎么变**：`api/auth/register` 不再比对 `INVITE_CODE`（该变量停用），改为查库 + 原子占用激活码，新账号直接带 `plan/planExpiresAt`；登录与 `/api/auth/me` 一并返回权益，前端据此显示到期横幅与会员页。
+- **续费**：`/api/subscription/redeem` 在原到期日上累加（不是从今天重置），并发走 `lock/sub/<emailHash>` 短锁。新增 `/membership` 会员中心：状态、剩余天数、兑换入口、价格、人工购买说明。
+- **忘记密码改道**：不再用共享邀请码重置任意账号（等于没有锁），改为管理员在后台一键发一次性重置码（24h、用后即焚、错 8 次作废）。
+- **首页开始卖**：定价区（月付 9.9 / 年付 99.9，价格集中在 `src/lib/pricing.ts`）、FAQ（到期会怎样/数据归谁/换设备）、Hero 主 CTA 改「申请 7 天体验」并弹窗留资 → `leads/`，后台一键发体验码。
+- **后台**：Mentora 侧新增 `api/admin/licenses`、`api/admin/members`、`api/admin/leads`；Clarity Admin 新增「会员管理 / 卡密管理 / 体验申请」三页（生成批次、复制、作废、延长 30/365 天、设置到期日、置到期、发重置码、体验申请一键发码）。
+- **到期提醒**：`api/cron/expiry-reminder` 每天扫一遍，剩余 7/3/1 天与到期当天各发一封（复用既有发信通道），`reminder/<hash>/<日期>.json` 防重复。
+- 修掉两个会真出事的边界：激活码字符表实际 30 个而取模按 32 算，映射到 undefined 时 `Array.from` 静默少一位（生成过 11 位废码）；`ceil` 判定把"已过期 4 小时"算成"还剩 0 天（有效）"，付费墙会漏开一天。两者都已加测试锁住。
+- 验证：tsc 0 错 / build 通过（新增 4 条路由）/ vitest 196 通过（新增 7 条会员与卡密测试）；本地对 D1 跑通真链路：生成码 → 注册带到期日 → 续费原到期日累加 → 置过期后 chat 402 → 删除测试账号。Clarity Admin `npm run build` 通过。测试期间在库里留下的激活码已作废。
+
 ## v23.3.1 — 2026-11-05（app-shell 类型自洽：master 构建不再依赖未提交的并发改动）
 
 v23.3 部署时 Vercel 与腾讯云都构建失败：`app-shell.tsx` 用到 `user.entitlement`（并发会话正在做的会员横幅），而 master 的 `auth-client.ts` 尚无该类型（那份类型还在对方工作区未提交）。

@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Footprints,
   Sparkles,
+  X,
 } from "lucide-react";
 import { CmdK } from "@/components/cmdk";
 import { FeedbackWidget } from "@/components/feedback-widget";
@@ -116,6 +117,35 @@ function useNewBuildNotifier() {
   return stale;
 }
 
+/* 定时提醒落地提示：今天已发送的提醒在应用内也露一次面（邮件之外的第二通道）。
+ * 按天可关闭：localStorage 记 "rem-banner-<日期>"，当天关掉不再出现。 */
+function useReminderBanner() {
+  const [items, setItems] = useState<{ id: string; title: string; time: string }[]>([]);
+  const [closed, setClosed] = useState(true);
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    let dead = false;
+    try {
+      if (window.localStorage.getItem(`rem-banner-${today}`) === "1") return;
+    } catch { /* 隐私模式：照常展示 */ }
+    fetch("/api/reminders", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (dead || !j?.reminders) return;
+        const fired = (j.reminders as { id: string; title: string; time: string; firedToday?: boolean }[])
+          .filter((r) => r.firedToday);
+        if (fired.length > 0) { setItems(fired); setClosed(false); }
+      })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, []);
+  const close = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    try { window.localStorage.setItem(`rem-banner-${today}`, "1"); } catch { /* 忽略 */ }
+    setClosed(true);
+  };
+  return { items, closed, close };
+}
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const provider = useAppStore((s) => s.settings.provider);
@@ -124,6 +154,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, logout, checking } = useAuth();
   const syncStatus = useSyncStatus((s) => s.status);
   const buildStale = useNewBuildNotifier();
+  const reminderBanner = useReminderBanner();
   useAutoPush(!!user);
   useFlushOnHide(!!user); // 关页/切后台前强制 flush,防数据没推上去就丢
 
@@ -297,6 +328,23 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             已发布新版本，点此刷新更新
           </button>
+        </div>
+      )}
+      {/* 今日提醒横幅（邮件之外的第二通道；按天可关闭） */}
+      {!reminderBanner.closed && reminderBanner.items.length > 0 && (
+        <div className="fixed inset-x-0 top-0 z-[55] flex justify-center px-3 pt-2">
+          <div className="flex max-w-[92vw] items-center gap-3 rounded-full border border-accent/30 bg-white px-4 py-1.5 shadow-lg">
+            <span className="truncate text-[12px] text-ink">
+              今日提醒：{reminderBanner.items.map((r) => `${r.time} ${r.title}`).join("；")}
+            </span>
+            <button
+              onClick={reminderBanner.close}
+              aria-label="关闭提醒横幅"
+              className="shrink-0 cursor-pointer rounded-md p-0.5 text-ink-dim transition hover:text-ink"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
         </div>
       )}
       {/* 侧边栏：Apple 玻璃配方（saturate 180% + blur 20px）——玻璃只用于真正层叠处 */}

@@ -9,6 +9,7 @@ import { resolveByok, serverConfig } from "@/lib/server/ai-config";
 import { isDeployed } from "@/lib/server/deploy-env";
 import * as P from "@/lib/ai/prompts";
 import { agentToolsPrompt, agentToolsSchema } from "@/lib/server/agent-tools";
+import { agentPersonalContext } from "@/lib/server/personal";
 import { ToolCallAggregator } from "@/lib/agent/parse";
 import { logEvent } from "@/lib/server/config";
 import {
@@ -111,6 +112,7 @@ ${s("ragCtx")}
         deep: args.deep === true,
         hasImage: args.hasImage === true,
         tools: args.noTools === true ? "" : agentToolsPrompt(),
+        personal: s("personal"),
       });
     case "note-assist": return P.NOTE_ASSIST(s("mode"), s("text"));
     case "wiki-compile": return P.WIKI_COMPILE(s("target"), s("candidates"));
@@ -438,6 +440,13 @@ export async function POST(req: NextRequest) {
   if (!byok && cfg.provider !== "demo" && body.task && CHEAP_TASKS.has(body.task)) {
     const cheap = (process.env.AI_CHEAP_MODEL || "").trim();
     if (cheap) cfg = { ...cfg, model: cheap };
+  }
+
+  /* 个人上下文（v24.0 二期）：长期记忆摘要，仅 agent 任务、登录态；
+   * 带 1.5s 硬预算——KV 变慢宁可不注入，也不能让首字节等超时。 */
+  if (body.task === "agent" && session) {
+    const personal = await withBudget(agentPersonalContext(session.userId), "", 1500);
+    body.args = { ...(body.args ?? {}), personal };
   }
 
   // 双契约：客户端发 args(新,核心任务)→服务端组装提示词；发 system(旧,council)→沿用。

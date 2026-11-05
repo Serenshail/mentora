@@ -55,7 +55,12 @@ export type ToolName =
   /** 新建人生伙伴会话 */
   | "create_session"
   /** 修改白名单设置（userName/coachTone/digestWeekly；provider/model 需确认） */
-  | "update_settings";
+  | "update_settings"
+  /* ---- 个人扩展（v24.0 二期，action 型；读自动、写需确认） ---- */
+  /** 长期记忆：recall / remember / forget */
+  | "memory"
+  /** 定时提醒：list / create / delete */
+  | "reminders";
 
 export interface ToolSpec {
   name: ToolName;
@@ -193,6 +198,22 @@ export const TOOLS: Record<ToolName, ToolSpec> = {
     risk: "write",
     description: "修改白名单内的设置：称呼、教练风格、周报开关、模型选择。API Key 与自定义端点不可通过此工具修改。",
     params: "userName?: string, coachTone?: \"standard\"|\"gentle\", digestWeekly?: boolean, provider?: string, model?: string",
+  },
+  memory: {
+    name: "memory",
+    label: "长期记忆",
+    risk: "read",
+    description:
+      "长期记忆：action=recall 按 query 检索；action=remember 记一条用户事实（写，需确认）；action=forget 删除一条（写）。只记关于用户本人的稳定事实（保留用户原话要点，不要过度改写），不记寒暄。",
+    params: 'action: "recall"|"remember"|"forget", query?, text?, tags?: string[], id?',
+  },
+  reminders: {
+    name: "reminders",
+    label: "定时提醒",
+    risk: "read",
+    description:
+      "定时提醒（到点发邮件）：action=list 列出；action=create 新建（写，需确认）；action=delete 删除（写）。用户说\"每天早上 8 点提醒我复习\"就用这个。",
+    params: 'action: "list"|"create"|"delete", title?, prompt?, time?（HH:mm）, days?: number[]（0=周日）, id?',
   },
 };
 

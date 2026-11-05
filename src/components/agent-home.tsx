@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import type { ChatMsg } from "@/lib/types";
 
 /* 工作台「产物」统计的写入类工具集合（与 tool-executors 的写工具一致） */
-const WRITE_TOOL_NAMES = new Set(["save_note", "update_note", "delete_note", "create_goal", "add_book", "create_session", "update_settings"]);
+const WRITE_TOOL_NAMES = new Set(["save_note", "update_note", "delete_note", "create_goal", "add_book", "create_session", "update_settings", "memory", "reminders"]);
 
 /** SOLO 右栏的分块容器 */
 function RailBlock({ title, children }: { title: string; children: ReactNode }) {
@@ -134,6 +134,10 @@ export function AgentHome() {
     return () => document.removeEventListener("paste", onPaste);
   }, []);
 
+  /* 卸载（切路由）时中止在途 runAgent：工具循环最多 5 轮 + 最终回答，全部会打到上游
+   * 白烧 token；返回首页再提问还会出现两条并发循环（use-chat.ts:108 已有同款清理）。 */
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const requestApproval = (actions: PendingAction[]): Promise<ApprovalDecision[]> => {
     decisionsRef.current = new Map();
     setPendingActions(actions);
@@ -172,7 +176,8 @@ export function AgentHome() {
   const send = async (preset?: string) => {
     const q = (preset ?? input).trim();
     if ((!q && !attach) || busy) return;
-    setInput("");
+    // 只有内容来自输入框时才清空，点示例 chip 不清掉用户正在写的草稿
+    if (!preset) setInput("");
     setBusy(true);
     setPending("");
     setPlan([]);
