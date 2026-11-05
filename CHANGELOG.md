@@ -2,6 +2,52 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v23.3 — 2026-11-05（工作台合并与首页面板化：学习=教练+读书，首页 = Trae SOLO 式布局）
+
+按用户定稿的信息架构重排：应用不堆入口，一个工作台装一类事。
+
+- **学习 = 教练 + 读书伙伴**：/learn 顶部加「学习教练 | 读书伙伴」切换（?tab=read 直达）；读书列表抽成 ReadWorkspace 组件复用于 tab；/read 列表入口 301 式重定向到 /learn?tab=read，书籍详情 /read/[id] 保留原路由（深链与智能体产物跳转不受影响）。
+- **侧栏终版顺序**：Mentora → 学习人生 → 学习 → 人生伙伴 → 设置（移动底栏同步；/read、/brain 路由高亮归到「学习」）。
+- **首页改 Trae SOLO 式布局**：顶部会话 tabs（横向切换、激活 tab 可删）＋左侧 Chat 主区＋右侧工作台三块——「任务」（计划三态＋工具调用实时状态）「产物」（本会话写入结果＋联网来源链接）「会话」（历史切换/删除）；移动端工作台以 slide-over 呼出。计划与工具从消息流移入工作台（消息区只留对话与思考摘要）。
+- 文案同步：智能体界面说明与 add_book 回执改为「学习」页内读书入口。
+- **验证**：tsc 0 错 / eslint 0 error / vitest 189 通过 / build 通过；真模型 e2e 8/8（导航顺序、SOLO 三块工作台、会话 tab、学习双 tab、读书嵌入、/read 重定向、Bing 搜索回归）。
+- 回退：`v23.2.1`。
+
+## v23.2.3 — 2026-11-05（审查 medium 第一批：协议完整性、同步失败态、可取消与限流缺口）
+
+- **半截回答不再当成功**：`streamChat` 必须读到服务端的 `{"t":"end"}` 才返回；流被网关/平台掐断时抛「连接中断，回答没有生成完」。此前残句会被当完整答案，结构化任务则误报「无法解析 JSON」。新增 `stream-end.test.ts` 两条回归锁。
+- **拉取失败 ≠ 云端为空**：`pullCloud` 改为 ok / empty / error 三态。登录同步与开机同步在 error 时保持本地不动、也不反推（旧实现把 401/503 折叠成 null，一次 KV 抖动就会用旧本地覆盖云端）；设置页「从云端恢复」区分三种结果并给出对应提示。
+- **并发与加载兜底**：`useChat.send` 加在途守卫（旧实现只覆盖 abortRef，两条流会交错写 pending、互相覆盖消息并双倍计费）；`useHydrated` 的动态 import 补 `.catch` 放行，旧 chunk 404 时不再把页面永久锁在骨架。
+- **失败可见 / 可取消**：圆桌单人对话渲染 error 并提供「停止」；读书对话流式期间增加「停止」按钮，主动取消标 cancelled 而非 failed。
+- **限流缺口**：`admin/users`（含删除用户）与 `admin/feedback-state` 补 10/分持久桶（此前只靠 proxy 进程内桶，后台密码可被轮询爆破）；`/api/sync` GET/POST 分桶（读 30/分、写 60/分，写额度高于 2.5s 防抖的正常峰值）。
+- **注册名字长度**：对齐 profile 的 24 字上限，避免超长 name 写爆会话 cookie（注册成功却无会话、且无法自助修复）。
+- 验证：tsc 0 错 / eslint 0 error / vitest 189 通过（7 skipped）/ build 通过。
+
+## v23.2.2 — 2026-11-05（全库审查 18 条 high 收口：静默数据丢失、限流与 SSRF）
+
+依据 `code-review/Mentora-全库代码审查报告-2026-11-04.md`，把 18 条 high 全部处理完。
+
+**数据丢失 / 闭环**
+- 判分通过后的掌握状态改用 store 定点 patch（`setDayKnowledgeMastery`），不再用渲染闭包里的旧 `plan` 整体回写冲掉 `passed/pendingUnlock/attempts`（下一天永不解锁的死锁）；AskCoach 答疑与读书三重验收同型问题一并改为 `appendDayQa` / `updateBookChapter`。
+- 新建空笔记的默认路径不再因 `active == null` 丢正文：LiveBlocks 增加草稿追踪与卸载兜底，AI 改写结果同样计入待提交。
+- 导入备份/云端快照做结构校验：坏字段整份拒绝、脏元素规范化、非法 provider 丢弃、空 `apiKey` 不再抹掉本机 Key；`ModelSection` 对 provider 索引兜底。
+- 小程序同步：脏标记与云端水位持久化；force 拉取不再绕过「未推送不覆盖」；登出/切后端等推送落地（≤5s）再清身份；`me()` 在途去重；手动拉取失败不再误报「已一致」。
+- `bootSync` / `syncAfterLogin` 用 store 引用变化检测「拉取窗口内刚输入、尚未推送」的编辑，命中即改为推送本地。
+- `wikiRetrieve` 跳过不在 `byId` 的悬挂出链/被裁决淘汰的目标（旧实现 `byId.get(id)!` 后读 `tags` 直接 TypeError）。
+- `quizLog` 两侧（Web store / 小程序）只保留最近 200 次、长文本按字段截断，避免无界增长把全量快照推过 4.5MB 后连带本机写盘失败。
+
+**交互安全**
+- 读书页删书、圆桌删除自建人物都改为确认弹窗，并明示级联删除范围（章节/洞见/对话、单聊记录）。
+- 读书对话失败不再静默：消费 `useChat` 的 error 渲染在输入框上方、阶段标红；用户消息在发送前落库，失败刷新也不丢。
+
+**服务端**
+- 限流键取 `X-Forwarded-For` 右侧可信跳（`TRUSTED_PROXY_HOPS`，默认 1），伪造前缀无法轮换桶；`proxy.ts` 统一使用同一实现。
+- BYOK custom 端点改为 `redirect:"manual"` 逐跳复检（最多 3 跳），堵住 302 打内网的带读取 SSRF。
+- `/api/chat` 读体阶段补 abort 监听与 45s 空闲超时：客户端断开后真正停掉上游，token 不再白烧。
+
+- 回归锁新增：`backup-import.test.ts` 6 条、`client-ip.test.ts` 5 条、`rag.test.ts` 悬挂链接 1 条。
+- 验证：tsc 0 错 / eslint 0 error / vitest 187 通过（7 skipped）/ build 通过。
+
 ## v23.2.1 — 2026-11-05（"学习卡片空白"诊断与自托管陈旧 bundle 根修）
 
 用户截图学习页卡片无标题。排查结论：**不是当前代码的数据或渲染 bug**——本地以四种数据形状（正常 topic / 空 topic+空 direction / 空 draft / agent 建目标）在 390px 移动视口复现，标题、进度环、徽章、方向全部正常渲染；腾讯云构建 chunk 里也确认存在「未命名目标」兜底。空白标题只在 e373511（11-04 18:04）**之前**的 bundle 才会出现。

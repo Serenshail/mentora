@@ -35,12 +35,13 @@ import { useEffect, useState, type ReactNode } from "react";
 /* 侧栏（v22.0 重构）：首页 = 智能体；学习教练与第二大脑合并为「学习」；
  * 学习人生接管原首页的所有卡片（日历/学习进行时/复习/读书/人生伙伴）。
  * 读书伙伴与人生伙伴保留独立入口（各有结构化工作台）。 */
+/* 侧栏（v23.3 重排）：读书伙伴并入「学习」工作台（第二个 tab）；
+ * 学习人生紧随 Mentora；人生伙伴回到学习之后。NAV 顺序 = 用户指定终版。 */
 const NAV = [
   { href: "/", label: "Mentora", icon: Sparkles },
-  { href: "/council", label: "人生伙伴", icon: Compass },
-  { href: "/learn", label: "学习", icon: GraduationCap },
   { href: "/life", label: "学习人生", icon: Footprints },
-  { href: "/read", label: "读书伙伴", icon: BookOpen },
+  { href: "/learn", label: "学习", icon: GraduationCap },
+  { href: "/council", label: "人生伙伴", icon: Compass },
   { href: "/settings", label: "设置", icon: Settings2 },
 ];
 
@@ -51,6 +52,34 @@ const MOBILE_PRIMARY = NAV.slice(0, 5);
 const MOBILE_MORE = NAV.slice(5);
 
 /* 管理员邮箱（与 /admin 服务端鉴权同一份白名单）；非管理员不显示入口 */
+
+/* 会员到期提示：到期不把人关在门外——只停 AI，笔记与导出照常。
+ * 所以这里是一条可关闭前不可忽视的横幅，而不是拦截页。 */
+function MembershipBanner() {
+  const { user } = useAuth();
+  const ent = user?.entitlement;
+  if (!ent || (ent.status !== "expired" && ent.status !== "expiring")) return null;
+  const expired = ent.status === "expired";
+  return (
+    <Link
+      href="/membership"
+      className={cn(
+        "mb-5 flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-xs transition",
+        expired
+          ? "border-bad/25 bg-bad/[0.06] text-bad hover:bg-bad/[0.1]"
+          : "border-warn/25 bg-warn/[0.06] text-warn hover:bg-warn/[0.1]"
+      )}
+    >
+      <Sparkles className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1">
+        {expired
+          ? "会员已到期：AI 生成已暂停，笔记与数据仍可查看和导出。"
+          : `会员还剩 ${ent.daysLeft} 天，到期后 AI 生成会暂停。`}
+      </span>
+      <span className="shrink-0 font-semibold underline-offset-2 hover:underline">续费 →</span>
+    </Link>
+  );
+}
 
 /* 新版本提醒（自托管关键 UX）：长驻标签页会一直跑部署时的旧 bundle（移动端
  * 冻结标签页尤其明显——用户看到的永远是旧功能/旧 bug）。/api/health 返回构建
@@ -226,7 +255,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   /* /brain 是学习教练的姊妹工作台（v22 合并后同属「学习」），高亮归到 /learn */
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
-    if (href === "/learn") return pathname.startsWith("/learn") || pathname.startsWith("/brain");
+    /* 读书伙伴已并入「学习」工作台：/read 列表与详情都归「学习」高亮 */
+    if (href === "/learn") return pathname.startsWith("/learn") || pathname.startsWith("/brain") || pathname.startsWith("/read");
     return pathname.startsWith(href);
   };
 
@@ -459,6 +489,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <main className="reserve-mobile-nav flex w-full flex-1 flex-col px-4 pt-6 md:px-7 md:py-8">
+          <MembershipBanner />
           <div key={pathname} className="page-fade">
             <ErrorBoundary>{children}</ErrorBoundary>
           </div>

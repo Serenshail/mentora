@@ -507,7 +507,7 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
       });
       return {
         ok: true,
-        content: `《${title}》已上架，阅读计划拆了 ${plan.chapters.length} 章：${plan.chapters.map((c) => c.title).join("、")}。可以去「读书伙伴」开始读。`,
+        content: `《${title}》已上架，阅读计划拆了 ${plan.chapters.length} 章：${plan.chapters.map((c) => c.title).join("、")}。可以去「学习」页的「读书伙伴」开始读。`,
         summary: `${plan.chapters.length} 章`,
       };
     }

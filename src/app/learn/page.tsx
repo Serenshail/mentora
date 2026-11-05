@@ -7,9 +7,10 @@ import { Badge, Button, Card, Empty, Input, PageHeader, ProgressRing, StatusDot,
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { DOMAIN_LABELS, type DomainKind } from "@/lib/types";
-import { Brain, Compass, GraduationCap, Plus, Trash2 } from "lucide-react";
+import { Brain, BookOpen, Compass, GraduationCap, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
+import { ReadWorkspace } from "@/components/read-workspace";
 
 function goalProgress(goals: ReturnType<typeof useAppStore.getState>["goals"][number]) {
   if (!goals.plan) return { done: 0, total: 0, ratio: 0 };
@@ -36,6 +37,11 @@ export default function LearnPage() {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [alsoNotes, setAlsoNotes] = useState(true); // 删计划类笔记(总纲要/阶段/目录)
   const [alsoKnowledge, setAlsoKnowledge] = useState(false); // 连知识点(含复习队列)一起删,默认保护
+  /* v23.3：学习 = 教练 + 读书伙伴 两个功能合一个工作台；?tab=read 直达读书 */
+  const [tab, setTab] = useState<"coach" | "read">("coach");
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab") === "read") setTab("read");
+  }, []);
 
   const start = () => {
     const t = topic.trim() || "Python";
@@ -58,6 +64,31 @@ export default function LearnPage() {
         }
       />
 
+      {/* 学习工作台 tabs（Trae 式：一个工作台，教练与读书两个功能） */}
+      <div className="mb-4 flex items-center gap-1.5 rounded-xl border border-border bg-surface-2/50 p-1">
+        {([
+          { key: "coach", label: "学习教练", icon: GraduationCap },
+          { key: "read", label: "读书伙伴", icon: BookOpen },
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={cn(
+              "flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition",
+              tab === t.key
+                ? "bg-white text-ink shadow-sm"
+                : "text-ink-dim hover:text-ink"
+            )}
+          >
+            <t.icon className="size-4" /> {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "read" ? (
+        <ReadWorkspace />
+      ) : (
+        <>
       {/* 方向迷茫：第一性原理引导对话 */}
       <DirectionGuideCard />
 
@@ -159,6 +190,8 @@ export default function LearnPage() {
             );
           })}
         </div>
+      )}
+        </>
       )}
 
       {confirmId && (

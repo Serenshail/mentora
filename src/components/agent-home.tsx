@@ -5,8 +5,8 @@
  * UI：消息流（含过程产物 meta）+ 流式正文 + 审批卡队列 + 引用来源。
  * 页面关系：对话是主入口；学习/读书/圆桌/笔记库保留为工作台，Agent 的写入
  * 最终都落到这些工作台的数据里。 */
-import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Check, Circle, Eraser, History, ImagePlus, Link2, Loader2, Plus, Sparkles, X, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowUp, Check, Circle, Eraser, ImagePlus, Link2, Loader2, PanelsTopLeft, Plus, Sparkles, X, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
@@ -16,6 +16,19 @@ import { TOOLS, type ApprovalDecision, type PlanStep, type ToolCall } from "@/li
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
 import type { ChatMsg } from "@/lib/types";
+
+/* 工作台「产物」统计的写入类工具集合（与 tool-executors 的写工具一致） */
+const WRITE_TOOL_NAMES = new Set(["save_note", "update_note", "delete_note", "create_goal", "add_book", "create_session", "update_settings"]);
+
+/** SOLO 右栏的分块容器 */
+function RailBlock({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="rounded-xl border border-border bg-surface-2/40 p-2.5">
+      <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim">{title}</p>
+      {children}
+    </div>
+  );
+}
 
 const CHIPS = ["帮我查一下最新的 Next.js 15 有什么新特性", "协程和线程到底差在哪？", "把「间隔重复的原理」整理成一篇笔记存起来"];
 
@@ -83,7 +96,7 @@ export function AgentHome() {
   const setAgentActive = useAppStore((s) => s.setAgentActive);
   const removeAgentSession = useAppStore((s) => s.removeAgentSession);
   const activeSession = sessions.find((x) => x.id === activeId) ?? null;
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState("");
   const [busy, setBusy] = useState(false);
@@ -268,29 +281,168 @@ export function AgentHome() {
   /* eslint-enable react-hooks/purity */
 
   const shown = (activeSession?.messages ?? []).slice(-10);
+  const switchSession = (id: string) => {
+    setAgentActive(id);
+    setPending("");
+    setPlan([]);
+    setTools([]);
+    setPendingActions([]);
+  };
+  /* 工作台「产物」：本会话的写入结果与引用来源（Trae Context 式聚合） */
+  const artifacts = (() => {
+    const arts: { key: string; label: string; summary?: string }[] = [];
+    const cites: { title: string; url: string }[] = [];
+    const seenUrl = new Set<string>();
+    for (const m of activeSession?.messages ?? []) {
+      for (const t of m.meta?.tools ?? []) {
+        if (t.status === "completed" && WRITE_TOOL_NAMES.has(t.name)) {
+          arts.push({ key: t.id, label: TOOLS[t.name as keyof typeof TOOLS]?.label ?? t.name, summary: t.summary });
+        }
+      }
+      for (const c of m.meta?.citations ?? []) {
+        if (!seenUrl.has(c.url)) { seenUrl.add(c.url); cites.push(c); }
+      }
+    }
+    return { arts, cites };
+  })();
+  /* 最近一条带过程产物的历史消息（旧会话打开工作台也有上下文） */
+  const latestMeta = [...(activeSession?.messages ?? [])].reverse().find((m) => m.meta?.plan?.length || m.meta?.tools?.length)?.meta;
+  /* 工作台三块（任务 / 产物 / 会话）：桌面右栏与移动 slide-over 共用 */
+  const railBlocks = (
+    <>
+      <RailBlock title="任务">
+        {plan.length > 0 || tools.length > 0 ? (
+          <>
+            {plan.length > 0 && (
+              <ol className="space-y-1">
+                {plan.map((st) => (
+                  <li key={st.id} className="flex items-start gap-1.5 text-[11.5px]">
+                    <span className="mt-[3px] shrink-0">
+                      {st.status === "completed" ? (
+                        <Check className="size-3 text-ok" />
+                      ) : st.status === "in_progress" ? (
+                        <Loader2 className="size-3 animate-spin text-accent" />
+                      ) : st.status === "skipped" ? (
+                        <X className="size-3 text-ink-dim/40" />
+                      ) : (
+                        <Circle className="size-3 text-ink-dim/30" />
+                      )}
+                    </span>
+                    <span className={cn(st.status === "in_progress" ? "text-ink" : "text-ink-dim", st.status === "completed" && "line-through decoration-ink-dim/30")}>
+                      {st.text}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {tools.length > 0 && (
+              <div className={cn("space-y-1", plan.length > 0 && "mt-2")}>
+                {tools.map((t) => (
+                  <div
+                    key={t.id}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]",
+                      t.status === "failed"
+                        ? "border-bad/30 bg-bad/[0.04] text-bad"
+                        : t.status === "declined"
+                          ? "border-border bg-white text-ink-dim line-through decoration-ink-dim/40"
+                          : t.status === "in_progress"
+                            ? "border-accent/25 bg-accent/[0.04] text-ink-dim"
+                            : "border-border bg-white text-ink-dim"
+                    )}
+                  >
+                    {t.status === "in_progress" ? (
+                      <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
+                    ) : t.status === "failed" || t.status === "declined" ? (
+                      <X className="size-3 shrink-0" />
+                    ) : (
+                      <Check className="size-3 shrink-0 text-ok" />
+                    )}
+                    <span className="shrink-0 font-medium">{TOOLS[t.name]?.label ?? t.name}</span>
+                    {t.summary && <span className="truncate opacity-70">· {t.summary}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : latestMeta?.plan?.length ? (
+          <ol className="space-y-1">
+            {latestMeta.plan.map((st) => (
+              <li key={st.id} className={cn("flex items-center gap-1.5 text-[11.5px]", st.status === "completed" && "text-ink-dim line-through decoration-ink-dim/30")}>
+                {st.status === "completed" ? <Check className="size-3 shrink-0 text-ok" /> : <Circle className="size-3 shrink-0 text-ink-dim/30" />}
+                <span className="truncate">{st.text}</span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="text-[11px] leading-relaxed text-ink-dim/60">多步任务会在这里展开为计划与工具调用；写入动作完成后沉淀到「产物」。</p>
+        )}
+      </RailBlock>
+      <RailBlock title="产物">
+        {artifacts.arts.length === 0 && artifacts.cites.length === 0 ? (
+          <p className="text-[11px] leading-relaxed text-ink-dim/60">存笔记、建目标、加书等写入结果与联网来源会沉淀在这里。</p>
+        ) : (
+          <div className="space-y-1.5">
+            {artifacts.arts.map((a) => (
+              <div key={a.key} className="flex items-center gap-1.5 text-[11.5px] text-ink-dim">
+                <Check className="size-3 shrink-0 text-ok" />
+                <span className="shrink-0 font-medium text-ink">{a.label}</span>
+                {a.summary && <span className="truncate opacity-70">· {a.summary}</span>}
+              </div>
+            ))}
+            {artifacts.cites.map((c, i) => (
+              <a key={c.url} href={c.url} target="_blank" rel="noopener noreferrer" className="block truncate text-[11px] text-accent hover:underline">
+                [{i + 1}] {c.title || c.url}
+              </a>
+            ))}
+          </div>
+        )}
+      </RailBlock>
+      <RailBlock title="会话">
+        {sessions.length === 0 ? (
+          <p className="text-[11px] text-ink-dim/60">还没有历史对话。</p>
+        ) : (
+          <div className="space-y-0.5">
+            {sessions.map((sess) => (
+              <div key={sess.id} className={cn("group flex items-center gap-1 rounded-lg px-1.5 py-1", sess.id === activeId ? "bg-surface-2" : "hover:bg-black/[0.04]")}>
+                <button onClick={() => switchSession(sess.id)} className="min-w-0 flex-1 cursor-pointer text-left">
+                  <p className="truncate text-[12px] text-ink">{sess.title}</p>
+                  <p className="text-[10px] text-ink-dim/70">{sess.messages.length} 条 · {new Date(sess.updatedAt).toLocaleDateString("zh-CN")}</p>
+                </button>
+                <button onClick={() => removeAgentSession(sess.id)} aria-label="删除这段对话" className="cursor-pointer rounded-md p-1 text-ink-dim/50 opacity-0 transition hover:bg-bad/10 hover:text-bad group-hover:opacity-100">
+                  <Trash2 className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </RailBlock>
+    </>
+  );
 
   return (
-    <div className="flex h-[calc(100dvh-150px)] min-h-[520px] flex-col">
-      {/* 头部：标识 + 新建对话 + 历史记录 + 清空当前 */}
-      <div className="relative flex items-center justify-between px-1 pb-3">
+    <div className="flex h-[calc(100dvh-150px)] min-h-[520px] flex-col lg:flex-row lg:gap-5">
+      {/* ===== Chat 主区（Trae SOLO 式左栏） ===== */}
+      <section className="flex min-w-0 flex-1 flex-col">
+      {/* 头部：标识 + 工作台(移动) + 新对话 + 清空 */}
+      <div className="flex items-center justify-between px-1 pb-2">
         <div className="flex items-center gap-2">
           <span className="grid size-6 place-items-center rounded-lg bg-[#1d1d1f] text-white">
             <Sparkles className="size-3.5" />
           </span>
           <p className="text-[13px] font-semibold text-ink">Mentora</p>
-          {activeSession && (
-            <span className="max-w-[220px] truncate text-[11px] text-ink-dim/70">
-              {activeSession.title}
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-1">
           <button
+            onClick={() => setWorkspaceOpen(true)}
+            className="flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink lg:hidden"
+          >
+            <PanelsTopLeft className="size-3.5" /> 工作台
+          </button>
+          <button
             onClick={() => {
               if (busy) return;
-              /* 已有空白新会话就不重复建 */
               if (!activeSession || activeSession.messages.length > 0) newAgentSession();
-              setHistoryOpen(false);
             }}
             disabled={busy}
             className="flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink disabled:opacity-40"
@@ -298,66 +450,43 @@ export function AgentHome() {
           >
             <Plus className="size-3.5" /> 新对话
           </button>
-          <div className="relative">
-            <button
-              onClick={() => setHistoryOpen((v) => !v)}
-              className="flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink"
-              title="历史对话"
-            >
-              <History className="size-3.5" /> 历史{sessions.length > 0 ? ` ${sessions.length}` : ""}
-            </button>
-            {historyOpen && (
-              <div className="absolute right-0 top-full z-20 mt-1 max-h-[320px] w-72 overflow-y-auto rounded-xl border border-border bg-white p-1.5 shadow-xl">
-                {sessions.length === 0 && (
-                  <p className="px-2 py-3 text-center text-[11.5px] text-ink-dim">还没有历史对话</p>
-                )}
-                {sessions.map((sess) => (
-                  <div
-                    key={sess.id}
-                    className={cn(
-                      "group flex items-center gap-1 rounded-lg px-2 py-1.5",
-                      sess.id === activeId ? "bg-surface-2" : "hover:bg-black/[0.04]"
-                    )}
-                  >
-                    <button
-                      onClick={() => {
-                        setAgentActive(sess.id);
-                        setHistoryOpen(false);
-                        setPending("");
-                        setPlan([]);
-                        setTools([]);
-                        setPendingActions([]);
-                      }}
-                      className="min-w-0 flex-1 cursor-pointer text-left"
-                    >
-                      <p className="truncate text-[12px] text-ink">{sess.title}</p>
-                      <p className="text-[10.5px] text-ink-dim/70">
-                        {sess.messages.length} 条 · {new Date(sess.updatedAt).toLocaleDateString("zh-CN")}
-                      </p>
-                    </button>
-                    <button
-                      onClick={() => removeAgentSession(sess.id)}
-                      aria-label="删除这段对话"
-                      className="cursor-pointer rounded-md p-1 text-ink-dim/50 opacity-0 transition hover:bg-bad/10 hover:text-bad group-hover:opacity-100"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
           {shown.length > 0 && (
-            <button
-              onClick={clearAgentChat}
-              className="flex shrink-0 cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink"
-              title="清空这段对话"
-            >
+            <button onClick={clearAgentChat} className="flex shrink-0 cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink" title="清空这段对话">
               <Eraser className="size-3" /> 清空
             </button>
           )}
         </div>
       </div>
+      {/* SOLO 式会话 tabs：横向切换，激活 tab 可删 */}
+      {sessions.length > 0 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto px-1 pb-2 [scrollbar-width:none]">
+          {sessions.slice(0, 8).map((sess) => (
+            <div
+              key={sess.id}
+              role="button"
+              onClick={() => switchSession(sess.id)}
+              className={cn(
+                "flex shrink-0 cursor-pointer items-center gap-1 rounded-lg border px-2.5 py-1 text-[11.5px] transition",
+                sess.id === activeId
+                  ? "border-accent/40 bg-accent/[0.06] text-ink"
+                  : "border-border bg-white text-ink-dim hover:text-ink"
+              )}
+            >
+              <span className="max-w-[140px] truncate">{sess.title}</span>
+              {sess.id === activeId && sessions.length > 1 && (
+                <span
+                  role="button"
+                  aria-label="删除当前会话"
+                  onClick={(e) => { e.stopPropagation(); removeAgentSession(sess.id); }}
+                  className="opacity-40 transition hover:opacity-100"
+                >
+                  <X className="size-3" />
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {shown.length === 0 && (
         <div className="flex flex-1 flex-col items-center justify-center px-4 text-center">
@@ -464,77 +593,7 @@ export function AgentHome() {
             </div>
           )}
 
-          {/* 外显计划（Codex PlanItem 模型）：每步三态可见 */}
-          {plan.length > 0 && (
-            <div className="rounded-xl border border-border bg-surface-2/50 px-3 py-2.5">
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
-                计划
-              </p>
-              <ol className="space-y-1">
-                {plan.map((st) => (
-                  <li key={st.id} className="flex items-start gap-2 text-[12px]">
-                    <span className="mt-[3px] shrink-0">
-                      {st.status === "completed" ? (
-                        <Check className="size-3.5 text-ok" />
-                      ) : st.status === "in_progress" ? (
-                        <Loader2 className="size-3.5 animate-spin text-accent" />
-                      ) : st.status === "skipped" ? (
-                        <X className="size-3.5 text-ink-dim/40" />
-                      ) : (
-                        <Circle className="size-3.5 text-ink-dim/30" />
-                      )}
-                    </span>
-                    <span
-                      className={cn(
-                        st.status === "in_progress" ? "text-ink" : "text-ink-dim",
-                        st.status === "completed" && "line-through decoration-ink-dim/30"
-                      )}
-                    >
-                      {st.text}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
 
-          {/* 工具调用（Codex CommandExecutionItem 模型）：状态 + 耗时 + 失败/拒绝原文 */}
-          {tools.length > 0 && (
-            <div className="space-y-1.5">
-              {tools.map((t) => (
-                <div
-                  key={t.id}
-                  className={cn(
-                    "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11.5px]",
-                    t.status === "failed"
-                      ? "border-bad/30 bg-bad/[0.04] text-bad"
-                      : t.status === "declined"
-                        ? "border-border bg-surface-2 text-ink-dim line-through decoration-ink-dim/40"
-                        : t.status === "in_progress"
-                          ? "border-accent/25 bg-accent/[0.04] text-ink-dim"
-                          : "border-border bg-white text-ink-dim"
-                  )}
-                >
-                  {t.status === "in_progress" ? (
-                    <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
-                  ) : t.status === "failed" ? (
-                    <X className="size-3 shrink-0" />
-                  ) : t.status === "declined" ? (
-                    <X className="size-3 shrink-0" />
-                  ) : (
-                    <Check className="size-3 shrink-0 text-ok" />
-                  )}
-                  <span className="font-medium">{TOOLS[t.name]?.label ?? t.name}</span>
-                  {t.summary && <span className="truncate opacity-70">· {t.summary}</span>}
-                  {t.endedAt && (
-                    <span className="ml-auto shrink-0 tabular-nums opacity-50">
-                      {t.endedAt - t.startedAt}ms
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
 
           <AgentTrace phases={phases} />
         </div>
@@ -604,6 +663,27 @@ export function AgentHome() {
         >
           停止
         </button>
+      )}
+      </section>
+
+      {/* ===== 工作台（Trae SOLO 式右栏：任务 / 产物 / 会话） ===== */}
+      <aside className="hidden w-[300px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border/60 pl-4 lg:flex">
+        {railBlocks}
+      </aside>
+
+      {/* 移动端工作台 slide-over */}
+      {workspaceOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-[2px] lg:hidden" onClick={() => setWorkspaceOpen(false)}>
+          <aside className="flex h-full w-[320px] max-w-[85vw] flex-col gap-3 overflow-y-auto border-l border-border bg-white p-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <p className="text-[12px] font-semibold text-ink">工作台</p>
+              <button onClick={() => setWorkspaceOpen(false)} aria-label="关闭工作台" className="cursor-pointer rounded-lg p-1 text-ink-dim transition hover:bg-black/[0.04] hover:text-ink">
+                <X className="size-4" />
+              </button>
+            </div>
+            {railBlocks}
+          </aside>
+        </div>
       )}
     </div>
   );
