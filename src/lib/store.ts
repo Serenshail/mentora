@@ -33,7 +33,7 @@ import type {
 import { PROVIDERS } from "./ai/providers";
 import { todayISO, uid } from "./utils";
 import { backfillReviewDates, reviewPatch } from "./review";
-import { track } from "./track";
+import { track, trackReading } from "./track";
 
 /* 验收记录只保留最近 200 次，长文本按字段截断。
  * 云端同步是全量快照 + 服务端 4.5MB 硬上限：quizLog 无界增长会让「推不上」
@@ -192,8 +192,10 @@ interface AppState {
   /** 沉淀：新增 / 删除（PRD 4.6） */
   addBookDeposit: (bookId: string, d: Omit<BookDeposit, "id" | "at">) => void;
   removeBookDeposit: (bookId: string, depositId: string) => void;
-  /** 知识迁移（升级 PRD 2.5）：追加迁移记录；used_correct 同步沉淀 practice + 学习证据 */
-  addBookTransfer: (bookId: string, t: Omit<BookTransfer, "id" | "at">) => void;
+  /** 知识迁移（升级 PRD 2.5）：追加迁移记录；used_correct 同步沉淀 practice + 学习证据。返回记录 id（复检回填用） */
+  addBookTransfer: (bookId: string, t: Omit<BookTransfer, "id" | "at">) => string;
+  /** v26.1 G3：独立迁移复检结果回填到既有迁移记录 */
+  attachTransferRecheck: (bookId: string, transferId: string, recheck: NonNullable<BookTransfer["recheck"]>) => void;
   /** 学习状态增量更新（knownConcepts 去重合并 / misconceptions 追加等，PRD 5.3） */
   updateBookLearning: (bookId: string, patch: Partial<Omit<BookLearning, "misconceptions" | "evidence">> & {
     addMisconception?: { concept: string; note: string };
@@ -1316,7 +1318,9 @@ export const useAppStore = create<AppState>()(
             b.id === bookId ? { ...b, assessments: [...(b.assessments ?? []), a] } : b
           ),
         })),
-      markChapterMastered: (bookId, chapterId, evidence) =>
+      markChapterMastered: (bookId, chapterId, evidence) => {
+        /* v26.1 G1：验收通过事件——数据落库成功才算成功，刷新重放天然防重 */
+        trackReading("node_assessment_completed", { bookId, chapterId, result: "mastered", source: "assess" });
         set((s) => ({
           books: s.books.map((b) => {
             if (b.id !== bookId) return b;
@@ -1338,8 +1342,10 @@ export const useAppStore = create<AppState>()(
               },
             };
           }),
-        })),
-      addBookDeposit: (bookId, d) =>
+        }));
+      },
+      addBookDeposit: (bookId, d) => {
+        trackReading("deposit_created", { bookId, type: d.type });
         set((s) => ({
           books: s.books.map((b) =>
             b.id === bookId
@@ -1352,7 +1358,8 @@ export const useAppStore = create<AppState>()(
                 }
               : b
           ),
-        })),
+        }));
+      },
       removeBookDeposit: (bookId, depositId) =>
         set((s) => ({
           books: s.books.map((b) =>
@@ -1361,11 +1368,13 @@ export const useAppStore = create<AppState>()(
               : b
           ),
         })),
-      addBookTransfer: (bookId, t) =>
+      addBookTransfer: (bookId, t) => {
+        trackReading("transfer_evaluated", { bookId, verdict: t.verdict, mode: t.mode ?? "independent", hintUsed: !!t.hintUsed });
+        const transferId = uid("tf");
         set((s) => ({
           books: s.books.map((b) => {
             if (b.id !== bookId) return b;
-            const rec: BookTransfer = { ...t, id: uid("tf"), at: new Date().toISOString() };
+            const rec: BookTransfer = { ...t, id: transferId, at: new Date().toISOString() };
             /* 正确应用 = 最有长期价值的实践证据：同步沉淀 practice + 学习证据（升级 PRD 2.5/2.6） */
             const deposit: BookDeposit = {
               id: uid("dp"),
@@ -1389,8 +1398,25 @@ export const useAppStore = create<AppState>()(
               learning,
             };
           }),
-        })),
-      updateBookLearning: (bookId, patch) =>
+        }));
+        return transferId;
+      },
+      attachTransferRecheck: (bookId, transferId, recheck) => {
+        trackReading("transfer_evaluated", { bookId, stage: "recheck", result: recheck.verdict });
+        set((s) => ({
+          books: s.books.map((b) =>
+            b.id === bookId
+              ? {
+                  ...b,
+                  transfers: (b.transfers ?? []).map((t) => (t.id === transferId ? { ...t, recheck } : t)),
+                }
+              : b
+          ),
+        }));
+      },
+      updateBookLearning: (bookId, patch) => {
+        if (patch.addMisconception) trackReading("misconception_created", { bookId, concept: patch.addMisconception.concept });
+        if (patch.clarifyMisconception) trackReading("misconception_clarified", { bookId, concept: patch.clarifyMisconception });
         set((s) => ({
           books: s.books.map((b) => {
             if (b.id !== bookId) return b;
@@ -1423,7 +1449,8 @@ export const useAppStore = create<AppState>()(
             };
             return { ...b, learning: next };
           }),
-        })),
+        }));
+      },
       setBookReadStatus: (bookId, status) =>
         set((s) => ({
           books: s.books.map((b) => {

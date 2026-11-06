@@ -1333,6 +1333,65 @@ ${args.answer}
 {"verdict": "used_correct|used_wrong|naming_only", "evidence": "...", "feedback": "...", "nextStep": "..."}
 \`\`\``;
 
+/** 独立迁移复检出题（v26.1 G3 第三层）：同概念、不同场景、不同表述——防「只记住原题答案」 */
+export const READING_TRANSFER_RECHECK = (args: {
+  book: string;
+  originalTask: string; // 原任务（只为避开同场景，不给用户看）
+  chapters: string; // JSON：涉及概念
+  goal: string;
+}) => `你是 Mentora 的实践顾问。用户刚完成一次迁移任务，现在要做**独立迁移检验**：同一批概念，换一个完全不同的场景与表述。你只输出 JSON。
+
+## 涉及概念
+${args.chapters}
+
+## 原任务（只为避开——新任务禁止与它同场景、同问法）
+${args.originalTask}
+
+## 用户目标（新场景尽量仍贴用户的生活/工作域，但情境必须不同）
+${args.goal}
+
+## 出题纪律
+1. 场景必须与原任务明显不同（不同对象/不同时间/不同决策类型），概念不变。
+2. 表述换述：不沿用原任务的句式。
+3. 开放应用题，要求用户写出自己的推理/做法（3-5 句），一道题聚焦 1-2 个概念。
+4. 80-120 字。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"task": "..."}
+\`\`\``;
+
+/** 独立迁移复检判分（v26.1 G3）：六分类，assisted 不得判 independent */
+export const READING_TRANSFER_RECHECK_GRADE = (args: {
+  task: string;
+  chapters: string;
+  answer: string;
+}) => `你是 Mentora 的实践顾问，正在做**独立迁移检验**的判分。你只输出 JSON。
+
+## 检验任务
+${args.task}
+
+## 涉及概念（判定基准）
+${args.chapters}
+
+## 用户作答
+${args.answer}
+
+## 六分类判定（硬规则）
+- independent_success：新场景中正确使用了概念，且是用户自己的推理（没有套用模板话术）；
+- assisted_success：用对了但明显带着外部提示的痕迹/照搬此前答案的框架；
+- partial_success：部分用上，关键一步缺失或含糊；
+- incorrect：概念机制用错（点名错在哪）；
+- incomplete：空白或完全没回答任务；
+- ungradable：回答与任务无关到无法判定。
+2. **禁止把 assisted_success 判成 independent_success**——拿不准时向下判，不向上判。
+3. evidence 引用用户原话（≤40 字）说明判定依据。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"verdict": "independent_success|assisted_success|partial_success|incorrect|incomplete|ungradable", "evidence": "...", "feedback": "..."}
+\`\`\``;
+
 /** 整本结业（升级 PRD 3.6）：学习成果/核心认知/仍不足/个人观点/迁移结果/后续建议 */
 export const READING_GRADUATION = (args: {
   book: string;

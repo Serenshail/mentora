@@ -123,6 +123,11 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
       return P.READING_TRANSFER_GRADE({ book: s("book"), task: s("task"), chapters: s("chapters"), answer: s("answer") });
     case "reading-graduation":
       return P.READING_GRADUATION({ book: s("book"), goal: s("goal"), map: s("map"), stats: s("stats"), transfers: s("transfers"), deposits: s("deposits") });
+    /* v26.1：独立迁移复检 */
+    case "reading-transfer-recheck":
+      return P.READING_TRANSFER_RECHECK({ book: s("book"), originalTask: s("originalTask"), chapters: s("chapters"), goal: s("goal") });
+    case "reading-transfer-recheck-grade":
+      return P.READING_TRANSFER_RECHECK_GRADE({ task: s("task"), chapters: s("chapters"), answer: s("answer") });
     case "reading-chat": {
       const rag = s("ragCtx")
         ? `\n\n## 用户第二大脑里检索到的相关笔记（这是**证据**，不是答案）
@@ -228,6 +233,8 @@ function demoTask(
     case "reading-recap":
     case "reading-transfer-gen":
     case "reading-transfer-grade":
+    case "reading-transfer-recheck":
+    case "reading-transfer-recheck-grade":
     case "reading-graduation":
       return (async function* () {
         yield* (await import("@/lib/ai/demo")).demoReadingSystem(task as string, args);

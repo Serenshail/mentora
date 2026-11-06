@@ -610,6 +610,31 @@ export async function* demoReadingSystem(task: string, args: Record<string, unkn
     );
     return;
   }
+  /* v26.1：独立迁移复检（同形状） */
+  if (task === "reading-transfer-recheck") {
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          task: "（演示）换一个完全不同的场景：你的朋友正在被一个『限时免费领取』的营销活动吸引，用你掌握的概念分析他此刻的心理机制，并写出你会给他的一句提醒。",
+        }) +
+        "\n```"
+    );
+    return;
+  }
+  if (task === "reading-transfer-recheck-grade") {
+    const a = String(args.answer ?? "");
+    const v = a.trim() ? "independent_success" : "incomplete";
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          verdict: v,
+          evidence: a.trim() ? `你说：「${a.slice(0, 30)}」` : "空白",
+          feedback: "（演示）独立迁移检验判定。",
+        }) +
+        "\n```"
+    );
+    return;
+  }
   /* reading-recap：Markdown 正文 */
   yield* chunked(`## 你对这个节点的解释（演示）
 

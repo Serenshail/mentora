@@ -365,7 +365,57 @@ export interface BookTransfer {
   verdict: "used_correct" | "used_wrong" | "naming_only";
   evidence: string; // 判定依据：引用用户原话，指出用对/用错哪一步
   feedback: string;
+  /** v26.1 G3：作答模式与过程（独立/辅助、是否用提示、是否修改过答案） */
+  mode?: "independent" | "assisted";
+  hintUsed?: boolean;
+  answerRevised?: boolean;
+  /** 独立迁移检验：同概念、不同场景、不同表述的换述题（第三层评估） */
+  recheck?: {
+    task: string;
+    answer: string;
+    verdict: "independent_success" | "assisted_success" | "partial_success" | "incorrect" | "incomplete" | "ungradable";
+    evidence: string;
+    at: string;
+  };
   at: string;
+}
+
+/** 迁移结果六分类（v26.1 G3）：由 verdict+mode+recheck 聚合，独立与辅助分列统计 */
+export type TransferOutcome =
+  | "independent_success"
+  | "assisted_success"
+  | "partial_success"
+  | "incorrect"
+  | "incomplete"
+  | "ungradable";
+
+export const TRANSFER_OUTCOME_LABELS: Record<TransferOutcome, string> = {
+  independent_success: "独立迁移成功",
+  assisted_success: "辅助后成功",
+  partial_success: "部分完成",
+  incorrect: "错误应用",
+  incomplete: "未完成",
+  ungradable: "无法判定",
+};
+
+/** 聚合规则（唯一真源，store/后台/统计共用）：
+ *  独立复检通过（independent_success）只可能来自 mode=independent 的复检通过——
+ *  assisted 模式下即使复检通过也只能计 assisted_success（v26.1 G3 硬禁令）。 */
+export function transferOutcome(t: BookTransfer): TransferOutcome {
+  if (!t.answer.trim()) return "incomplete";
+  const rechecked = t.recheck && t.recheck.answer.trim();
+  if (rechecked) {
+    const rc = t.recheck!.verdict;
+    if (rc === "independent_success") return t.mode === "assisted" ? "assisted_success" : "independent_success";
+    if (rc === "assisted_success") return "assisted_success";
+    if (rc === "partial_success") return "partial_success";
+    if (rc === "incorrect") return "incorrect";
+    if (rc === "incomplete") return "partial_success";
+    return "ungradable";
+  }
+  if (t.verdict === "used_correct") return t.mode === "assisted" || t.hintUsed ? "assisted_success" : "partial_success"; // 未过独立复检的 used_correct 只算部分完成
+  if (t.verdict === "used_wrong") return "incorrect";
+  return t.mode === "assisted" ? "assisted_success" : "partial_success";
 }
 
 export const TRANSFER_VERDICT_LABELS: Record<BookTransfer["verdict"], string> = {

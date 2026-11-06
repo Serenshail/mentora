@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge, Button, Card, Input, Skeleton } from "@/components/ui";
 import { useAuth } from "@/lib/auth-client";
+import { ReadingExperiment } from "@/components/admin/reading-experiment";
 import { cn } from "@/lib/utils";
 import {
   AlertCircle, CheckCircle2, CircleDot, ExternalLink, Inbox, Lock, MessageSquare, RefreshCw, Users,
@@ -76,7 +77,7 @@ export default function AdminPage() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState<"users" | "feedback">("users");
+  const [tab, setTab] = useState<"users" | "feedback" | "reading">("users");
   const [processingId, setProcessingId] = useState<number | null>(null);
   /* 独立后台密码：不需要登录账号，输对密码直接看数据（也绕开一切登录跳转问题） */
   const [needPw, setNeedPw] = useState(false);
@@ -252,6 +253,7 @@ export default function AdminPage() {
             [
               { id: "users", label: `用户（${data?.users.length ?? 0}）` },
               { id: "feedback", label: `反馈（${data?.feedback.length ?? 0}）` },
+              { id: "reading", label: "阅读实验" },
             ] as const
           ).map((t) => (
             <button
@@ -342,6 +344,7 @@ export default function AdminPage() {
         )}
 
         {/* 反馈列表 */}
+        {tab === "reading" && <ReadingExperiment />}
         {tab === "feedback" && (
           <div className="mt-6 space-y-3">
             {data && !data.feedbackConfigured && (

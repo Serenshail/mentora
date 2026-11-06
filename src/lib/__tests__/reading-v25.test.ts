@@ -329,3 +329,45 @@ describe("阅读系统 store 动作（PRD 硬要求）", () => {
     expect(m.note).toBe("以为互惠=等价交换"); // 澄清保留原证据，不删除
   });
 });
+
+/* ============ v26.1 G3：迁移六分类聚合规则锁 ============ */
+import { transferOutcome, type BookTransfer } from "../types";
+
+const baseTransfer: BookTransfer = {
+  id: "t1",
+  chapterIds: ["c1"],
+  task: "任务",
+  answer: "一个有内容的作答",
+  verdict: "used_correct",
+  evidence: "你说：…",
+  feedback: "…",
+  at: new Date().toISOString(),
+};
+
+describe("transferOutcome：独立成功只认独立模式的复检通过（v26.1 G3 硬禁令）", () => {
+  it("独立模式 + 复检 independent_success → independent_success", () => {
+    expect(
+      transferOutcome({ ...baseTransfer, mode: "independent", recheck: { task: "换场景", answer: "答", verdict: "independent_success", evidence: "e", at: "" } })
+    ).toBe("independent_success");
+  });
+  it("辅助模式 + 复检 independent_success → assisted_success（不得计独立）", () => {
+    expect(
+      transferOutcome({ ...baseTransfer, mode: "assisted", hintUsed: true, recheck: { task: "换场景", answer: "答", verdict: "independent_success", evidence: "e", at: "" } })
+    ).toBe("assisted_success");
+  });
+  it("未做复检的 used_correct 只算 partial_success（不能默认通过）", () => {
+    expect(transferOutcome({ ...baseTransfer, mode: "independent" })).toBe("partial_success");
+  });
+  it("used_wrong → incorrect；复检 incorrect → incorrect", () => {
+    expect(transferOutcome({ ...baseTransfer, verdict: "used_wrong" })).toBe("incorrect");
+    expect(
+      transferOutcome({ ...baseTransfer, recheck: { task: "x", answer: "y", verdict: "incorrect", evidence: "e", at: "" } })
+    ).toBe("incorrect");
+  });
+  it("空白作答 → incomplete；复检 ungradable → ungradable", () => {
+    expect(transferOutcome({ ...baseTransfer, answer: "  " })).toBe("incomplete");
+    expect(
+      transferOutcome({ ...baseTransfer, recheck: { task: "x", answer: "y", verdict: "ungradable", evidence: "", at: "" } })
+    ).toBe("ungradable");
+  });
+});

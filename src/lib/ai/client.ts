@@ -34,7 +34,9 @@ export type ChatTask =
   /* 阅读系统 V1.0（2026-11-05）：目标识别/策略调度/三重验收/小结/加节点 */
   | "reading-goal" | "reading-strategy" | "reading-assess-gen" | "reading-assess-grade" | "reading-recap" | "reading-add-node"
   /* 升级 V1.0（2026-11-06）：知识迁移 / 整本结业 */
-  | "reading-transfer-gen" | "reading-transfer-grade" | "reading-graduation";
+  | "reading-transfer-gen" | "reading-transfer-grade" | "reading-graduation"
+  /* v26.1：独立迁移复检 */
+  | "reading-transfer-recheck" | "reading-transfer-recheck-grade";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：
@@ -637,6 +639,25 @@ export const readingTransferGradeSchema = z.object({
   evidence: z.string().optional().nullable(),
   feedback: z.string().optional().nullable(),
   nextStep: z.string().optional().nullable(),
+});
+
+/** 独立迁移复检（v26.1 G3）：出题与六分类判分 */
+export const readingTransferRecheckSchema = z.object({
+  task: z.string().min(10),
+});
+
+export const readingTransferRecheckGradeSchema = z.object({
+  verdict: z.preprocess(
+    (v) =>
+      (["independent_success", "assisted_success", "partial_success", "incorrect", "incomplete", "ungradable"].includes(
+        String(v)
+      )
+        ? v
+        : "ungradable"),
+    z.enum(["independent_success", "assisted_success", "partial_success", "incorrect", "incomplete", "ungradable"])
+  ),
+  evidence: z.string().optional().nullable(),
+  feedback: z.string().optional().nullable(),
 });
 
 /** 整本结业总结（升级 PRD 3.6）：学习成果/核心认知/仍不足/后续建议（仅建议，不自动建目标） */

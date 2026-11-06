@@ -9,6 +9,7 @@ import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { extractJson, readingPlanSchema } from "@/lib/ai/client";
 import { READING_GOAL_LABELS } from "@/lib/types";
+import { trackReading } from "@/lib/track";
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { BookOpen, Plus, Trash2 } from "lucide-react";
@@ -99,6 +100,17 @@ export function ReadWorkspace() {
       setTitle("");
       setAuthor("");
       setPasted("");
+      /* v26.1 G1：路线生成事件（建书即路线）；第二问题识别——已有"有效学习"记录（迁移/掌握）
+       * 且新书目标意图与所有旧书都不同，才算启动第二个真实问题（PRD 约束 5：同目标多会话不算） */
+      trackReading("roadmap_generated", { bookId: id, source: "create", nodes: plan.chapters.length });
+      const books = useAppStore.getState().books;
+      const hasEffectiveLearning = books.some(
+        (b) => b.id !== id && ((b.transfers ?? []).length > 0 || b.chapters.some((c) => c.masteredAt))
+      );
+      const intent = title.trim();
+      if (hasEffectiveLearning && intent && !books.some((b) => b.id !== id && b.goal?.intent === intent)) {
+        trackReading("second_problem_started", { bookId: id, goal: intent.slice(0, 60) });
+      }
       toast.success("阅读计划已生成，开读！");
       router.push(`/read/${id}`);
     } catch (e) {

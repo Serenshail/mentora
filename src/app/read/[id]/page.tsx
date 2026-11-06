@@ -14,12 +14,13 @@ import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
-import { extractJson, insightsSchema, readingAddNodeSchema, readingAssessGenSchema, readingAssessGradeSchema, readingGoalSchema, readingGraduationSchema, readingPlanSchema, readingStrategySchema, readingTransferGenSchema, readingTransferGradeSchema } from "@/lib/ai/client";
+import { extractJson, insightsSchema, readingAddNodeSchema, readingAssessGenSchema, readingAssessGradeSchema, readingGoalSchema, readingGraduationSchema, readingPlanSchema, readingStrategySchema, readingTransferGenSchema, readingTransferGradeSchema, readingTransferRecheckGradeSchema, readingTransferRecheckSchema } from "@/lib/ai/client";
 import { READING_MODES, defaultReadingMode, type ReadingMode } from "@/lib/ai/reading-modes";
 import {
   ASSESS_KIND_LABELS,
   DEPOSIT_TYPE_LABELS,
   READING_GOAL_LABELS,
+  TRANSFER_OUTCOME_LABELS,
   TRANSFER_VERDICT_LABELS,
   type AssessKind,
   type BookChapter,
@@ -30,6 +31,7 @@ import {
 } from "@/lib/types";
 import { ragContext, wikiRetrieve } from "@/lib/rag";
 import { retrieveEnhanced } from "@/lib/rag-pipeline";
+import { trackReading } from "@/lib/track";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -78,6 +80,7 @@ export default function BookPage() {
   const markChapterMastered = useAppStore((s) => s.markChapterMastered);
   const addBookDeposit = useAppStore((s) => s.addBookDeposit);
   const addBookTransfer = useAppStore((s) => s.addBookTransfer);
+  const attachTransferRecheck = useAppStore((s) => s.attachTransferRecheck);
   const removeBookDeposit = useAppStore((s) => s.removeBookDeposit);
   const updateBookLearning = useAppStore((s) => s.updateBookLearning);
   const setBookReadStatus = useAppStore((s) => s.setBookReadStatus);
@@ -123,9 +126,24 @@ export default function BookPage() {
   const [transfer, setTransfer] = useState<{ task: string; why?: string; answer: string } | null>(null);
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferResult, setTransferResult] = useState<{ verdict: "used_correct" | "used_wrong" | "naming_only"; evidence: string; feedback: string; nextStep?: string } | null>(null);
+  const [lastTransferId, setLastTransferId] = useState<string | null>(null);
   /* 升级 PRD 3.6 整本结业 */
   const [graduation, setGraduation] = useState<{ md: string; nextSteps: string[] } | null>(null);
   const [graduationBusy, setGraduationBusy] = useState(false);
+  /* v26.1：学习会话 id（埋点关联）+ 迁移过程态（提示/复检）+ 流失问卷轻条 */
+  const [sid] = useState(() => uid("rs"));
+  const [hintShown, setHintShown] = useState(false);
+  const [recheck, setRecheck] = useState<{ transferId: string; task: string; answer: string } | null>(null);
+  const [recheckBusy, setRecheckBusy] = useState(false);
+  const [exitSurvey, setExitSurvey] = useState(false);
+  const [exitReason, setExitReason] = useState<string>("");
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(`reading-sid-${id}`, sid);
+    } catch {
+      /* 隐私模式忽略 */
+    }
+  }, [id, sid]);
 
   /* ---- 沉淀（PRD 4.6）---- */
   const [depositType, setDepositType] = useState<DepositType>("explanation");
@@ -161,7 +179,10 @@ export default function BookPage() {
   useEffect(() => {
     if (!hydrated || !book) return;
     const rs: BookReadStatus = book.readStatus ?? (book.status === "done" ? "finished" : book.status === "reading" ? "reading" : "unread");
-    if (rs === "unread") setBookReadStatus(book.id, "reading");
+    if (rs === "unread") {
+      trackReading("reading_started", { bookId: book.id, source: "first_open" });
+      setBookReadStatus(book.id, "reading");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, book?.id]);
 
@@ -388,6 +409,7 @@ export default function BookPage() {
       setAt: new Date().toISOString(),
     };
     const changed = book.goal?.primary !== goal.primary;
+    trackReading("goal_confirmed", { bookId: book.id, goal: goal.primary, inferred: !!goal.inferred });
     setBookGoal(book.id, goal);
     setGoalEditing(false);
     if (changed && book.chapters.length > 0) {
@@ -473,6 +495,7 @@ export default function BookPage() {
       });
       setCurrentChapter(null);
       setExpandedId(null);
+      trackReading("roadmap_generated", { bookId: book.id, routeType, nodes: plan.chapters.length, source: "regenerate" });
       toast.success(`路线已按「${routeType === "full" ? "完整" : routeType === "core" ? "核心" : "目标导向"}」重排。历史验收与沉淀都在。`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "重生成失败——原路线没动。");
@@ -750,6 +773,8 @@ export default function BookPage() {
       });
       const parsed = readingTransferGenSchema.parse(extractJson(full));
       setTransfer({ task: parsed.task, why: parsed.whyThisTask || undefined, answer: "" });
+      setHintShown(false);
+      trackReading("transfer_started", { bookId: book.id, source: "panel" });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "出任务失败，稍后再试。");
     } finally {
@@ -764,6 +789,7 @@ export default function BookPage() {
       return;
     }
     setTransferBusy(true);
+    trackReading("transfer_submitted", { bookId: book.id, mode: hintShown ? "assisted" : "independent", chars: transfer.answer.length });
     try {
       const { streamChat } = await import("@/lib/ai/client");
       const full = await streamChat({
@@ -787,21 +813,89 @@ export default function BookPage() {
         feedback: parsed.feedback ?? "",
         nextStep: parsed.nextStep || undefined,
       };
-      addBookTransfer(book.id, {
+      const transferId = addBookTransfer(book.id, {
         chapterIds: masteredNodes.map((c) => c.id),
         task: transfer.task,
         answer: transfer.answer,
         verdict: parsed.verdict,
         evidence: result.evidence,
         feedback: result.feedback,
+        mode: hintShown ? "assisted" : "independent",
+        hintUsed: hintShown,
       });
       setTransferResult(result);
+      setLastTransferId(transferId);
       setTransfer(null);
       toast(result.verdict === "used_correct" ? "迁移通过——这个概念现在是你的了。" : result.verdict === "used_wrong" ? "用到了但机制有偏——看反馈里错在哪一步。" : "还在复述概念——按引导把概念接到场景上。");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "判定失败——答案还在，可重交。");
     } finally {
       setTransferBusy(false);
+    }
+  };
+
+  /** v26.1 G3：独立迁移复检——同概念换场景，assisted 不得计 independent */
+  const genRecheck = async () => {
+    if (recheckBusy || !lastTransferId) return;
+    setRecheckBusy(true);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const original = (book.transfers ?? []).find((t) => t.id === lastTransferId);
+      const full = await streamChat({
+        task: "reading-transfer-recheck",
+        args: {
+          book: book.title,
+          originalTask: original?.task ?? "",
+          chapters: JSON.stringify(masteredNodes.map((c) => ({ title: c.title, keyConcepts: c.keyConcepts ?? [] }))),
+          goal: goalText,
+        },
+        messages: [{ role: "user", content: "出复检题。" }],
+        temperature: 0.5,
+        onDelta: () => {},
+      });
+      const parsed = readingTransferRecheckSchema.parse(extractJson(full));
+      setRecheck({ transferId: lastTransferId, task: parsed.task, answer: "" });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "复检出题失败");
+    } finally {
+      setRecheckBusy(false);
+    }
+  };
+
+  const submitRecheck = async () => {
+    if (!recheck || recheckBusy) return;
+    setRecheckBusy(true);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const full = await streamChat({
+        task: "reading-transfer-recheck-grade",
+        args: {
+          task: recheck.task,
+          chapters: JSON.stringify(masteredNodes.map((c) => ({ title: c.title, keyConcepts: c.keyConcepts ?? [] }))),
+          answer: recheck.answer,
+        },
+        messages: [{ role: "user", content: "复检判定。" }],
+        temperature: 0.2,
+        onDelta: () => {},
+      });
+      const parsed = readingTransferRecheckGradeSchema.parse(extractJson(full));
+      attachTransferRecheck(book.id, recheck.transferId, {
+        task: recheck.task,
+        answer: recheck.answer,
+        verdict: parsed.verdict,
+        evidence: parsed.evidence ?? "",
+        at: new Date().toISOString(),
+      });
+      setTransferResult({
+        verdict: parsed.verdict === "independent_success" ? "used_correct" : parsed.verdict === "incorrect" ? "used_wrong" : "naming_only",
+        evidence: parsed.evidence ?? "",
+        feedback: `独立迁移检验：${TRANSFER_OUTCOME_LABELS[parsed.verdict]}——${parsed.feedback ?? ""}`,
+      });
+      setRecheck(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "复检判定失败");
+    } finally {
+      setRecheckBusy(false);
     }
   };
 
@@ -834,6 +928,7 @@ export default function BookPage() {
       });
       const parsed = readingGraduationSchema.parse(extractJson(full));
       setGraduation({ md: parsed.noteMarkdown, nextSteps: parsed.nextSteps ?? [] });
+      trackReading("graduation_generated", { bookId: book.id });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "结业总结生成失败");
     } finally {
@@ -1171,7 +1266,7 @@ export default function BookPage() {
           )}
           {readStatus === "assessing" && (
             <>
-              <Button size="sm" className="w-full" onClick={() => setBookReadStatus(book.id, "mastered")}>
+              <Button size="sm" className="w-full" onClick={() => { trackReading("book_assessment_completed", { bookId: book.id, result: "mastered" }); setBookReadStatus(book.id, "mastered"); }}>
                 <GraduationCap className="size-3.5" /> 复盘完成，标记已掌握
               </Button>
               <p className="text-[10.5px] leading-relaxed text-ink-dim/70">诚实原则：只在你能独立讲清这本书时点它。</p>
@@ -1314,7 +1409,10 @@ export default function BookPage() {
                     <button
                       onClick={() => {
                         setCurrentChapter(c.id);
-                        if (c.status === "todo") setChapterStatus(book.id, c.id, "reading");
+                        if (c.status === "todo") {
+                          trackReading("learning_node_started", { bookId: book.id, chapterId: c.id, source: "route_click" });
+                          setChapterStatus(book.id, c.id, "reading");
+                        }
                         setExpandedId(expanded && chapter?.id === c.id ? null : c.id);
                       }}
                       className={cn(
@@ -1572,15 +1670,16 @@ export default function BookPage() {
             </Card>
           )}
 
-          {/* 知识迁移工作面板（升级 PRD 2.5）：AI 出真实场景任务 → 独立作答 → 判定 */}
-          {(transfer || transferResult) && (
+          {/* 知识迁移工作面板（升级 PRD 2.5）：AI 出真实场景任务 → 独立作答 → 判定 →（v26.1）独立复检 */}
+          {(transfer || transferResult || exitSurvey) && (
             <Card className="mb-4 border-accent/30">
               {transfer ? (
                 <>
                   <div className="flex items-center gap-1.5">
                     <Route className="size-4 text-accent" />
                     <p className="text-[13px] font-bold text-ink">迁移应用</p>
-                    <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setTransfer(null)}>
+                    {hintShown && <Badge tone="warn">已用提示·辅助模式</Badge>}
+                    <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setTransfer(null); setExitSurvey(true); }}>
                       暂不做
                     </Button>
                   </div>
@@ -1593,7 +1692,17 @@ export default function BookPage() {
                     value={transfer.answer}
                     onChange={(e) => setTransfer({ ...transfer, answer: e.target.value })}
                   />
-                  <div className="mt-2.5 flex justify-end">
+                  <div className="mt-2.5 flex items-center justify-between gap-2">
+                    {/* v26.1 G3：提示=辅助模式。用了提示的迁移不会计为独立成功 */}
+                    {!hintShown ? (
+                      <Button variant="ghost" size="sm" onClick={() => setHintShown(true)}>
+                        <Lightbulb className="size-3.5" /> 卡住了？要一点提示
+                      </Button>
+                    ) : (
+                      <p className="text-[11px] leading-relaxed text-ink-dim">
+                        提示：想一想 {(chapter?.keyConcepts ?? ["核心概念"]).slice(0, 2).join("、")}——它的触发条件是什么？在这一步谁先「给」？
+                      </p>
+                    )}
                     <Button size="sm" onClick={() => void submitTransfer()} loading={transferBusy}>
                       提交应用方案
                     </Button>
@@ -1615,12 +1724,62 @@ export default function BookPage() {
                       <b className="text-ink/80">下一步：</b>{transferResult.nextStep}
                     </p>
                   )}
+                  {/* v26.1 G3：独立检验——只有首轮独立模式通过才值得做；辅助模式先重做独立任务 */}
+                  {transferResult.verdict === "used_correct" && (
+                    <div className="mt-2.5 rounded-xl border border-ok/30 bg-ok/[0.04] p-2.5">
+                      <p className="text-[12px] font-semibold text-ink">下一步：独立迁移检验</p>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-ink-dim">
+                        换一个场景、换一种问法，看这个概念是不是真的归你了——独立通过才算真能力。
+                      </p>
+                    </div>
+                  )}
                   <div className="mt-2.5 flex justify-end gap-1.5">
                     <Button variant="outline" size="sm" onClick={() => setTransferResult(null)}>
                       收下
                     </Button>
+                    {transferResult.verdict === "used_correct" && lastTransferId && !(book.transfers ?? []).find((t) => t.id === lastTransferId)?.recheck && (
+                      <Button size="sm" onClick={() => void genRecheck()} loading={recheckBusy}>
+                        <ShieldCheck className="size-3.5" /> 开始独立检验
+                      </Button>
+                    )}
                     <Button variant="outline" size="sm" onClick={() => void genTransfer()}>
                       再来一个场景
+                    </Button>
+                  </div>
+                </>
+              ) : exitSurvey ? (
+                /* v26.1 G4：流失原因轻条（放弃迁移时页内出现，可跳过，不打断阅读） */
+                <>
+                  <p className="text-[13px] font-bold text-ink">是什么让你暂时不想做这个任务？</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {["不知道怎么使用", "没有解决我的问题", "AI 回答质量不满意", "任务太复杂", "时间不足", "已经获得需要的信息", "产品体验不够顺畅", "其他"].map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => setExitReason(r)}
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-[11px] transition cursor-pointer",
+                          exitReason === r ? "border-accent/60 bg-accent/[0.07] text-accent" : "border-border bg-white text-ink-dim hover:border-accent/40"
+                        )}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2.5 flex justify-end gap-1.5">
+                    <Button variant="ghost" size="sm" onClick={() => { setExitSurvey(false); setExitReason(""); }}>
+                      不想说
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={!exitReason}
+                      onClick={() => {
+                        trackReading("reading_exit_survey", { bookId: book.id, stage: "transfer", reason: exitReason });
+                        setExitSurvey(false);
+                        setExitReason("");
+                        toast("收到，谢谢——这会帮我们把任务改得更顺。");
+                      }}
+                    >
+                      提交
                     </Button>
                   </div>
                 </>

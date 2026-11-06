@@ -29,3 +29,16 @@ export function track(name: string, props: Record<string, unknown> = {}): void {
     /* 埋点失败不影响产品 */
   }
 }
+
+/* v26.1 阅读实验事件：统一带 sid（学习会话）与 experiment_version。
+ * sid 由页面写入 sessionStorage（reading-sid-<bookId>），store 层动作也能关联到会话。
+ * 防重纪律：成功型事件只在 store 数据动作成功后发（数据落库=事件成功），UI 层只发 intent 型。 */
+export function trackReading(name: string, props: { bookId: string; [k: string]: unknown }): void {
+  let sid: string | undefined;
+  try {
+    sid = sessionStorage.getItem(`reading-sid-${props.bookId}`) ?? undefined;
+  } catch {
+    /* 隐私模式无 sessionStorage：事件照发，只是无会话关联 */
+  }
+  track(name, { ...props, sid, v: "v26.1" });
+}

@@ -921,7 +921,14 @@ export async function dbEventStats(): Promise<{
   funnel: Record<string, number>;
   chatUsage: ReturnType<typeof aggregateChatUsage>;
 } | null> {
-  const FUNNEL = ["intake_start", "intake_complete", "plan_generated", "day_pass", "review_done"];
+  /* v26.1：学习教练 + 阅读系统全量漏斗事件（reading-metrics 与 dashboard 共用） */
+  const FUNNEL = [
+    "intake_start", "intake_complete", "plan_generated", "day_pass", "review_done",
+    "reading_started", "goal_confirmed", "roadmap_generated", "learning_node_started",
+    "node_assessment_completed", "transfer_started", "transfer_submitted", "transfer_evaluated",
+    "misconception_created", "misconception_clarified", "book_assessment_completed",
+    "graduation_generated", "deposit_created", "second_problem_started", "reading_exit_survey",
+  ];
   try {
     let funnelRows: { name: string; n: number | string }[] = [];
     let propsList: string[] = [];
@@ -934,7 +941,7 @@ export async function dbEventStats(): Promise<{
         )
       );
       funnelRows = await rdsQuery<{ name: string; n: number }>(
-        "SELECT name, COUNT(*)::int AS n FROM events WHERE name IN ($1, $2, $3, $4, $5) GROUP BY name",
+        `SELECT name, COUNT(*)::int AS n FROM events WHERE name IN (${FUNNEL.map((_, i) => `$${i + 1}`).join(", ")}) GROUP BY name`,
         FUNNEL
       );
       propsList = (
@@ -953,7 +960,7 @@ export async function dbEventStats(): Promise<{
         );
       });
       funnelRows = await d1Raw(
-        "SELECT name, COUNT(*) AS n FROM events WHERE name IN (?, ?, ?, ?, ?) GROUP BY name",
+        `SELECT name, COUNT(*) AS n FROM events WHERE name IN (${FUNNEL.map(() => "?").join(", ")}) GROUP BY name`,
         FUNNEL
       );
       propsList = (
@@ -969,6 +976,42 @@ export async function dbEventStats(): Promise<{
     for (const r of funnelRows) if (r.name in funnel) funnel[r.name] = Number(r.n) || 0;
 
     return { funnel, chatUsage: aggregateChatUsage(propsList) };
+  } catch {
+    return null;
+  }
+}
+
+/** v26.1 G5：拉取阅读实验原始事件（reading-metrics 专用）——通道分派同 dbEventStats。
+ *  返回按时间升序的原始行；SQL 聚合在调用方用 JS 做（实验期量级小，可追溯性优先）。 */
+export async function dbReadingEvents(days: number): Promise<
+  { name: string; account: string; props: string; created_at: string }[] | null
+> {
+  try {
+    if (dbChannelEnv() === "huawei") {
+      if (!hasRds()) return null;
+      await ensureAuxTable("rds:events", () =>
+        rdsQuery(
+          "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+          []
+        )
+      );
+      return await rdsQuery<{ name: string; account: string; props: string; created_at: string }>(
+        "SELECT name, account, props, created_at FROM events WHERE created_at >= (now() - ($1 || ' days')::interval) ORDER BY id ASC",
+        [String(days)]
+      );
+    }
+    if (!hasD1()) return null;
+    await ensureAuxTable("d1:events", async () => {
+      await d1Init();
+      await d1Raw(
+        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, props TEXT, path TEXT, created_at TEXT DEFAULT (datetime('now')))",
+        []
+      );
+    });
+    return await d1Raw<{ name: string; account: string; props: string; created_at: string }>(
+      "SELECT name, account, props, created_at FROM events WHERE created_at >= datetime('now', ?) ORDER BY id ASC",
+      [`-${Math.max(1, Math.min(90, days))} days`]
+    );
   } catch {
     return null;
   }
