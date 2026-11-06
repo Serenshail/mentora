@@ -1,0 +1,217 @@
+{
+  "task": "agent",
+  "version": 3,
+  "scenario": "数据结构·顺序表（第一个质量基准场景，源自用户真实学习材料）",
+  "userBackground": {
+    "userName": "学员",
+    "profile": "C 语言入门阶段，正在学习数据结构第一章顺序表；此前已学过数组旋转的两种解法（辅助数组法、三次反转法），对指针/动态内存有初步接触但常混淆",
+    "activeGoal": {
+      "topic": "数据结构",
+      "direction": "用 C 语言实现常见数据结构，逐个讲透"
+    },
+    "learningStyle": "希望先例子后概念、逐步推演、不满足于背结论"
+  },
+  "notes": "structural 检查项对齐 AGENT_CHAT 深讲协议九步；deep=true 的案例跑深讲骨架断言，direct 案例 断言「不启动工作流、不堆骨架」。golden 参照：用户提供的理想回答样例（rotate 程序逐行+三反转+顺序表整章）。",
+  "cases": [
+    {
+      "id": "ds01-rotate-deep",
+      "type": "deep",
+      "question": "详细讲解一下这个程序：\nvoid rotate(int* nums, int numsSize, int k) {\n    int* arr = (int*)calloc(numsSize, sizeof(int));\n    k %= numsSize;\n    if(k == 0) return;\n    if(arr != NULL) {\n        for(int i = 0; i < numsSize; i++) {\n            arr[(i+k)%numsSize] = nums[i];\n        }\n        memcpy(nums, arr, numsSize*sizeof(int));\n    }\n}",
+      "must": [
+        "deep.position",
+        "deep.goal",
+        "deep.block",
+        "deep.trace",
+        "deep.flaws",
+        "deep.complexity",
+        "deep.extract",
+        "deep.quiz",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "逐行拆解是否到操作符级（% 为什么存在）",
+        "模拟执行是否有逐步状态表",
+        "是否主动指出内存泄漏/负数 k/numsSize=0 三个问题"
+      ],
+      "golden": "用户提供的理想回答样例一（存在既有讲解：定位→逐行→模拟表→四个问题→改进版→复杂度→5 知识点→4 小测→建议）",
+      "tools": false
+    },
+    {
+      "id": "ds02-threereverse-deep",
+      "type": "deep",
+      "question": "还有另一种方式，通过三次反转直接完成旋转，不借助辅助数组。给我讲讲为什么三次反转是对的。",
+      "must": [
+        "deep.goal",
+        "deep.block",
+        "deep.trace",
+        "deep.compare",
+        "deep.complexity",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "是否用 A+B → B+A 的拆分讲清原理而不是背三步",
+        "是否对比两种方法的空间复杂度 O(n) vs O(1)"
+      ],
+      "golden": "用户提供的理想回答样例二（三次反转：先 reverse 函数拆解，再 A/B 两段换位推导，最后对比表）",
+      "tools": false
+    },
+    {
+      "id": "ds03-seqlist-chapter",
+      "type": "deep",
+      "question": "详细讲解这一章：顺序表。包括 typedef struct SeqList { SLDataType* a; int size; int capacity; } SL; 这个结构体、尾插头插、指定位置插入删除、realloc 扩容。",
+      "must": [
+        "deep.position",
+        "deep.goal",
+        "deep.block",
+        "deep.trace",
+        "deep.flaws",
+        "deep.extract",
+        "deep.quiz",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "size 与 capacity 的区分是否讲透",
+        "扩容为什么要临时变量接 realloc 返回值",
+        "是否给完整可运行的生命周期代码"
+      ],
+      "golden": "用户提供的理想回答样例三（顺序表整章：结构体逐成员→[0,size) 区间→尾插先存后加→扩容倍增→四种操作→完整代码→复杂度表→与链表对比→学习清单→3 练习）",
+      "tools": false
+    },
+    {
+      "id": "ds04-why-shift",
+      "type": "deep",
+      "question": "为什么顺序表插入元素需要移动后面的元素？",
+      "must": [
+        "deep.goal",
+        "deep.block",
+        "deep.trace",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "是否用具体数组演示插入时数据被覆盖的过程",
+        "是否回到底层原因（内存连续）而不是只说『这是特性』"
+      ],
+      "golden": "样例三中头插的逐步模拟（[10,20,30,40] 插 5，从后往前挪）",
+      "tools": false
+    },
+    {
+      "id": "ds05-misconception-delete",
+      "type": "deep",
+      "question": "我觉得顺序表删除元素之后，应该把那个位置的内存清零，不然数据还留在那里，这样理解对吗？",
+      "must": [
+        "misconception.correct",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "是否先用证据指出误解来源（把『逻辑删除』当成『物理擦除』）",
+        "是否讲清 size 语义（size 之后的数据不属于有效数据）",
+        "是否解释什么情况才真的需要清零（安全/调试场景）"
+      ],
+      "golden": "样例三的『尾删：不需要真的把 40 从内存中擦除』",
+      "tools": false
+    },
+    {
+      "id": "ds06-buggy-insert",
+      "type": "deep",
+      "question": "帮我看看这段代码有什么问题：\nvoid SeqListInsert(SL* ps, int pos, SLDataType x) {\n    for(int i = ps->size; i > pos; i--) {\n        ps->a[i] = ps->a[i-1];\n    }\n    ps->a[pos] = x;\n    ps->size++;\n}",
+      "must": [
+        "deep.flaws",
+        "deep.fix",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "是否找到：没检查 pos 合法性、没检查扩容（size==capacity 时越界写）",
+        "是否给出修复版并说明每处改动原因",
+        "是否演示越界写的后果而不是只说『有 bug』"
+      ],
+      "golden": "样例三的 SeqListInsert 完整版（pos 检查→扩容→从后往前挪）",
+      "tools": false
+    },
+    {
+      "id": "ds07-amortized",
+      "type": "deep",
+      "question": "顺序表尾插为什么是均摊 O(1)？不是每次扩容都要把整个数组复制一遍吗？",
+      "must": [
+        "deep.goal",
+        "deep.trace",
+        "deep.complexity",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "是否用倍增的『总代价/n』摊还推导，而不是只给结论",
+        "是否给出扩容次数表（4→8→16）"
+      ],
+      "golden": "样例三的扩容次数表与『倍增策略减少扩容次数』",
+      "tools": false
+    },
+    {
+      "id": "ds08-calloc-vs-malloc",
+      "type": "direct",
+      "question": "calloc 和 malloc 有什么区别？旋转那个程序里必须用 calloc 吗，换成 malloc 行不行？",
+      "must": [
+        "direct.answer",
+        "clean.noMeta",
+        "direct.noWorkflow"
+      ],
+      "focus": [
+        "是否直接回答（初始化为 0 vs 不初始化）",
+        "是否结合旋转程序场景判断（本题随后 memcpy 覆盖全部元素，malloc 也可以——但 calloc 对泄漏场景更安全）",
+        "不启动学习工作流、不建目标"
+      ],
+      "golden": "样例一 calloc 小节（申请+初始化 0）",
+      "tools": false
+    },
+    {
+      "id": "ds09-negative-k",
+      "type": "direct",
+      "question": "如果旋转次数 k 是负数会怎样？",
+      "must": [
+        "direct.answer",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "是否指出 C 语言负数取模结果为负（-2 % 5 == -2）导致负数下标",
+        "是否给出 k += numsSize 的修正",
+        "最好提一句语言差异（Python 的 % 返回非负）"
+      ],
+      "golden": "样例一的问题 3（负数 k）",
+      "tools": false
+    },
+    {
+      "id": "ds10-intent-learn",
+      "type": "intent",
+      "question": "我想系统地把数据结构学完，我现在在学顺序表。",
+      "must": [
+        "intent.recognize",
+        "clean.noMeta"
+      ],
+      "focus": [
+        "是否识别为学习任务并读取已有目标/进度（数据结构目标已存在）",
+        "是否恢复/续接现有计划而不是重复建一个新目标",
+        "是否避免一次性问卷式追问（最多一两个关键问题）"
+      ],
+      "golden": "PRD 场景 D：恢复已有工作流，不重复生成",
+      "tools": false
+    }
+  ],
+  "changelog": [
+    {
+      "v": 2,
+      "date": "2026-11-06",
+      "reason": "基线 v1 复盘：ds03 因脚本不执行工具流中断（改为 noTools 直答评测讲解质量）；ds04/ds05 揭示标记过于字面——trace 放宽到内存图/推演形态、block 放宽覆盖/搬移表述、新增 misconception.correct（误解纠正型不要求逐块）",
+      "by": "audit"
+    },
+    {
+      "v": 3,
+      "date": "2026-11-06",
+      "reason": "ds02 基线复盘：回答有『## 1. 先建立目标』但标记只认 假设/例如——放宽为含 先建立目标/拿一个/具体例子 形态",
+      "by": "audit"
+    }
+  ],
+  "markers": {
+    "deep.block": "是什么|为什么需要|不写会怎样|逐行|逐块|这一行|这段代码|这个成员|覆盖|被覆盖|往前|后移|搬",
+    "deep.trace": "模拟|逐步|第一次|代入|状态|过程表|s|s|地址|内存|推演|0x",
+    "misconception.correct": "不对|不完全|误解|修正|实际上|恰恰|其实",
+    "deep.goal": "假设|例如|比如说|输入|预期|目标是|先建立目标|拿一个|具体(数组|例子|场景)"
+  }
+}
