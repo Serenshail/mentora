@@ -271,6 +271,69 @@ async function runReadTool(name: ToolName, args: Record<string, unknown>): Promi
     }
   }
 
+  if (name === "resume_workflow") {
+    const kind = str(args.kind) || "auto";
+    const title = str(args.title);
+    const tryKinds: string[] =
+      kind === "auto" ? ["learning", "reading", "council"] : [kind];
+    for (const k of tryKinds) {
+      if (k === "learning") {
+        const goal = title
+          ? store.goals.find((g) => g.topic.includes(title) || title.includes(g.topic))
+          : store.goals.find((g) => g.status === "active") ??
+            store.goals.find((g) => g.status === "draft");
+        if (!goal) continue;
+        const days = goal.plan ? Object.values(goal.plan.days) : [];
+        const done = days.filter((d) => d.status === "passed" || d.status === "skipped").length;
+        const url = !goal.plan || goal.status === "draft" ? `/learn/new?goal=${goal.id}` : `/learn/${goal.id}`;
+        track("workflow_resume", { to: "learn", topic: cut(goal.topic, 24) });
+        return {
+          result: {
+            ok: true,
+            content: `找到学习目标「${goal.topic}」（${goal.status}${days.length ? `，${done}/${days.length} 天完成` : "，尚无计划"}）。接续入口：${url}${goal.status === "draft" ? "（从上次引导对话继续）" : ""}`,
+            summary: cut(goal.topic, 24),
+          },
+        };
+      }
+      if (k === "reading") {
+        const book = title
+          ? store.books.find((b) => b.title.includes(title))
+          : store.books.find((b) => b.status === "reading") ?? store.books[0];
+        if (!book) continue;
+        const doneCh = book.chapters.filter((c) => c.status === "done").length;
+        track("workflow_resume", { to: "read", title: cut(book.title, 24) });
+        return {
+          result: {
+            ok: true,
+            content: `找到书架里的《${book.title}》（${book.status}，${doneCh}/${book.chapters.length} 章完成）。接续入口：/read/${book.id}——打开后从当前节点继续。`,
+            summary: cut(book.title, 24),
+          },
+        };
+      }
+      if (k === "council") {
+        const sess = title
+          ? store.sessions.find((x) => x.title.includes(title))
+          : store.sessions[0];
+        if (!sess) continue;
+        track("workflow_resume", { to: "council", title: cut(sess.title, 24) });
+        return {
+          result: {
+            ok: true,
+            content: `找到会话「${sess.title}」（${sess.messages.length} 条消息）。接续入口：/council——打开人生伙伴选择这个会话继续。`,
+            summary: cut(sess.title, 24),
+          },
+        };
+      }
+    }
+    return {
+      result: {
+        ok: true,
+        content: "没有找到可恢复的工作流。可以问用户想开始什么，或用 create_goal/add_book/create_session 新建。",
+        summary: "无可恢复项",
+      },
+    };
+  }
+
   if (name === "memory" || name === "reminders") {
     return runPersonalTool(name, args);
   }
@@ -546,27 +609,44 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
     }
     case "create_goal": {
       const goalId = uid("goal");
+      const topic = str(p.topic);
+      const background = str(p.background);
+      const direction = str(p.direction);
+      const motivation = str(p.motivation);
+      const criteria = Array.isArray(p.successCriteria)
+        ? (p.successCriteria as unknown[]).map((c) => str(c)).filter(Boolean)
+        : [];
+      /* 交接的核心：把主对话里已掌握的背景种进引导 transcript——
+       * /learn/new?goal= 会回放这段对话，教练只补必要的问题，用户不用重讲一遍。 */
+      const knownBits = [direction, motivation, background].filter(Boolean).join("；");
       store.addGoal({
         id: goalId,
-        topic: str(p.topic),
-        direction: str(p.direction),
+        topic,
+        direction,
         domainKind: "other",
-        motivation: str(p.motivation),
-        background: "",
+        motivation,
+        background,
         weeklyHours: 8,
-        successCriteria: Array.isArray(p.successCriteria)
-          ? (p.successCriteria as unknown[]).map((c) => str(c)).filter(Boolean)
-          : [],
+        successCriteria: criteria,
         status: "draft",
         createdAt: new Date().toISOString(),
         quizLog: [],
-        intakeTranscript: [],
+        intakeTranscript: [
+          {
+            role: "user",
+            content: `我想学${topic}。${background ? `背景：${background}。` : ""}${motivation ? `动机：${motivation}。` : ""}`,
+          },
+          {
+            role: "assistant",
+            content: `（交接自主对话框）我已经了解：${knownBits || `你想学${topic}`}。${criteria.length ? `你定的验收标准：${criteria.join("；")}。` : ""}这些我记下了，不会重复问。接下来我只补真正影响计划的问题。`,
+          },
+        ],
       });
-      track("workflow_handoff", { to: "learn", topic: cut(str(p.topic), 24) });
-      console.info("[flow] handoff → learn", str(p.topic).slice(0, 24));
+      track("workflow_handoff", { to: "learn", topic: cut(topic, 24) });
+      console.info("[flow] handoff → learn", topic.slice(0, 24));
       return {
         ok: true,
-        content: `学习目标「${str(p.topic)}」已创建（草稿）。完整计划需要引导对话：请到「学习」页打开这个目标继续。`,
+        content: `学习目标「${topic}」已创建，对话里说过的背景都带过去了。接续入口：[继续引导对话](/learn/new?goal=${goalId})——引导只会补必要的问题，不会让你重讲一遍。`,
         summary: "已创建",
       };
     }

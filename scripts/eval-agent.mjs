@@ -20,7 +20,8 @@ import { execSync } from "node:child_process";
 
 const BASE = process.env.BASE || "http://localhost:3000";
 const ROOT = path.resolve(process.cwd());
-const fixtures = JSON.parse(fs.readFileSync(path.join(ROOT, "scripts/eval-agent.fixtures.json"), "utf8"));
+const FIXTURES = process.env.FIXTURES || "scripts/eval-agent.fixtures.json";
+const fixtures = JSON.parse(fs.readFileSync(path.join(ROOT, FIXTURES), "utf8"));
 const MARKER_RE = Object.fromEntries(
   Object.entries(fixtures.markers ?? {}).map(([k, v]) => [k, v instanceof RegExp ? v : new RegExp(v)])
 );
@@ -85,10 +86,23 @@ const MARKERS = {
   "intent.recognize": /数据结构|顺序表|学习|目标|继续|进度|计划/,
 };
 
+/* 意图四路的函数型标记（JSON 里放不了函数） */
+const FN_MARKERS = {
+  "direct.noHandoff": (t) =>
+    !/帮你.{0,16}(建|创建|立|拆|安排|加入)|目标.{0,8}(创建|立起来|建好)|加入书架|创建会话/.test(t),
+  "intent.noDump": (t) => {
+    const qMarks = (t.match(/？/g) || []).length;
+    const numberedQ = /(?:^|\n)\s*[1-9][.、][^\n]{0,40}？/.test(t);
+    return !(qMarks >= 3 && numberedQ);
+  },
+  "intent.engaged": (t) => /学|线性代数|安排|计划|目标|例子|讲/.test(t),
+  "route.noRecreate": (t) => !/重新立|新建一个.{0,8}目标|重新创建/.test(t),
+};
+
 function structuralChecks(text, must) {
   const results = {};
   for (const key of must) {
-    const m = MARKER_RE[key] ?? MARKERS[key];
+    const m = MARKER_RE[key] ?? FN_MARKERS[key] ?? MARKERS[key];
     if (!m) { results[key] = { pass: false, reason: "unknown marker" }; continue; }
     const pass = typeof m === "function" ? Boolean(m(text)) : m.test(text);
     results[key] = { pass };
@@ -214,7 +228,8 @@ const archive = {
 };
 const outDir = path.join(ROOT, "docs/evidence");
 fs.mkdirSync(outDir, { recursive: true });
-const outFile = path.join(outDir, `eval-agent-${new Date().toISOString().slice(0, 10)}-${sha}.json`);
+const evalName = path.basename(FIXTURES).replace(/.fixtures.json$/, "");
+const outFile = path.join(outDir, `${evalName}-${new Date().toISOString().slice(0, 10)}-${sha}.json`);
 /* 同版本增跑：按 case id 合并进已有归档（单案例复跑不覆盖整份） */
 if (fs.existsSync(outFile)) {
   const prev = JSON.parse(fs.readFileSync(outFile, "utf8"));

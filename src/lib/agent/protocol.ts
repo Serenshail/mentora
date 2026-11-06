@@ -56,6 +56,8 @@ export type ToolName =
   | "create_session"
   /** 修改白名单设置（userName/coachTone/digestWeekly；provider/model 需确认） */
   | "update_settings"
+  /** 恢复已有工作流：查学习目标/书架/会话的现有进度，返回接续入口（只读） */
+  | "resume_workflow"
   /* ---- 个人扩展（v24.0 二期，action 型；读自动、写需确认） ---- */
   /** 长期记忆：recall / remember / forget */
   | "memory"
@@ -175,8 +177,8 @@ export const TOOLS: Record<ToolName, ToolSpec> = {
     name: "create_goal",
     label: "新建学习目标",
     risk: "write",
-    description: "创建学习目标草稿（主题/方向/动机/验收标准）。完整计划需要用户去「学习」页生成。",
-    params: "topic: string, direction?: string, motivation?: string, successCriteria?: string[]",
+    description: "创建学习目标草稿并交接给学习引导：把对话里已掌握的背景写进参数（用户不用重复讲），引导只补必要的问题。成功后返回接续入口。",
+    params: "topic: string, direction?: string, motivation?: string, background?: string（对话中已知的用户背景，交接用）, successCriteria?: string[]",
   },
   add_book: {
     name: "add_book",
@@ -198,6 +200,13 @@ export const TOOLS: Record<ToolName, ToolSpec> = {
     risk: "write",
     description: "修改白名单内的设置：称呼、教练风格、周报开关、模型选择。API Key 与自定义端点不可通过此工具修改。",
     params: "userName?: string, coachTone?: \"standard\"|\"gentle\", digestWeekly?: boolean, provider?: string, model?: string",
+  },
+  resume_workflow: {
+    name: "resume_workflow",
+    label: "恢复工作流",
+    risk: "read",
+    description: "用户说\"继续学/接着读/我的进度\"时，查找已有的学习目标、书架或会话，返回当前进度与接续入口。恢复而不是重建。",
+    params: "kind?: \"learning\"|\"reading\"|\"council\"（缺省自动识别）, title?: string（按主题/书名/会话名匹配）",
   },
   memory: {
     name: "memory",

@@ -1128,10 +1128,12 @@ export const READING_STRATEGY = (args: {
   learning: string; // JSON：knownConcepts/misconceptions/unresolvedQuestions
   recentTurns: string; // 最近几轮对话（user/assistant 交替，截断）
   currentMode?: string;
+  background?: string; // 用户当前基础/已有知识（升级 PRD 2.1）
 }) => `你是 Mentora 读书伙伴的策略调度器。判断当前节点此刻用哪种教学模式最合适。你只输出 JSON，不输出任何别的内容。
 
 ## 依据
 - 阅读目标：${args.goal}
+- 用户已有基础：${args.background || "未知——默认按新手处理，但不要因此把有经验用户的判断当新手"}
 - 当前节点：${args.chapter}
 - 学习状态：${args.learning}
 - 最近对话：${args.recentTurns || "（还没开始对话）"}
@@ -1144,7 +1146,8 @@ socratic 苏格拉底引导（概念没讲通/用户在摸索）｜feynman 费�
 1. 用户已锁定模式 → 认可它，reason 说明为什么这个选择也合适（绝不拆台）。
 2. 一次答错 ≠ 能力判決：不许因为一条 misconceptions 就切换到更简单的模式——除非同一概念反复出错。
 3. 有未解决问题（unresolvedQuestions）命中当前节点 → 优先能解决它的模式。
-4. reason ≤50 字，说清「为什么是现在、对这个用户」。
+4. **基础纪律**：用户自述已有相关背景（读过同类书/从业经验/研究经历）→ 禁止推荐面向零基础的精读带读开场，优先 collision（观点压力测试）或 socratic（直接从他的疑问切入）——重复讲解他已经懂的东西是最差的体验。
+5. reason ≤50 字，说清「为什么是现在、对这个用户」。
 
 只输出一个 json 代码块：
 \`\`\`json
@@ -1203,16 +1206,17 @@ export const READING_ASSESS_GRADE = (args: {
 ${args.qa}
 
 ## 判分纪律（硬规则）
-1. 每题四级判定：mastered（要害命中，用自己的话）/ partial（方向对但缺关键条件）/ not（与原文矛盾或答非所问）。
+1. 每题四级判定：mastered（要害命中，用自己的话）/ partial（方向对但缺关键条件）/ not（与原文矛盾或答非所问）/ **ungradable（问题本身歧义或回答离题到无法判定——不许当 partial 放水，也不会被计为通过）**。
 2. **证据纪律**：evidence 必须引用用户回答里的原话（≤40 字），partial/not 必须点名具体缺了什么、错在哪句——判而不解释=无效判。
 3. feedback 一句话：先说具体好在哪里（不是"很好"），再说缺什么。
 4. 空白回答判 not，evidence 写「空白」。
 5. 不放水也不羞辱：partial 的缺口说小、说具体，让补课有抓手。
 6. suggestion：整体给一个**现在就能做**的回炉动作（重读哪一段/回来补答哪一题），不许说"再看看书"。
+7. **误解提取**：判出 partial/not 时，若能定位到一个具体的概念性误解（不是粗心），在 misconception 里给 {concept, note}——concept 是概念名（≤10 字），note 是"用户怎么理解的 vs 正确理解是什么"（一句话）。没有就省略该字段。
 
 只输出一个 json 代码块：
 \`\`\`json
-{"results": [{"kind": "explain|connect|apply", "level": "mastered|partial|not", "evidence": "...", "feedback": "..."}], "suggestion": "..."}
+{"results": [{"kind": "explain|connect|apply", "level": "mastered|partial|not|ungradable", "evidence": "...", "feedback": "..."}], "suggestion": "...", "misconception": {"concept": "...", "note": "..."}}
 \`\`\``;
 
 /** 节点小结（PRD 4.6 沉淀）：用户自己的话为主，AI 补充标注 */
@@ -1260,6 +1264,107 @@ ${args.goal ? `\n阅读目标：${args.goal}` : ""}
 只输出一个 json 代码块：
 \`\`\`json
 {"chapter": {"title": "...", "knowledgeType": "...", "coreIdea": "...", "focusQuestion": "...", "keyConcepts": ["..."], "prerequisites": ["..."], "expectedOutcome": "...", "assessFocus": "...", "perspectives": ["..."], "capture": ["..."]}}
+\`\`\``;
+
+/* ---------------- 6c. 升级 PRD V1.0：知识迁移层 + 整本结业 ---------------- */
+
+/** 迁移任务生成（升级 PRD 2.5 第 1-3 步）：按用户最初目标，生成真实场景应用任务 */
+export const READING_TRANSFER_GEN = (args: {
+  book: string;
+  goal: string;
+  chapters: string; // JSON：已掌握节点 [{id,title,keyConcepts,coreIdea,assessFocus}]
+  learning: string; // JSON：misconceptions/unresolvedQuestions（避开未澄清的误解出题）
+  pastTransfers: string; // JSON：历史迁移记录（防重复出同型任务）
+}) => `你是 Mentora 的实践顾问（知识迁移阶段）。用户读完了《${args.book}》，现在要把书里的知识用到一个真实场景。你只输出 JSON。
+
+## 用户为什么读这本书（最高优先级）
+${args.goal}
+
+## 已掌握的知识节点
+${args.chapters}
+
+## 学习状态（避开未澄清的误解出任务；未解决问题可入题）
+${args.learning}
+
+## 历史迁移记录（不许出同型任务）
+${args.pastTransfers || "（无）"}
+
+## 出任务纪律（硬规则）
+1. 任务必须长在**用户的目标场景**里：goal 里的"想解决的问题"就是任务的舞台——商业书给他的项目决策，技术书给他的代码/系统，心理学书给他的人际/自我场景。
+2. 任务是一道**开放的应用题**（用户要写出自己怎么想/怎么做，3-5 句话），绝不允许是选择题或名词解释。
+3. 只考已掌握节点里的 keyConcepts，一题聚焦 1-2 个概念。
+4. 文学/哲学等不适合直接实践的内容：出**思想比较/论证分析/现实案例解释**型任务（如"用作者的框架分析某件正在发生的公共争论"）。
+5. whyThisTask 一句话说明为什么是这个任务、它和用户目标的关系。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"task": "（具体场景+要求用户写什么，80-150字）", "chapterIds": ["..."], "whyThisTask": "..."}
+\`\`\``;
+
+/** 迁移判定（升级 PRD 2.5 第 4-6 步）：区分「会用」与「只会复述」 */
+export const READING_TRANSFER_GRADE = (args: {
+  book: string;
+  task: string;
+  chapters: string; // JSON：涉及节点的概念与要害
+  answer: string;
+}) => `你是 Mentora 的实践顾问，刚收到用户的迁移作答。判定用户是**真的用了知识**还是**只会复述概念**。
+
+## 任务
+${args.task}
+
+## 涉及的知识（判定基准）
+${args.chapters}
+
+## 用户作答
+${args.answer}
+
+## 判定纪律（硬规则）
+1. 三级判定：
+   - used_correct：概念被用在新场景的推理/决策里，用法符合原书边界（可以不完美，方向和机制对即可）；
+   - used_wrong：用到了场景里，但机制/边界用错（必须点名错在哪一步、正确用法是什么）；
+   - naming_only：只是在复述概念定义/书中原话，没有真正接到场景上。
+2. evidence 必须引用用户原话（≤40 字）指明判定依据。
+3. feedback：先具体肯定（用在哪一步是对的），再说一个让应用更准的调整（used_correct 也要给——升级不是终点）。
+4. nextStep：一句话、现在就能做的小动作。
+5. 不羞辱。naming_only 不是失败，是"还没接上"——给一个让概念落地到场景的引导。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"verdict": "used_correct|used_wrong|naming_only", "evidence": "...", "feedback": "...", "nextStep": "..."}
+\`\`\``;
+
+/** 整本结业（升级 PRD 3.6）：学习成果/核心认知/仍不足/个人观点/迁移结果/后续建议 */
+export const READING_GRADUATION = (args: {
+  book: string;
+  goal: string;
+  map: string; // JSON：认知地图
+  stats: string; // JSON：节点数/完成/验收通过/迁移 verdict 统计
+  transfers: string; // JSON：迁移记录（任务+判定+要点）
+  deposits: string; // JSON：用户沉淀（自己的话）
+}) => `你是 Mentora 的阅读教练。用户刚完成《${args.book}》的整本验收（已掌握），做一次**结业总结**——这份笔记要几个月后回看仍然有用。
+
+## 材料全部来自用户真实学习记录（JSON）
+- 阅读目标：${args.goal}
+- 认知地图：${args.map}
+- 统计：${args.stats}
+- 迁移记录：${args.transfers || "（无）"}
+- 用户沉淀（自己的话，最高优先级）：${args.deposits || "（无）"}
+
+## 结业笔记结构（noteMarkdown，Markdown，500 字内）
+1. **这本书最终带走了什么**——用能力描述（能解释什么/能判断什么/能做什么），不用章节目录。
+2. **核心认知（你自己的话）**——优先引用用户沉淀与迁移作答原话（署名"你的话"）；AI 补充必须标注「补充」。
+3. **仍然不足的**——从验收档案如实列出 partial/not 的维度，不假装全懂。
+4. **迁移结果**——迁移任务做了什么、判定如何；没有迁移记录就如实说"尚未做迁移应用，建议下一步补上"。
+5. **下一步**——一句可执行建议（下一本书方向/一个真实实践）。
+
+## nextSteps
+最多 3 条，每条一句话。**仅作为建议展示，不会自动创建任何目标。**
+
+诚实纪律：只写材料里真实存在的事实，不编造掌握与迁移。
+
+只输出一个 json 代码块：
+\`\`\`json
+{"noteMarkdown": "...", "nextSteps": ["..."]}
 \`\`\``;
 
 /* ---------------- 读书对话·五模式引擎（借鉴 alice.fans 的 5 种开场模式,做成底层交互契约） ----------------
@@ -1393,7 +1498,12 @@ ${ANTI_SYCOPHANCY}
 ${MODE_RULES[mode] ?? MODE_RULES.socratic}
 
 通用约束:中文;回复长度服从模式需要(引导/检验类克制在 200 字内,精读与碰撞可以更长,但绝不注水);
-抛观点必抛回问题;用户理解有漏洞不许顺着说;每轮只做当前模式规定的那一件事,不跨模式串味。`;
+抛观点必抛回问题;用户理解有漏洞不许顺着说;每轮只做当前模式规定的那一件事,不跨模式串味。
+
+收敛与诚实纪律(升级 PRD 3.4,硬禁令):
+1. 用户已经讲通/答对当前要点时,立即按该模式退出条件收尾,不为了继续教学而重复追问或换个说法再考一遍。
+2. 没有用户表现作证据,绝不宣称"你已经掌握了"——掌握只能由验收环节判定。
+3. 用户观点有漏洞时照常指出(不附和);一切论断贴着书的内容走,脱离书籍的发挥要标明"这是延伸,不是书里的"。`;
 
 
 /* 讲义语气块（严厉度开关的讲义侧;判分侧在 QUIZ_GRADE） */
