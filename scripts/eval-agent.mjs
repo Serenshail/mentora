@@ -146,7 +146,12 @@ async function askOnce(cookie, c, signal) {
   } catch (e) {
     err = e.message;
   }
-  return { text: text.trim(), err, ms: Date.now() - started };
+  /* noTools 下模型偶尔仍吐 tool/plan 围栏（习惯残留），剥掉再判 */
+  const cleaned = text
+    .replace(/```(?:tool|plan)[\s\S]*?```/g, "")
+    .replace(/```(?:tool|plan)[\s\S]*$/g, "")
+    .trim();
+  return { text: cleaned, err, ms: Date.now() - started };
 }
 
 async function askCase(cookie, c) {
@@ -156,8 +161,10 @@ async function askCase(cookie, c) {
     const timer = setTimeout(() => ac.abort(), CASE_TIMEOUT_MS);
     try {
       const r = await askOnce(cookie, c, ac.signal);
-      if (!r.err && r.text.length > 100) return { ...r, attempt };
-      if (attempt === 1) console.log(`  (attempt ${attempt} 失败：${(r.err || "empty").slice(0, 50)}，重试一次)`);
+      /* deep 案例 <400 字视为坏样本（流被掐断的残片），direct 案例 >100 字即可 */
+      const minLen = c.type === "direct" ? 100 : 400;
+      if (!r.err && r.text.length >= minLen) return { ...r, attempt };
+      if (attempt === 1) console.log(`  (attempt ${attempt} 失败：${(r.err || `len=${r.text.length}`).slice(0, 50)}，重试一次)`);
       if (attempt === 2) return { ...r, attempt };
     } catch (e) {
       if (attempt === 2) return { text: "", err: e.message, ms: 0, attempt };
@@ -206,6 +213,20 @@ const archive = {
 const outDir = path.join(ROOT, "docs/evidence");
 fs.mkdirSync(outDir, { recursive: true });
 const outFile = path.join(outDir, `eval-agent-${new Date().toISOString().slice(0, 10)}-${sha}.json`);
+/* 同版本增跑：按 case id 合并进已有归档（单案例复跑不覆盖整份） */
+if (fs.existsSync(outFile)) {
+  const prev = JSON.parse(fs.readFileSync(outFile, "utf8"));
+  const byId = new Map(prev.results.map((r) => [r.id, r]));
+  for (const r of results) byId.set(r.id, r);
+  const merged = [...byId.values()];
+  archive.results = merged;
+  archive.summary = {
+    total: merged.length,
+    pass: merged.filter((r) => r.ok).length,
+    fail: merged.filter((r) => !r.ok).length,
+  };
+  archive.mergedRuns = [...new Set([...(prev.mergedRuns ?? [prev.date]), archive.date])];
+}
 fs.writeFileSync(outFile, JSON.stringify(archive, null, 1));
 console.log(`\n归档：${outFile}`);
 console.log(`结果：${passCount}/${results.length} PASS`);
