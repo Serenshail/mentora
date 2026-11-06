@@ -163,8 +163,10 @@ async function askCase(cookie, c) {
       const r = await askOnce(cookie, c, ac.signal);
       /* deep 案例 <400 字视为坏样本（流被掐断的残片），direct 案例 >100 字即可 */
       const minLen = c.type === "direct" ? 100 : 400;
-      if (!r.err && r.text.length >= minLen) return { ...r, attempt };
-      if (attempt === 1) console.log(`  (attempt ${attempt} 失败：${(r.err || `len=${r.text.length}`).slice(0, 50)}，重试一次)`);
+      /* 模型自身内部工具协议泄漏（如 qwen 的 <tool_call><function=code_execution>）= 截断坏样本 */
+      const leaked = /<tool_call>|<function=|<\/invoke/i.test(r.text);
+      if (!r.err && !leaked && r.text.length >= minLen) return { ...r, attempt };
+      if (attempt === 1) console.log(`  (attempt ${attempt} 失败：${(r.err || (leaked ? "内部工具泄漏" : `len=${r.text.length}`)).slice(0, 50)}，重试一次)`);
       if (attempt === 2) return { ...r, attempt };
     } catch (e) {
       if (attempt === 2) return { text: "", err: e.message, ms: 0, attempt };
