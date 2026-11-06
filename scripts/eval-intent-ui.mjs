@@ -148,6 +148,19 @@ const sha = (() => {
 const outDir = "docs/evidence";
 fs.mkdirSync(outDir, { recursive: true });
 const outFile = `${outDir}/eval-intent-ui-${new Date().toISOString().slice(0, 10)}-${sha}.json`;
+let archive = {
+  promptVersion: sha,
+  task: "agent-intent-ui", scenario: fixtures.scenario, base: BASE,
+  date: new Date().toISOString(), summary: { total: results.length, pass, fail: results.length - pass },
+  results,
+};
+if (fs.existsSync(outFile)) {
+  const prev = JSON.parse(fs.readFileSync(outFile, "utf8"));
+  const byId = new Map(prev.results.map((r) => [r.id, r]));
+  for (const r of results) byId.set(r.id, r);
+  const merged = [...byId.values()];
+  archive = { ...archive, results: merged, summary: { total: merged.length, pass: merged.filter((r) => r.ok).length, fail: merged.filter((r) => !r.ok).length }, mergedRuns: [...new Set([...(prev.mergedRuns ?? [prev.date]), archive.date])] };
+}
 fs.writeFileSync(outFile, JSON.stringify({
   promptVersion: sha,
   task: "agent-intent-ui",
