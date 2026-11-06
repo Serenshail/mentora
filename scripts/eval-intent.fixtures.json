@@ -1,50 +1,352 @@
 {
   "task": "agent",
-  "version": 1,
+  "version": 2,
   "scenario": "意图四路判定基线（①直接回答 ②动手 ③交接工作流 ④恢复工作流）——noTools 下测文本层路由行为；工具级验证在 playwright e2e",
   "userBackground": {
     "userName": "学员",
     "profile": "C 语言入门，在学数据结构顺序表；有 Python 基础；书架有《影响力》《思考快与慢》；有一个进行中的数据结构学习目标",
-    "activeGoal": { "topic": "数据结构", "direction": "用 C 语言实现常见数据结构" }
+    "activeGoal": {
+      "topic": "数据结构",
+      "direction": "用 C 语言实现常见数据结构"
+    }
   },
   "notes": "noTools 模式下 ③交接 的预期是『提出交接意向/给入口』的文本信号（真正建目标走 playwright e2e）；④恢复 的预期是『查进度/接续』信号而非重建。信息不足案例（12）断言不问卷式三连问。",
   "markers": {
     "route.handoff": "帮你.{0,16}(建|创建|立|拆|安排|加入)|目标.{0,8}(创建|立起来|建好)|学习页|引导对话|加入书架|读书伙伴|帮你拆|圆桌|创建会话|交接",
     "route.resume": "进度|继续|恢复|已有|之前|接着|上次|还在|打开|到期|复习",
-    "route.noRecreate": null
+    "route.noRecreate": null,
+    "resume.honest": "没有|找不到|不存在|还没|查了"
   },
   "cases": [
-    { "id": "in01-list-tuple", "type": "direct", "route": "direct", "question": "Python 的 list 和 tuple 有什么区别？", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in02-redblack", "type": "direct", "route": "direct", "question": "什么是红黑树？", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in03-tailwind", "type": "direct", "route": "direct", "question": "Tailwind 和 CSS Modules 哪个好？", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in04-commit", "type": "direct", "route": "direct", "question": "怎么写出更好的 commit message？", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in05-stackoverflow", "type": "direct", "route": "direct", "question": "递归栈溢出了怎么调试？", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in06-405", "type": "direct", "route": "direct", "question": "HTTP 405 是什么意思？", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in07-eqeq", "type": "direct", "route": "direct", "question": "JS 里 == 和 === 差在哪？", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in08-seqlist-lookup", "type": "direct", "route": "direct", "question": "顺序表的查找时间复杂度是多少？", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in09-translate", "type": "direct", "route": "direct", "question": "把这句话翻译成中文：The quick brown fox jumps over the lazy dog.", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-    { "id": "in10-joke", "type": "direct", "route": "direct", "question": "给我讲个程序员冷笑话。", "must": ["direct.answer", "direct.noHandoff", "intent.noDump"] },
-
-    { "id": "in11-python-full", "type": "intent", "route": "handoff", "question": "我想系统学 Python，已经有编程基础，每天能投入两小时。", "must": ["route.handoff", "intent.noDump"], "focus": "信息充分：交接且不重复问已提供的信息" },
-    { "id": "in12-linear-thin", "type": "intent", "route": "handoff", "question": "我想学线性代数。", "must": ["intent.engaged", "intent.noDump"], "focus": "信息不足：最多问一两个关键问题，不问卷式三连问" },
-    { "id": "in13-influence", "type": "intent", "route": "handoff", "question": "帮我好好读一遍《影响力》。", "must": ["route.handoff", "intent.noDump"], "focus": "书架已有该书时应提出恢复/接续而不是重复加书" },
-    { "id": "in14-tsm-add", "type": "intent", "route": "handoff", "question": "把《思考快与慢》加进我的书架，我想深入读。", "must": ["route.handoff", "intent.noDump"] },
-    { "id": "in15-roundtable", "type": "intent", "route": "handoff", "question": "开个圆桌讨论我要不要辞职创业。", "must": ["route.handoff", "intent.noDump"] },
-    { "id": "in16-rust", "type": "intent", "route": "handoff", "question": "我想系统学 Rust。", "must": ["route.handoff", "intent.noDump"] },
-    { "id": "in17-ielts", "type": "intent", "route": "handoff", "question": "帮我立一个雅思 6.5 的学习目标。", "must": ["route.handoff", "intent.noDump"] },
-    { "id": "in18-calculus", "type": "intent", "route": "handoff", "question": "开始学高等数学，考研用。", "must": ["route.handoff", "intent.noDump"] },
-    { "id": "in19-clrs", "type": "intent", "route": "handoff", "question": "我想深入读一读《算法导论》。", "must": ["route.handoff", "intent.noDump"] },
-    { "id": "in20-council-talk", "type": "intent", "route": "handoff", "question": "跟我的人生伙伴聊聊我对转行的纠结。", "must": ["route.handoff", "intent.noDump"] },
-
-    { "id": "in21-resume-ds", "type": "intent", "route": "resume", "question": "继续学我的数据结构。", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in22-resume-read", "type": "intent", "route": "resume", "question": "我读到哪了？接着读。", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in23-resume-english", "type": "intent", "route": "resume", "question": "继续我的英语计划。", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in24-resume-council", "type": "intent", "route": "resume", "question": "上次那个圆桌讨论得怎么样了？", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in25-resume-progress", "type": "intent", "route": "resume", "question": "我的学习进度如何？接着来。", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in26-resume-influence", "type": "intent", "route": "resume", "question": "接着读《影响力》。", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in27-resume-python", "type": "intent", "route": "resume", "question": "回到我的 Python 目标。", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in28-resume-algo", "type": "intent", "route": "resume", "question": "我之前立的算法目标还在吗？", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in29-resume-review", "type": "intent", "route": "resume", "question": "今天该复习什么？接着复习。", "must": ["route.resume", "route.noRecreate", "intent.noDump"] },
-    { "id": "in30-resume-seqlist", "type": "intent", "route": "resume", "question": "把上次没学完的顺序表捡起来继续。", "must": ["route.resume", "route.noRecreate", "intent.noDump"] }
+    {
+      "id": "in01-list-tuple",
+      "type": "direct",
+      "route": "direct",
+      "question": "Python 的 list 和 tuple 有什么区别？",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in02-redblack",
+      "type": "direct",
+      "route": "direct",
+      "question": "什么是红黑树？",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in03-tailwind",
+      "type": "direct",
+      "route": "direct",
+      "question": "Tailwind 和 CSS Modules 哪个好？",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in04-commit",
+      "type": "direct",
+      "route": "direct",
+      "question": "怎么写出更好的 commit message？",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in05-stackoverflow",
+      "type": "direct",
+      "route": "direct",
+      "question": "递归栈溢出了怎么调试？",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in06-405",
+      "type": "direct",
+      "route": "direct",
+      "question": "HTTP 405 是什么意思？",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in07-eqeq",
+      "type": "direct",
+      "route": "direct",
+      "question": "JS 里 == 和 === 差在哪？",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in08-seqlist-lookup",
+      "type": "direct",
+      "route": "direct",
+      "question": "顺序表的查找时间复杂度是多少？",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in09-translate",
+      "type": "direct",
+      "route": "direct",
+      "question": "把这句话翻译成中文：The quick brown fox jumps over the lazy dog.",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in10-joke",
+      "type": "direct",
+      "route": "direct",
+      "question": "给我讲个程序员冷笑话。",
+      "must": [
+        "direct.answer",
+        "direct.noHandoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in11-python-full",
+      "type": "intent",
+      "route": "handoff",
+      "question": "我想系统学 Python，已经有编程基础，每天能投入两小时。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ],
+      "focus": "信息充分：交接且不重复问已提供的信息"
+    },
+    {
+      "id": "in12-linear-thin",
+      "type": "intent",
+      "route": "handoff",
+      "question": "我想学线性代数。",
+      "must": [
+        "intent.engaged",
+        "intent.noDump"
+      ],
+      "focus": "信息不足：最多问一两个关键问题，不问卷式三连问"
+    },
+    {
+      "id": "in13-influence",
+      "type": "intent",
+      "route": "handoff",
+      "question": "帮我好好读一遍《影响力》。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ],
+      "focus": "书架已有该书时应提出恢复/接续而不是重复加书"
+    },
+    {
+      "id": "in14-tsm-add",
+      "type": "intent",
+      "route": "handoff",
+      "question": "把《思考快与慢》加进我的书架，我想深入读。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in15-roundtable",
+      "type": "intent",
+      "route": "handoff",
+      "question": "开个圆桌讨论我要不要辞职创业。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in16-rust",
+      "type": "intent",
+      "route": "handoff",
+      "question": "我想系统学 Rust。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in17-ielts",
+      "type": "intent",
+      "route": "handoff",
+      "question": "帮我立一个雅思 6.5 的学习目标。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in18-calculus",
+      "type": "intent",
+      "route": "handoff",
+      "question": "开始学高等数学，考研用。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in19-clrs",
+      "type": "intent",
+      "route": "handoff",
+      "question": "我想深入读一读《算法导论》。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in20-council-talk",
+      "type": "intent",
+      "route": "handoff",
+      "question": "跟我的人生伙伴聊聊我对转行的纠结。",
+      "must": [
+        "route.handoff",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in21-resume-ds",
+      "type": "intent",
+      "route": "resume",
+      "question": "继续学我的数据结构。",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in22-resume-read",
+      "type": "intent",
+      "route": "resume",
+      "question": "我读到哪了？接着读。",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in23-resume-english",
+      "type": "intent",
+      "route": "resume",
+      "question": "继续我的英语计划。",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in24-resume-council",
+      "type": "intent",
+      "route": "resume",
+      "question": "上次那个圆桌讨论得怎么样了？",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in25-resume-progress",
+      "type": "intent",
+      "route": "resume",
+      "question": "我的学习进度如何？接着来。",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in26-resume-influence",
+      "type": "intent",
+      "route": "resume",
+      "question": "接着读《影响力》。",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in27-resume-python",
+      "type": "intent",
+      "route": "resume",
+      "question": "回到我的 Python 目标。",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in28-resume-algo",
+      "type": "intent",
+      "route": "resume",
+      "question": "我之前立的算法目标还在吗？",
+      "must": [
+        "resume.honest",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in29-resume-review",
+      "type": "intent",
+      "route": "resume",
+      "question": "今天该复习什么？接着复习。",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    },
+    {
+      "id": "in30-resume-seqlist",
+      "type": "intent",
+      "route": "resume",
+      "question": "把上次没学完的顺序表捡起来继续。",
+      "must": [
+        "route.resume",
+        "route.noRecreate",
+        "intent.noDump"
+      ]
+    }
+  ],
+  "changelog": [
+    {
+      "v": 2,
+      "date": "2026-11-07",
+      "reason": "in28 基线复盘：探针账号无算法目标时，模型『查了→如实说没有→提供带选项的新建建议』是恢复路由的正确行为——新增 resume.honest 标记，该案例预期改为『有则恢复、无则诚实+建议』",
+      "by": "audit"
+    }
   ]
 }
