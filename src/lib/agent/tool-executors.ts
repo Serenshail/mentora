@@ -8,6 +8,7 @@ import { streamChat, extractJson, readingPlanSchema } from "@/lib/ai/client";
 import { useAppStore } from "@/lib/store";
 import { buildContext, wikiRetrieve } from "@/lib/rag";
 import { todayISO, uid } from "@/lib/utils";
+import { track } from "@/lib/track";
 import type {
   PendingAction,
   ToolName,
@@ -500,6 +501,14 @@ function validateWriteTool(name: ToolName, args: Record<string, unknown>): ToolO
 
 /** 工具入口：读 → 直接执行；写 → 校验并返回待确认 action */
 export async function executeTool(name: ToolName, args: Record<string, unknown>): Promise<ToolOutcome> {
+  /* 五段埋点·意图段：每次工具调用即一次"Agent 判断需要动手"的记录 */
+  const isWrite = (
+    {
+      save_note: 1, update_note: 1, delete_note: 1, create_goal: 1,
+      add_book: 1, create_session: 1, update_settings: 1,
+    } as Partial<Record<ToolName, number>>
+  )[name] != null;
+  track("agent_tool_intent", { tool: name, write: isWrite ? 1 : 0 });
   const spec = (
     {
       save_note: 1, update_note: 1, delete_note: 1, create_goal: 1,
@@ -553,6 +562,8 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
         quizLog: [],
         intakeTranscript: [],
       });
+      track("workflow_handoff", { to: "learn", topic: cut(str(p.topic), 24) });
+      console.info("[flow] handoff → learn", str(p.topic).slice(0, 24));
       return {
         ok: true,
         content: `学习目标「${str(p.topic)}」已创建（草稿）。完整计划需要引导对话：请到「学习」页打开这个目标继续。`,
@@ -609,6 +620,8 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
         chat: [],
         createdAt: new Date().toISOString(),
       });
+      track("workflow_handoff", { to: "read", title: cut(title, 24) });
+      console.info("[flow] handoff → read", title.slice(0, 24));
       return {
         ok: true,
         content: `《${title}》已上架，阅读计划拆了 ${plan.chapters.length} 章：${plan.chapters.map((c) => c.title).join("、")}。可以去「学习」页的「读书伙伴」开始读。`,
@@ -624,6 +637,8 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
         messages: [],
         createdAt: new Date().toISOString(),
       });
+      track("workflow_handoff", { to: "council" });
+      console.info("[flow] handoff → council", str(p.title).slice(0, 24));
       return {
         ok: true,
         content: `会话「${str(p.title)}」已创建。去「人生伙伴」打开它开始对话。`,

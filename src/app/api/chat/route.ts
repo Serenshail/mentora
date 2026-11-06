@@ -712,6 +712,7 @@ export async function POST(req: NextRequest) {
               : clientIp(req),
             path: "/api/chat",
             props: JSON.stringify({
+              task: body.task ?? "generic", // 按任务分桶算成本（stdout 的 chat-usage 已有，events 侧补齐）
               provider: cfg.provider,
               model: cfg.model,
               byok: byok ? 1 : 0,

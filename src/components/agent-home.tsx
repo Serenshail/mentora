@@ -56,16 +56,43 @@ interface Attachment {
 }
 
 function buildCtx(): string {
+  /* 上下文选择雏形（阶段二）：注入"学习焦点"而不是计数——
+   * 当前天、最近卡壳的验收、快到期的知识点标题；计数类已被 read_context 工具覆盖。 */
   const s = useAppStore.getState();
   const goal = s.goals.find((g) => g.status === "active");
   const today = new Date().toISOString().slice(0, 10);
-  const due = s.knowledge.filter((k) => k.nextReviewAt && k.nextReviewAt <= today).length;
+  const cut40 = (t: string) => (t.length > 40 ? `${t.slice(0, 40)}…` : t);
+
+  const days = goal?.plan ? Object.values(goal.plan.days) : [];
+  const currentDay = days.find((d) => d.status === "active")?.title ?? null;
+
+  /* 最近卡壳：最近 3 条验收里非 correct 的项（dayId 反查当天标题） */
+  const recentStruggles: { day: string; verdict: string; question: string }[] = [];
+  for (const q of [...(goal?.quizLog ?? [])].reverse()) {
+    if (recentStruggles.length >= 3) break;
+    for (const it of q.items) {
+      if (it.verdict !== "correct" && recentStruggles.length < 3) {
+        recentStruggles.push({
+          day: cut40(goal?.plan?.days[q.dayId]?.title ?? q.dayId),
+          verdict: it.verdict,
+          question: cut40(it.question),
+        });
+      }
+    }
+  }
+
+  const dueSample = s.knowledge
+    .filter((k) => k.nextReviewAt && k.nextReviewAt <= today)
+    .slice(0, 3)
+    .map((k) => cut40(k.title));
+
   return JSON.stringify({
     today,
     activeGoal: goal ? { topic: goal.topic, direction: goal.direction } : null,
-    knowledgeCount: s.knowledge.length,
-    dueReviews: due,
-    books: s.books.length,
+    currentDay,
+    dueReviews: s.knowledge.filter((k) => k.nextReviewAt && k.nextReviewAt <= today).length,
+    dueSample,
+    recentStruggles,
     userName: s.settings.userName || null,
   });
 }

@@ -1,5 +1,7 @@
 "use client";
 
+/* RAG trace 目前仅控制台诊断（见 AskCoach 内 [rag-trace]）；入库等 /api/track 白名单扩容后接 track() */
+
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { MASTERY_LABELS } from "@/lib/types";
@@ -106,6 +108,7 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
             links: k.links, version: k.version, updatedAt: k.updatedAt, tags: k.tags,
           }));
         const r = await retrieveEnhanced(text, notes, 3, { context: day.title, rewrite: false });
+        console.info("[rag-trace]", { task: "coach-qa", ...r.trace });
         ragCtx = r.context;
       } catch { ragFailed = true; /* 检索是增强项，失败不阻塞答疑 */ }
       const t1 = performance.now();

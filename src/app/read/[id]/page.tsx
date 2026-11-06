@@ -1,5 +1,7 @@
 "use client";
 
+/* RAG trace 目前仅控制台诊断（见 doSend 内 [rag-trace]）；入库等 /api/track 白名单扩容后接 track() */
+
 /* 阅读系统 V1.0（PRD 2026-11-05）三栏工作台：
  * 顶部=书籍认知概览（四区域，可收起）｜左侧=阅读路线（节点状态机+验收+沉淀）
  * 中间=AI 阅读空间（五模式+AI 策略推荐）｜右侧=学习状态面板（目标/理解状态/待解决/验收进度）
@@ -301,6 +303,7 @@ export default function BookPage() {
           3,
           { context: `${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`.trim(), signal: rac.signal }
         );
+        console.info("[rag-trace]", { task: "reading-chat", ...enhanced.trace });
         ragCtx = enhanced.context;
       } catch {
         ragFailed = true;
