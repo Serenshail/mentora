@@ -13,6 +13,7 @@ import type {
   BookLearning,
   BookMap,
   BookReadStatus,
+  BookTransfer,
   ChapterAssessment,
   ChatMsg,
   CouncilSession,
@@ -191,9 +192,13 @@ interface AppState {
   /** 沉淀：新增 / 删除（PRD 4.6） */
   addBookDeposit: (bookId: string, d: Omit<BookDeposit, "id" | "at">) => void;
   removeBookDeposit: (bookId: string, depositId: string) => void;
+  /** 知识迁移（升级 PRD 2.5）：追加迁移记录；used_correct 同步沉淀 practice + 学习证据 */
+  addBookTransfer: (bookId: string, t: Omit<BookTransfer, "id" | "at">) => void;
   /** 学习状态增量更新（knownConcepts 去重合并 / misconceptions 追加等，PRD 5.3） */
   updateBookLearning: (bookId: string, patch: Partial<Omit<BookLearning, "misconceptions" | "evidence">> & {
     addMisconception?: { concept: string; note: string };
+    /** 澄清误解（升级 PRD 2.4）：同名概念标记 clarified（重考通过时调用） */
+    clarifyMisconception?: string;
     addEvidence?: { chapterId?: string; text: string };
   }) => void;
   /** 整本书阅读状态机：unread→reading→finished→assessing→mastered（PRD 4.5） */
@@ -1356,6 +1361,35 @@ export const useAppStore = create<AppState>()(
               : b
           ),
         })),
+      addBookTransfer: (bookId, t) =>
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            const rec: BookTransfer = { ...t, id: uid("tf"), at: new Date().toISOString() };
+            /* 正确应用 = 最有长期价值的实践证据：同步沉淀 practice + 学习证据（升级 PRD 2.5/2.6） */
+            const deposit: BookDeposit = {
+              id: uid("dp"),
+              type: "practice",
+              text: `【迁移应用】${t.task} → ${t.answer.slice(0, 200)}`,
+              at: rec.at,
+            };
+            const learning: BookLearning = {
+              knownConcepts: b.learning?.knownConcepts ?? [],
+              misconceptions: b.learning?.misconceptions ?? [],
+              unresolvedQuestions: b.learning?.unresolvedQuestions ?? [],
+              evidence: [
+                ...(b.learning?.evidence ?? []),
+                { chapterId: t.chapterIds[0], text: `迁移应用（${t.verdict}）：${t.evidence.slice(0, 160)}`, at: rec.at },
+              ],
+            };
+            return {
+              ...b,
+              transfers: [rec, ...(b.transfers ?? [])],
+              ...(t.verdict === "used_correct" ? { deposits: [deposit, ...(b.deposits ?? [])] } : {}),
+              learning,
+            };
+          }),
+        })),
       updateBookLearning: (bookId, patch) =>
         set((s) => ({
           books: s.books.map((b) => {
@@ -1375,7 +1409,11 @@ export const useAppStore = create<AppState>()(
                     { ...patch.addMisconception, at: new Date().toISOString() },
                     ...cur.misconceptions.filter((m) => m.concept !== patch.addMisconception!.concept),
                   ].slice(0, 50)
-                : cur.misconceptions,
+                : patch.clarifyMisconception
+                  ? cur.misconceptions.map((m) =>
+                      m.concept === patch.clarifyMisconception ? { ...m, clarified: true } : m
+                    )
+                  : cur.misconceptions,
               unresolvedQuestions: patch.unresolvedQuestions
                 ? [...new Set([...cur.unresolvedQuestions, ...patch.unresolvedQuestions])]
                 : cur.unresolvedQuestions,

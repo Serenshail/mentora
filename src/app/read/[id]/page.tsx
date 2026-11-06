@@ -14,12 +14,13 @@ import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
-import { extractJson, insightsSchema, readingAddNodeSchema, readingAssessGenSchema, readingAssessGradeSchema, readingGoalSchema, readingPlanSchema, readingStrategySchema } from "@/lib/ai/client";
+import { extractJson, insightsSchema, readingAddNodeSchema, readingAssessGenSchema, readingAssessGradeSchema, readingGoalSchema, readingGraduationSchema, readingPlanSchema, readingStrategySchema, readingTransferGenSchema, readingTransferGradeSchema } from "@/lib/ai/client";
 import { READING_MODES, defaultReadingMode, type ReadingMode } from "@/lib/ai/reading-modes";
 import {
   ASSESS_KIND_LABELS,
   DEPOSIT_TYPE_LABELS,
   READING_GOAL_LABELS,
+  TRANSFER_VERDICT_LABELS,
   type AssessKind,
   type BookChapter,
   type BookReadStatus,
@@ -33,7 +34,7 @@ import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   ArrowLeft, Bot, BookMarked, BrainCircuit, Check, ChevronDown, CircleHelp, GraduationCap,
-  Layers, Lightbulb, MessagesSquare, PanelLeftClose, PanelLeftOpen, Plus, ShieldCheck,
+  Layers, Lightbulb, MessagesSquare, PanelLeftClose, PanelLeftOpen, Plus, Route, ShieldCheck,
   Sparkles, Target, Trash2, X,
 } from "lucide-react";
 
@@ -76,6 +77,7 @@ export default function BookPage() {
   const addChapterAssessment = useAppStore((s) => s.addChapterAssessment);
   const markChapterMastered = useAppStore((s) => s.markChapterMastered);
   const addBookDeposit = useAppStore((s) => s.addBookDeposit);
+  const addBookTransfer = useAppStore((s) => s.addBookTransfer);
   const removeBookDeposit = useAppStore((s) => s.removeBookDeposit);
   const updateBookLearning = useAppStore((s) => s.updateBookLearning);
   const setBookReadStatus = useAppStore((s) => s.setBookReadStatus);
@@ -110,12 +112,20 @@ export default function BookPage() {
   const [goalPrimary, setGoalPrimary] = useState<ReadingGoalType | null>(null);
   const [goalSecondary, setGoalSecondary] = useState<ReadingGoalType[]>([]);
   const [goalIntent, setGoalIntent] = useState("");
+  const [goalBackground, setGoalBackground] = useState("");
   const [goalAiBusy, setGoalAiBusy] = useState(false);
 
   /* ---- 三重验收（PRD 4.5）：按目标生成三题 → 作答 → 证据化判分 ---- */
   const [assess, setAssess] = useState<{ chapterId: string; questions: { kind: AssessKind; question: string }[]; answers: string[] } | null>(null);
   const [assessBusy, setAssessBusy] = useState(false);
-  const [assessResult, setAssessResult] = useState<{ results: { kind: AssessKind; level: "mastered" | "partial" | "not"; evidence: string; feedback: string }[]; suggestion?: string; chapterId: string } | null>(null);
+  const [assessResult, setAssessResult] = useState<{ results: { kind: AssessKind; level: "mastered" | "partial" | "not" | "ungradable"; evidence: string; feedback: string }[]; suggestion?: string; chapterId: string } | null>(null);
+  /* 升级 PRD 2.5 知识迁移：任务 → 独立作答 → 判定（区分会用/只会说） */
+  const [transfer, setTransfer] = useState<{ task: string; why?: string; answer: string } | null>(null);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferResult, setTransferResult] = useState<{ verdict: "used_correct" | "used_wrong" | "naming_only"; evidence: string; feedback: string; nextStep?: string } | null>(null);
+  /* 升级 PRD 3.6 整本结业 */
+  const [graduation, setGraduation] = useState<{ md: string; nextSteps: string[] } | null>(null);
+  const [graduationBusy, setGraduationBusy] = useState(false);
 
   /* ---- 沉淀（PRD 4.6）---- */
   const [depositType, setDepositType] = useState<DepositType>("explanation");
@@ -179,7 +189,7 @@ export default function BookPage() {
       : "null";
 
   const goalText = book?.goal
-    ? `主目标 ${READING_GOAL_LABELS[book.goal.primary].label}${book.goal.secondary?.length ? `（次目标 ${book.goal.secondary.map((g) => READING_GOAL_LABELS[g].label).join("、")}）` : ""}${book.goal.intent ? `，想解决：${book.goal.intent}` : ""}`
+    ? `主目标 ${READING_GOAL_LABELS[book.goal.primary].label}${book.goal.secondary?.length ? `（次目标 ${book.goal.secondary.map((g) => READING_GOAL_LABELS[g].label).join("、")}）` : ""}${book.goal.intent ? `，想解决：${book.goal.intent}` : ""}${book.goal.background ? `；已有基础：${book.goal.background}` : ""}`
     : "未设定";
 
   /* AI 策略推荐（PRD 4.4）：进节点时一次，cheap 任务，失败静默（知识类型默认兜底）。
@@ -197,6 +207,7 @@ export default function BookPage() {
           task: "reading-strategy",
           args: {
             goal: goalText,
+            background: book.goal?.background ?? "",
             chapter: chapterJson(chapter),
             learning: JSON.stringify({
               misconceptions: (book.learning?.misconceptions ?? []).slice(0, 5),
@@ -360,6 +371,7 @@ export default function BookPage() {
     setGoalPrimary(book.goal?.primary ?? null);
     setGoalSecondary(book.goal?.secondary ?? []);
     setGoalIntent(book.goal?.intent ?? "");
+    setGoalBackground(book.goal?.background ?? "");
     setGoalEditing(true);
   };
 
@@ -372,6 +384,7 @@ export default function BookPage() {
       primary: goalPrimary,
       secondary: goalSecondary.filter((g) => g !== goalPrimary),
       intent: goalIntent.trim() || undefined,
+      background: goalBackground.trim() || undefined,
       setAt: new Date().toISOString(),
     };
     const changed = book.goal?.primary !== goal.primary;
@@ -599,12 +612,24 @@ export default function BookPage() {
       });
       const masteredN = results.filter((r) => r.level === "mastered").length;
       const hasNot = results.some((r) => r.level === "not");
-      const passed = !hasNot && masteredN >= Math.max(2, Math.ceil(results.length * 0.66));
+      /* 升级 PRD 3.5：ungradable 不计入通过——「无法判定」必须换题重考 */
+      const hasUngradable = results.some((r) => r.level === "ungradable");
+      const passed = !hasNot && !hasUngradable && masteredN >= Math.max(2, Math.ceil(results.length * 0.66));
       setAssessResult({ chapterId: c.id, results, suggestion: parsed.suggestion || undefined });
       setAssess(null);
+      /* 升级 PRD 2.4 误解接线：判分器提取的误解落档；节点通过 = 同概念误解澄清 */
+      if (parsed.misconception?.concept) {
+        updateBookLearning(book.id, {
+          addMisconception: { concept: parsed.misconception.concept, note: parsed.misconception.note },
+        });
+      }
       if (passed) {
         markChapterMastered(book.id, c.id, results.map((r) => r.feedback).join(" "));
+        if (parsed.misconception?.concept) updateBookLearning(book.id, { clarifyMisconception: parsed.misconception.concept });
+        if ((c.keyConcepts ?? []).length) updateBookLearning(book.id, { knownConcepts: c.keyConcepts });
         toast.success(`验收通过（${masteredN}/${results.length} 要害命中）——这个节点算掌握了。`);
+      } else if (hasUngradable) {
+        toast("有一题无法判定（问题歧义或答非所问）——换个问法再考一次。");
       } else {
         toast(`还没过——${parsed.suggestion || "看看每题反馈，补上缺口再考一次。"}`);
       }
@@ -693,6 +718,138 @@ export default function BookPage() {
     setBookReadStatus(book.id, "assessing");
     updateBook(book.id, { chatMode: "recall-check", modeJustSwitched: true });
     toast("复盘检验已就位——合上书，把整本书讲给它听。聊完点「确认已掌握」。");
+  };
+
+  /* ================= 知识迁移（升级 PRD 2.5）：目标驱动的真实场景应用 ================= */
+
+  const masteredNodes = book.chapters.filter((c) => c.masteredAt);
+
+  const genTransfer = async () => {
+    if (transferBusy || masteredNodes.length === 0) return;
+    setTransferBusy(true);
+    setTransferResult(null);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const full = await streamChat({
+        task: "reading-transfer-gen",
+        args: {
+          book: book.title,
+          goal: goalText,
+          chapters: JSON.stringify(
+            masteredNodes.map((c) => ({ id: c.id, title: c.title, keyConcepts: c.keyConcepts ?? [], coreIdea: c.coreIdea ?? "" }))
+          ),
+          learning: JSON.stringify({
+            misconceptions: (book.learning?.misconceptions ?? []).filter((m) => !m.clarified).slice(0, 5),
+            unresolvedQuestions: (book.learning?.unresolvedQuestions ?? []).slice(0, 5),
+          }),
+          pastTransfers: JSON.stringify((book.transfers ?? []).slice(0, 5).map((t) => ({ task: t.task, verdict: t.verdict }))),
+        },
+        messages: [{ role: "user", content: "出迁移任务。" }],
+        temperature: 0.5,
+        onDelta: () => {},
+      });
+      const parsed = readingTransferGenSchema.parse(extractJson(full));
+      setTransfer({ task: parsed.task, why: parsed.whyThisTask || undefined, answer: "" });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "出任务失败，稍后再试。");
+    } finally {
+      setTransferBusy(false);
+    }
+  };
+
+  const submitTransfer = async () => {
+    if (!transfer || transferBusy) return;
+    if (!transfer.answer.trim()) {
+      toast.error("先写下你的应用方案——空着没法判定。");
+      return;
+    }
+    setTransferBusy(true);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const full = await streamChat({
+        task: "reading-transfer-grade",
+        args: {
+          book: book.title,
+          task: transfer.task,
+          chapters: JSON.stringify(
+            masteredNodes.map((c) => ({ title: c.title, keyConcepts: c.keyConcepts ?? [], assessFocus: c.assessFocus ?? "" }))
+          ),
+          answer: transfer.answer,
+        },
+        messages: [{ role: "user", content: "判定。" }],
+        temperature: 0.2,
+        onDelta: () => {},
+      });
+      const parsed = readingTransferGradeSchema.parse(extractJson(full));
+      const result = {
+        verdict: parsed.verdict,
+        evidence: parsed.evidence ?? "",
+        feedback: parsed.feedback ?? "",
+        nextStep: parsed.nextStep || undefined,
+      };
+      addBookTransfer(book.id, {
+        chapterIds: masteredNodes.map((c) => c.id),
+        task: transfer.task,
+        answer: transfer.answer,
+        verdict: parsed.verdict,
+        evidence: result.evidence,
+        feedback: result.feedback,
+      });
+      setTransferResult(result);
+      setTransfer(null);
+      toast(result.verdict === "used_correct" ? "迁移通过——这个概念现在是你的了。" : result.verdict === "used_wrong" ? "用到了但机制有偏——看反馈里错在哪一步。" : "还在复述概念——按引导把概念接到场景上。");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "判定失败——答案还在，可重交。");
+    } finally {
+      setTransferBusy(false);
+    }
+  };
+
+  /* ================= 整本结业（升级 PRD 3.6） ================= */
+
+  const genGraduation = async () => {
+    if (graduationBusy) return;
+    setGraduationBusy(true);
+    try {
+      const { streamChat } = await import("@/lib/ai/client");
+      const full = await streamChat({
+        task: "reading-graduation",
+        args: {
+          book: book.title,
+          goal: goalText,
+          map: JSON.stringify(map ?? {}),
+          stats: JSON.stringify({
+            nodes: book.chapters.length,
+            done: doneCount,
+            mastered: masteredCount,
+            assessments: (book.assessments ?? []).length,
+            partialOrNot: (book.assessments ?? []).filter((a) => a.level === "partial" || a.level === "not").length,
+          }),
+          transfers: JSON.stringify((book.transfers ?? []).slice(0, 5)),
+          deposits: JSON.stringify((book.deposits ?? []).slice(0, 15).map((d) => ({ type: DEPOSIT_TYPE_LABELS[d.type], text: d.text }))),
+        },
+        messages: [{ role: "user", content: "生成结业总结。" }],
+        temperature: 0.3,
+        onDelta: () => {},
+      });
+      const parsed = readingGraduationSchema.parse(extractJson(full));
+      setGraduation({ md: parsed.noteMarkdown, nextSteps: parsed.nextSteps ?? [] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "结业总结生成失败");
+    } finally {
+      setGraduationBusy(false);
+    }
+  };
+
+  const saveGraduationToBrain = () => {
+    if (!graduation) return;
+    addKnowledge(
+      [{ title: `《${book.title}》· 结业`, body: graduation.md, domain: book.title }],
+      "read",
+      `《${book.title}》`
+    );
+    toast.success("结业笔记已入第二大脑，将进入复习队列。");
+    setGraduation(null);
   };
 
   /* ================= 提炼洞见（保留） ================= */
@@ -799,6 +956,12 @@ export default function BookPage() {
         placeholder="你想用这本书解决什么问题？（可选，一句话）"
         value={goalIntent}
         onChange={(e) => setGoalIntent(e.target.value)}
+      />
+      <Input
+        className="mt-2"
+        placeholder="你已经有哪些相关基础？（可选——读过什么/做过什么，教练不会重复讲你懂的）"
+        value={goalBackground}
+        onChange={(e) => setGoalBackground(e.target.value)}
       />
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={() => void aiRecommendGoal()} loading={goalAiBusy}>
@@ -915,10 +1078,17 @@ export default function BookPage() {
         )}
         {(book.learning?.misconceptions ?? []).length > 0 && (
           <div className="mt-2.5 space-y-1.5">
-            <p className="text-[10.5px] text-ink-dim/70">AI 记下的易混点（不是标签，是证据；补上就走）：</p>
-            {book.learning!.misconceptions.slice(0, 3).map((m, i) => (
-              <p key={i} className="rounded-lg bg-warn/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-ink-dim">
-                <b className="text-ink/80">{m.concept}</b>：{m.note}
+            <p className="text-[10.5px] text-ink-dim/70">AI 记下的易混点（来自你的验收作答；补上就走）：</p>
+            {book.learning!.misconceptions.slice(0, 4).map((m, i) => (
+              <p
+                key={i}
+                className={cn(
+                  "rounded-lg px-2 py-1.5 text-[11px] leading-relaxed",
+                  m.clarified ? "bg-ok/[0.06] text-ink-dim/70" : "bg-warn/[0.06] text-ink-dim"
+                )}
+              >
+                <b className={m.clarified ? "text-ok" : "text-ink/80"}>{m.concept}</b>：{m.note}
+                {m.clarified && <span className="ml-1 rounded-full bg-ok/10 px-1.5 text-[9.5px] text-ok">已澄清</span>}
               </p>
             ))}
           </div>
@@ -1007,10 +1177,24 @@ export default function BookPage() {
               <p className="text-[10.5px] leading-relaxed text-ink-dim/70">诚实原则：只在你能独立讲清这本书时点它。</p>
             </>
           )}
+          {/* 迁移应用：有任一已掌握节点即可做（升级 PRD 2.5——不必等整本读完） */}
+          {masteredCount > 0 && readStatus !== "mastered" && (
+            <Button variant="outline" size="sm" className="w-full" onClick={() => void genTransfer()}>
+              <Route className="size-3.5" /> 迁移应用：用到你的真实问题
+            </Button>
+          )}
           {readStatus === "mastered" && (
-            <p className="text-[11px] leading-relaxed text-ink-dim">
-              这本书你已验收掌握。回看沉淀，或把小结关联进第二大脑。
-            </p>
+            <>
+              <p className="text-[11px] leading-relaxed text-ink-dim">
+                这本书你已验收掌握。做一次迁移应用，或生成结业总结存进第二大脑。
+              </p>
+              <Button variant="outline" size="sm" className="w-full" onClick={() => void genTransfer()}>
+                <Route className="size-3.5" /> 迁移应用：用到你的真实问题
+              </Button>
+              <Button size="sm" className="w-full" onClick={() => void genGraduation()} loading={graduationBusy}>
+                <GraduationCap className="size-3.5" /> 生成结业总结
+              </Button>
+            </>
           )}
           {readStatus === "unread" && (
             <Button variant="outline" size="sm" className="w-full" onClick={() => setBookReadStatus(book.id, "reading")}>
@@ -1018,6 +1202,26 @@ export default function BookPage() {
             </Button>
           )}
         </div>
+        {/* 迁移历史（升级 PRD 2.5 第 5 步：记录应用结果） */}
+        {(book.transfers ?? []).length > 0 && (
+          <div className="mt-3 border-t border-border pt-2.5">
+            <p className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-dim/70">
+              迁移记录 {book.transfers!.length} 次
+            </p>
+            <div className="mt-1.5 space-y-1">
+              {book.transfers!.slice(0, 3).map((t) => (
+                <div key={t.id} className="rounded-lg bg-surface-2 px-2 py-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Badge tone={t.verdict === "used_correct" ? "ok" : t.verdict === "used_wrong" ? "warn" : "default"}>
+                      {TRANSFER_VERDICT_LABELS[t.verdict]}
+                    </Badge>
+                    <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-dim">{t.task}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1368,6 +1572,62 @@ export default function BookPage() {
             </Card>
           )}
 
+          {/* 知识迁移工作面板（升级 PRD 2.5）：AI 出真实场景任务 → 独立作答 → 判定 */}
+          {(transfer || transferResult) && (
+            <Card className="mb-4 border-accent/30">
+              {transfer ? (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <Route className="size-4 text-accent" />
+                    <p className="text-[13px] font-bold text-ink">迁移应用</p>
+                    <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setTransfer(null)}>
+                      暂不做
+                    </Button>
+                  </div>
+                  {transfer.why && <p className="mt-1 text-[11px] text-ink-dim/70">{transfer.why}</p>}
+                  <p className="mt-2 rounded-xl bg-surface-2 p-3 text-[13px] leading-relaxed text-ink">{transfer.task}</p>
+                  <Textarea
+                    rows={5}
+                    className="mt-2.5"
+                    placeholder="写下你怎么想、怎么做——用上书里的概念，具体到步骤（3-5 句）…"
+                    value={transfer.answer}
+                    onChange={(e) => setTransfer({ ...transfer, answer: e.target.value })}
+                  />
+                  <div className="mt-2.5 flex justify-end">
+                    <Button size="sm" onClick={() => void submitTransfer()} loading={transferBusy}>
+                      提交应用方案
+                    </Button>
+                  </div>
+                </>
+              ) : transferResult ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <Route className="size-4 text-accent" />
+                    <p className="text-[13px] font-bold text-ink">迁移判定</p>
+                    <Badge tone={transferResult.verdict === "used_correct" ? "ok" : transferResult.verdict === "used_wrong" ? "warn" : "default"}>
+                      {TRANSFER_VERDICT_LABELS[transferResult.verdict]}
+                    </Badge>
+                  </div>
+                  {transferResult.evidence && <p className="mt-2 text-[11.5px] text-ink-dim">依据：{transferResult.evidence}</p>}
+                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-dim">{transferResult.feedback}</p>
+                  {transferResult.nextStep && (
+                    <p className="mt-2 rounded-lg bg-accent/[0.05] px-2.5 py-2 text-[11.5px] text-ink-dim">
+                      <b className="text-ink/80">下一步：</b>{transferResult.nextStep}
+                    </p>
+                  )}
+                  <div className="mt-2.5 flex justify-end gap-1.5">
+                    <Button variant="outline" size="sm" onClick={() => setTransferResult(null)}>
+                      收下
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => void genTransfer()}>
+                      再来一个场景
+                    </Button>
+                  </div>
+                </>
+              ) : null}
+            </Card>
+          )}
+
           {/* 手机/窄屏：学习状态折叠条（PRD：按需展开收起） */}
           <div className="mb-4 xl:hidden">
             <details className="rounded-2xl border border-border bg-white">
@@ -1586,6 +1846,35 @@ export default function BookPage() {
             生成节点
           </Button>
         </div>
+      </Modal>
+
+      {/* 整本结业（升级 PRD 3.6）：成果/核心认知/仍不足/迁移结果/后续建议（仅建议） */}
+      <Modal open={!!graduation} onClose={() => setGraduation(null)} title="结业总结">
+        {graduation && (
+          <>
+            <div className="max-h-[55vh] overflow-y-auto rounded-xl border border-border bg-surface-2/40 p-4">
+              <Markdown text={graduation.md} />
+              {graduation.nextSteps.length > 0 && (
+                <div className="mt-3 rounded-xl border border-accent/25 bg-accent/[0.04] p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-accent/80">下一步（仅建议）</p>
+                  <ul className="mt-1.5 space-y-1">
+                    {graduation.nextSteps.map((s, i) => (
+                      <li key={i} className="text-[12px] leading-relaxed text-ink-dim">· {s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setGraduation(null)}>
+                关闭
+              </Button>
+              <Button onClick={saveGraduationToBrain}>
+                <BookMarked className="size-4" /> 存入第二大脑
+              </Button>
+            </div>
+          </>
+        )}
       </Modal>
     </div>
   );

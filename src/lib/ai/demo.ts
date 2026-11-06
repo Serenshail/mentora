@@ -561,6 +561,55 @@ export async function* demoReadingSystem(task: string, args: Record<string, unkn
     );
     return;
   }
+  /* 升级 PRD V1.0：迁移与结业（同形状） */
+  if (task === "reading-transfer-gen") {
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          task: "（演示）回想你最近一次需要说服别人（同事/家人/客户）的场景：当时你用了什么方式？现在用这本书里你已掌握的一个概念，重新设计一次那次说服——写清楚你在哪一步用哪个概念、预期改变对方什么。3-5 句话。",
+          chapterIds: [],
+          whyThisTask: "（演示）直接落在用户真实生活场景，练习概念的第一次落地。",
+        }) +
+        "\n```"
+    );
+    return;
+  }
+  if (task === "reading-transfer-grade") {
+    const a = String(args.answer ?? "");
+    const empty = !a.trim();
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify(
+          empty
+            ? {
+                verdict: "naming_only",
+                evidence: "空白",
+                feedback: "（演示）还没有作答——先把任务里的场景换成你自己的真实经历，写 3 句话就行。",
+                nextStep: "从「上一次你需要说服别人」开始写。",
+              }
+            : {
+                verdict: "used_correct",
+                evidence: `你说：「${a.slice(0, 30)}」`,
+                feedback: "（演示）概念被用到了场景推理里，方向和机制都对——再具体一步会更好。",
+                nextStep: "把这套用法在 48 小时内真实用一次。",
+              }
+        ) +
+        "\n```"
+    );
+    return;
+  }
+  if (task === "reading-graduation") {
+    yield* chunked(
+      "```json\n" +
+        JSON.stringify({
+          noteMarkdown:
+            "## 这本书最终带走了什么（演示）\n- 能向别人解释这本书解决什么问题、作者的主张是什么。\n- 能识别一次「被套路」的瞬间并用书里的框架应对。\n\n## 核心认知（你的话）\n- 你还没写下沉淀——结业不会替你编。\n\n## 仍然不足的\n- （演示）迁移应用还没做：建议下一步补上。\n\n## 下一步\n把核心主张讲给一个真实的人听。",
+          nextSteps: ["（演示）把一个概念用在本周的真实决策上", "（演示）挑下一本书时，先写下你想解决什么问题"],
+        }) +
+        "\n```"
+    );
+    return;
+  }
   /* reading-recap：Markdown 正文 */
   yield* chunked(`## 你对这个节点的解释（演示）
 

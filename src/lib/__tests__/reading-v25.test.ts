@@ -24,8 +24,11 @@ import {
   readingAssessGenSchema,
   readingAssessGradeSchema,
   readingGoalSchema,
+  readingGraduationSchema,
   readingPlanSchema,
   readingStrategySchema,
+  readingTransferGenSchema,
+  readingTransferGradeSchema,
 } from "../ai/client";
 import { demoReadingSystem } from "../ai/demo";
 import { useAppStore } from "../store";
@@ -52,6 +55,28 @@ describe("readingStrategySchema（PRD 4.4 策略调度）", () => {
   });
   it("非法 mode 回落 socratic（不因脏值中断对话）", () => {
     expect(readingStrategySchema.parse({ mode: "讲课" }).mode).toBe("socratic");
+  });
+});
+
+describe("升级 PRD：迁移 / 结业 / 四级判定", () => {
+  it("transfer-gen：任务文本必须非空", () => {
+    const r = readingTransferGenSchema.parse({ task: "用互惠原理设计一次真实说服", chapterIds: ["c1"], whyThisTask: "落进用户场景" });
+    expect(r.task).toContain("说服");
+  });
+  it("transfer-grade：三级判定，脏值回落 naming_only", () => {
+    expect(readingTransferGradeSchema.parse({ verdict: "used_correct" }).verdict).toBe("used_correct");
+    expect(readingTransferGradeSchema.parse({ verdict: "背下来了" }).verdict).toBe("naming_only");
+  });
+  it("assess-grade：ungradable 是合法四级且不被回落吞掉", () => {
+    const r = readingAssessGradeSchema.parse({
+      results: [{ kind: "explain", level: "ungradable", evidence: "回答与问题无关", feedback: "换题" }],
+    });
+    expect(r.results[0]!.level).toBe("ungradable");
+  });
+  it("graduation：结业笔记 + nextSteps 上限 3 条", () => {
+    const ok = readingGraduationSchema.parse({ noteMarkdown: "## 带走了什么", nextSteps: ["a", "b", "c"] });
+    expect(ok.nextSteps).toHaveLength(3);
+    expect(() => readingGraduationSchema.parse({ noteMarkdown: "x", nextSteps: ["1", "2", "3", "4"] })).toThrow();
   });
 });
 
@@ -154,6 +179,22 @@ describe("demoReadingSystem：六个新任务的演示输出全部过得了 sche
     const md = await collect("reading-recap");
     expect(md).toContain("## ");
     expect(md).not.toContain("```");
+  });
+  it("reading-transfer-gen → readingTransferGenSchema（演示任务为真实场景应用题）", async () => {
+    const r = readingTransferGenSchema.parse(json(await collect("reading-transfer-gen")));
+    expect(r.task.length).toBeGreaterThan(20);
+  });
+  it("reading-transfer-grade → readingTransferGradeSchema（空白=naming_only 不放水）", async () => {
+    const blank = readingTransferGradeSchema.parse(json(await collect("reading-transfer-grade", { answer: "" })));
+    expect(blank.verdict).toBe("naming_only");
+    const answered = readingTransferGradeSchema.parse(json(await collect("reading-transfer-grade", { answer: "我先给对方有用的东西再提请求" })));
+    expect(answered.verdict).toBe("used_correct");
+    expect(answered.evidence).toContain("你说");
+  });
+  it("reading-graduation → readingGraduationSchema（结业笔记+建议≤3）", async () => {
+    const g = readingGraduationSchema.parse(json(await collect("reading-graduation")));
+    expect(g.noteMarkdown).toContain("## ");
+    expect((g.nextSteps ?? []).length).toBeLessThanOrEqual(3);
   });
 });
 
@@ -259,5 +300,32 @@ describe("阅读系统 store 动作（PRD 硬要求）", () => {
     expect(useAppStore.getState().books[0].chapters.map((c) => c.id)).toEqual(["c2", "c1"]);
     s.moveChapter(id, "c1", 1);
     expect(useAppStore.getState().books[0].chapters.map((c) => c.id)).toEqual(["c2", "c1"]);
+  });
+
+  it("addBookTransfer：记录迁移；used_correct 联动 practice 沉淀+学习证据，naming_only 不沉淀（升级 PRD 2.5/2.6）", () => {
+    const id = seedBook();
+    const s = useAppStore.getState();
+    const base = { chapterIds: ["c1"], task: "用互惠设计一次说服", answer: "我先给对方一个有用的东西再提请求", evidence: "你说：我先给再提", feedback: "机制用对了" };
+    s.addBookTransfer(id, { ...base, verdict: "used_correct" });
+    const after = useAppStore.getState().books[0];
+    expect(after.transfers).toHaveLength(1);
+    expect(after.transfers![0].verdict).toBe("used_correct");
+    expect(after.deposits!.some((d) => d.type === "practice")).toBe(true);
+    expect(after.learning!.evidence.some((e) => e.text.includes("迁移应用"))).toBe(true);
+    s.addBookTransfer(id, { ...base, task: "第二次", verdict: "naming_only" });
+    const second = useAppStore.getState().books[0];
+    expect(second.transfers).toHaveLength(2);
+    expect(second.deposits!.filter((d) => d.type === "practice")).toHaveLength(1); // naming_only 不沉淀
+  });
+
+  it("updateBookLearning：clarifyMisconception 标记澄清（升级 PRD 2.4 误解→澄清两态）", () => {
+    const id = seedBook();
+    const s = useAppStore.getState();
+    s.updateBookLearning(id, { addMisconception: { concept: "互惠", note: "以为互惠=等价交换" } });
+    expect(useAppStore.getState().books[0].learning!.misconceptions[0].clarified).toBeFalsy();
+    s.updateBookLearning(id, { clarifyMisconception: "互惠" });
+    const m = useAppStore.getState().books[0].learning!.misconceptions[0];
+    expect(m.clarified).toBe(true);
+    expect(m.note).toBe("以为互惠=等价交换"); // 澄清保留原证据，不删除
   });
 });

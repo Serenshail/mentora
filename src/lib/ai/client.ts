@@ -32,7 +32,9 @@ export type ChatTask =
   /* RAG 增强（2026-10-26）：查询改写 / 结果精排 */ | "query-rewrite" | "rag-rerank"
   /* 首页学习智能体（M2） */ | "agent"
   /* 阅读系统 V1.0（2026-11-05）：目标识别/策略调度/三重验收/小结/加节点 */
-  | "reading-goal" | "reading-strategy" | "reading-assess-gen" | "reading-assess-grade" | "reading-recap" | "reading-add-node";
+  | "reading-goal" | "reading-strategy" | "reading-assess-gen" | "reading-assess-grade" | "reading-recap" | "reading-add-node"
+  /* 升级 V1.0（2026-11-06）：知识迁移 / 整本结业 */
+  | "reading-transfer-gen" | "reading-transfer-grade" | "reading-graduation";
 
 /**
  * 调用 /api/chat 的 NDJSON 流：
@@ -591,7 +593,8 @@ export const readingAssessGenSchema = z.object({
     .max(5),
 });
 
-/** 验收判分（PRD 4.5）：evidence 纪律在提示词里，schema 只兜形状 */
+/** 验收判分（PRD 4.5 + 升级 PRD 3.5 四级）：evidence 纪律在提示词里，schema 只兜形状。
+ *  misconception：判 partial/not 时由判分器顺带提取的误解（G2 接线数据源）。 */
 export const readingAssessGradeSchema = z.object({
   results: z
     .array(
@@ -601,8 +604,9 @@ export const readingAssessGradeSchema = z.object({
           z.enum(["explain", "connect", "apply"])
         ),
         level: z.preprocess(
-          (v) => (["mastered", "partial", "not"].includes(String(v)) ? v : "partial"),
-          z.enum(["mastered", "partial", "not"])
+          (v) =>
+            (["mastered", "partial", "not", "ungradable"].includes(String(v)) ? v : "partial"),
+          z.enum(["mastered", "partial", "not", "ungradable"])
         ),
         evidence: z.string().optional().nullable(),
         feedback: z.string().optional().nullable(),
@@ -610,6 +614,35 @@ export const readingAssessGradeSchema = z.object({
     )
     .min(1),
   suggestion: z.string().optional().nullable(),
+  misconception: z
+    .object({ concept: z.string(), note: z.string() })
+    .optional()
+    .nullable(),
+});
+
+/** 知识迁移（升级 PRD 2.5）：按目标生成真实场景任务（非选择题） */
+export const readingTransferGenSchema = z.object({
+  task: z.string(),
+  chapterIds: z.array(z.string()).optional().nullable(),
+  whyThisTask: z.string().optional().nullable(),
+});
+
+/** 迁移判定：区分「会用」与「只会复述」 */
+export const readingTransferGradeSchema = z.object({
+  verdict: z.preprocess(
+    (v) =>
+      (["used_correct", "used_wrong", "naming_only"].includes(String(v)) ? v : "naming_only"),
+    z.enum(["used_correct", "used_wrong", "naming_only"])
+  ),
+  evidence: z.string().optional().nullable(),
+  feedback: z.string().optional().nullable(),
+  nextStep: z.string().optional().nullable(),
+});
+
+/** 整本结业总结（升级 PRD 3.6）：学习成果/核心认知/仍不足/后续建议（仅建议，不自动建目标） */
+export const readingGraduationSchema = z.object({
+  noteMarkdown: z.string(),
+  nextSteps: z.array(z.string()).max(3).optional().nullable(),
 });
 
 /** 添加自定义节点（PRD 4.3） */

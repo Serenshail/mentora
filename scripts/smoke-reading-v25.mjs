@@ -27,8 +27,8 @@ const SEED_BOOK = {
   id: BOOK_ID,
   title: "影响力",
   author: "罗伯特·西奥迪尼",
-  status: "reading",
-  readStatus: "reading",
+  status: "done",
+  readStatus: "mastered",
   map: {
     coreProblem: "（冒烟）为什么人会在不知不觉中顺从他人？西奥迪尼想解释顺从心理的触发机制。",
     authorStance: "（冒烟）顺从不是性格，是六类心理触发器被启动的结果。",
@@ -39,7 +39,7 @@ const SEED_BOOK = {
   planSummary: "（冒烟）按六大武器逐章拆解。",
   chapters: [
     { id: "ch-smoke-1", title: "互惠原理", focusQuestion: "谁在利用你的亏欠感？", knowledgeType: "concept", coreIdea: "先给再取：亏欠感驱动顺从", keyConcepts: ["互惠", "亏欠感"], prerequisites: [], expectedOutcome: "能识别一次互惠套路", assessFocus: "互惠的触发条件", perspectives: ["（冒烟）塔勒布：不对称互惠是掠夺。"], capture: ["互惠触发条件"], status: "todo" },
-    { id: "ch-smoke-2", title: "承诺一致", focusQuestion: "为什么小承诺能套牢你？", knowledgeType: "concept", coreIdea: "公开承诺驱动自我塑形", keyConcepts: ["承诺"], prerequisites: ["互惠原理"], expectedOutcome: "能举一个自己被套牢的例子", assessFocus: "承诺的升级路径", perspectives: [], capture: [], status: "todo" },
+    { id: "ch-smoke-2", title: "承诺一致", focusQuestion: "为什么小承诺能套牢你？", knowledgeType: "concept", coreIdea: "公开承诺驱动自我塑形", keyConcepts: ["承诺"], prerequisites: ["互惠原理"], expectedOutcome: "能举一个自己被套牢的例子", assessFocus: "承诺的升级路径", perspectives: [], capture: [], status: "done", masteredAt: new Date().toISOString() },
   ],
   insights: [],
   chat: [],
@@ -143,6 +143,19 @@ await page.goto(`${BASE}/learn?tab=read`, { waitUntil: "domcontentloaded" });
 await page.getByText("影响力").waitFor({ timeout: 20_000 }).catch(() => {});
 check("书架卡显示目标摘要", (await page.getByText(/目标/).count()) > 0);
 await page.screenshot({ path: ".tmp-shots/v25-6-shelf.png" });
+
+// 11) 升级 PRD：迁移面板（真模型出题，≤60s）——回到书页用右栏「迁移应用」入口
+await page.goto(`${BASE}/read/${BOOK_ID}`, { waitUntil: "domcontentloaded" });
+await page.getByText("这本书在讲什么").waitFor({ timeout: 20_000 }).catch(() => {});
+const transferBtn = await page.getByRole("button", { name: /迁移应用/ }).first().isVisible().catch(() => false);
+check("迁移应用入口（有已掌握节点时）", transferBtn);
+if (transferBtn) {
+  await page.getByRole("button", { name: /迁移应用/ }).first().click();
+  const taskShown = await page.getByText("迁移应用", { exact: true }).first().waitFor({ timeout: 90_000 }).then(() => true).catch(() => false);
+  check("迁移任务面板出现（真模型出题）", taskShown);
+  if (taskShown) await page.screenshot({ path: ".tmp-shots/v25-7-transfer.png" });
+}
+check("结业按钮（已掌握状态）", (await page.getByRole("button", { name: /生成结业总结/ }).count()) > 0);
 
 // 10) 清理：删除种子书 + 探针自删（激活码作废随账号）
 await page.evaluate((bookId) => {

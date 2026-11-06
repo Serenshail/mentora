@@ -101,6 +101,7 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
         learning: s("learning"),
         recentTurns: s("recentTurns"),
         currentMode: s("currentMode") || undefined,
+        background: s("background") || undefined,
       });
     case "reading-assess-gen":
       return P.READING_ASSESS_GEN({
@@ -115,6 +116,13 @@ function buildSystem(task: string | undefined, args: Record<string, unknown> = {
       return P.READING_RECAP({ book: s("book"), chapter: s("chapter"), deposits: s("deposits"), chatExcerpt: s("chatExcerpt") });
     case "reading-add-node":
       return P.READING_ADD_NODE({ book: s("book"), titles: s("titles"), interest: s("interest"), goal: s("goal") || undefined });
+    /* 升级 PRD V1.0：知识迁移 + 整本结业 */
+    case "reading-transfer-gen":
+      return P.READING_TRANSFER_GEN({ book: s("book"), goal: s("goal"), chapters: s("chapters"), learning: s("learning"), pastTransfers: s("pastTransfers") });
+    case "reading-transfer-grade":
+      return P.READING_TRANSFER_GRADE({ book: s("book"), task: s("task"), chapters: s("chapters"), answer: s("answer") });
+    case "reading-graduation":
+      return P.READING_GRADUATION({ book: s("book"), goal: s("goal"), map: s("map"), stats: s("stats"), transfers: s("transfers"), deposits: s("deposits") });
     case "reading-chat": {
       const rag = s("ragCtx")
         ? `\n\n## 用户第二大脑里检索到的相关笔记（这是**证据**，不是答案）
@@ -218,6 +226,9 @@ function demoTask(
     case "reading-assess-grade":
     case "reading-add-node":
     case "reading-recap":
+    case "reading-transfer-gen":
+    case "reading-transfer-grade":
+    case "reading-graduation":
       return (async function* () {
         yield* (await import("@/lib/ai/demo")).demoReadingSystem(task as string, args);
       })();

@@ -314,6 +314,8 @@ export interface ReadingGoal {
   secondary: ReadingGoalType[];
   /** 用户一句话说明为什么读这本书（可选） */
   intent?: string;
+  /** 用户当前基础/已有知识（升级 PRD 2.1：影响路线深度与教学策略，零基础≠有基础） */
+  background?: string;
   /** true = 用户未显式选择，由 AI/默认规则推断（用户随时可改） */
   inferred?: boolean;
   setAt: string;
@@ -337,19 +339,40 @@ export const ASSESS_KIND_LABELS: Record<AssessKind, string> = {
   apply: "迁移验收",
 };
 
-/** 单题验收记录（PRD：评分必须附带具体表现证据，判而不解释=无效判） */
+/** 单题验收记录（PRD：评分必须附带具体表现证据，判而不解释=无效判）。
+ *  level 四级口径（升级 PRD 3.5）：mastered/partial/not + ungradable——
+ *  问题歧义或回答离题到无法判定时判 ungradable，不许当 partial 放水。 */
 export interface ChapterAssessment {
   id: string;
   chapterId: string;
   kind: AssessKind;
   question: string;
   answer: string;
-  level: "mastered" | "partial" | "not";
+  level: "mastered" | "partial" | "not" | "ungradable";
   evidence: string; // 判分依据：引用用户原话 / 指出具体缺什么
   feedback: string; // 具体优点与不足
   suggestion?: string; // 未过时的针对性补充教学建议
   at: string;
 }
+
+/** 知识迁移记录（升级 PRD 2.5）：区分「会用」与「只会说」。
+ *  任务由 AI 按 reading goal 生成（真实场景，非选择题）；verdict 三级。 */
+export interface BookTransfer {
+  id: string;
+  chapterIds: string[]; // 本次迁移涉及的知识节点
+  task: string; // 迁移任务描述（用户真实场景）
+  answer: string; // 用户的独立作答/行动方案
+  verdict: "used_correct" | "used_wrong" | "naming_only";
+  evidence: string; // 判定依据：引用用户原话，指出用对/用错哪一步
+  feedback: string;
+  at: string;
+}
+
+export const TRANSFER_VERDICT_LABELS: Record<BookTransfer["verdict"], string> = {
+  used_correct: "正确应用",
+  used_wrong: "应用有误",
+  naming_only: "只会复述",
+};
 
 /** 节点级沉淀（PRD 4.6）：优先保留用户自己的话，AI 反馈只作辅助 */
 export type DepositType =
@@ -379,10 +402,11 @@ export interface BookDeposit {
   at: string;
 }
 
-/** 学习状态追踪（PRD 5.3 learningState）：记录证据，不给用户贴标签 */
+/** 学习状态追踪（PRD 5.3 learningState）：记录证据，不给用户贴标签。
+ *  misconceptions 带 clarified 语义（升级 PRD 2.4）：识别→澄清 两态，重考通过即澄清。 */
 export interface BookLearning {
   knownConcepts: string[];
-  misconceptions: { concept: string; note: string; at: string }[];
+  misconceptions: { concept: string; note: string; at: string; clarified?: boolean }[];
   unresolvedQuestions: string[];
   evidence: { chapterId?: string; text: string; at: string }[];
 }
@@ -446,6 +470,8 @@ export interface Book {
   routeType?: "full" | "core" | "goal";
   /** 节点验收档案（PRD 4.5）：book 级存储，换路线/重规划不丢历史 */
   assessments?: ChapterAssessment[];
+  /** 知识迁移记录（升级 PRD 2.5）：按目标生成的真实场景应用任务与判定 */
+  transfers?: BookTransfer[];
   /** 节点沉淀（PRD 4.6） */
   deposits?: BookDeposit[];
   /** 学习状态（PRD 5.3） */
