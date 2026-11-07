@@ -27,6 +27,9 @@ export function ReadWorkspace() {
   const [creating, setCreating] = useState(false);
   /* 删除确认：与学习页同约定——删书会连章节进度/洞见/对话一起删，且随云同步双端丢失 */
   const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
+  /* V26.1 书籍真实性核查：无可信来源时暂停生成，弹窗交给用户决定（PRD §4.1 情况 C） */
+  const [verifyState, setVerifyState] = useState<{ title: string; author: string; pasted: string; samples: string[] } | null>(null);
+  const [verifyOpen, setVerifyOpen] = useState(false);
 
   /* 生成中的取消手柄：旧实现弹窗可被 Esc/遮罩随时关掉而生成照跑，
    * 成功后又 addBook + 强制跳转——用户明明"取消"了却凭空多出一本书（删除还得再点一次）。 */
@@ -41,9 +44,50 @@ export function ReadWorkspace() {
     setCreating(true);
     const ctrl = new AbortController();
     createAbortRef.current = ctrl;
+    /* V26.1 P0-书籍真实性：先核查再生成。搜索书名，无可信来源时暂停并给用户四选一处理
+     * （PRD §4.1：确认存在/同名候选/无法核实暂停/用户坚持→基于用户材料）。 */
+    if (!pasted.trim()) {
+      try {
+        const vres = await fetch("/api/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: `${title.trim()} ${author.trim()} 书 书籍` }),
+          signal: ctrl.signal,
+        });
+        const vj = (await vres.json().catch(() => ({}))) as {
+          results?: { title: string; url: string; snippet: string }[];
+        };
+        const results = vj.results ?? [];
+        const key = title.trim().replace(/[《》\s]/g, "");
+        const credible = results.filter(
+          (r) =>
+            /豆瓣|百科|出版社|读书|京东|当当|图书|book|douban|baike|wikipedia/i.test(r.title + r.url) &&
+            r.title.toLowerCase().includes(key.slice(0, 8).toLowerCase())
+        );
+        if (results.length === 0 || credible.length === 0) {
+          setCreating(false);
+          setVerifyState({
+            title: title.trim(),
+            author: author.trim(),
+            pasted: pasted.trim(),
+            samples: results.slice(0, 3).map((r) => `${r.title} — ${r.url}`),
+          });
+          setVerifyOpen(true);
+          return; // 暂停：等用户在弹窗里决定
+        }
+      } catch { /* 核查服务不可用 → 不阻断流程，但会在生成结果里如实标注未经核实 */ }
+    }
+    await generateBook(title.trim(), author.trim(), pasted.trim());
+  };
+
+  /* 生成阅读计划并创建书。bTitle/bAuthor/bPasted：核查弹窗"我确认要读"时带上的原书名与用户材料。 */
+  const generateBook = async (bTitle: string, bAuthor: string, bPasted: string) => {
+    setCreating(true);
+    const ctrl = new AbortController();
+    createAbortRef.current = ctrl;
     const id = uid("book");
-    const desc = `书名：《${title.trim()}》${author.trim() ? ` 作者：${author.trim()}` : ""}${
-      pasted.trim() ? `\n用户粘贴的内容/笔记：\n${pasted.trim().slice(0, 6000)}` : ""
+    const desc = `书名：《${bTitle}》${bAuthor ? ` 作者：${bAuthor}` : ""}${
+      bPasted.trim() ? `\n用户粘贴的内容/笔记：\n${bPasted.trim().slice(0, 6000)}` : ""
     }`;
     try {
       const { streamChat } = await import("@/lib/ai/client");
@@ -71,9 +115,9 @@ export function ReadWorkspace() {
           : undefined;
       addBook({
         id,
-        title: title.trim(),
-        author: author.trim() || undefined,
-        pastedText: pasted.trim() || undefined,
+        title: bTitle,
+        author: bAuthor || undefined,
+        pastedText: bPasted.trim() || undefined,
         status: "reading",
         readStatus: "reading",
         map,
@@ -107,7 +151,7 @@ export function ReadWorkspace() {
       const hasEffectiveLearning = books.some(
         (b) => b.id !== id && ((b.transfers ?? []).length > 0 || b.chapters.some((c) => c.masteredAt))
       );
-      const intent = title.trim();
+      const intent = bTitle;
       if (hasEffectiveLearning && intent && !books.some((b) => b.id !== id && b.goal?.intent === intent)) {
         trackReading("second_problem_started", { bookId: id, goal: intent.slice(0, 60) });
       }
@@ -119,6 +163,8 @@ export function ReadWorkspace() {
     } finally {
       createAbortRef.current = null;
       setCreating(false);
+      setVerifyOpen(false);
+      setVerifyState(null);
     }
   };
 
@@ -268,6 +314,55 @@ export function ReadWorkspace() {
             }}
           >
             删除
+          </Button>
+        </div>
+      </Modal>
+
+      {/* V26.1 书籍真实性核查（PRD §4.1 情况 C/D）：无法核实 → 暂停生成，交给用户决定 */}
+      <Modal open={verifyOpen} onClose={() => { setVerifyOpen(false); setVerifyState(null); }} title="暂时无法核实这本书">
+        <div className="space-y-3 text-sm leading-relaxed text-ink">
+          <p>
+            我们搜索了「<b>{verifyState?.title}</b>」，没有找到可信的图书来源（豆瓣/百科/出版社记录等）。
+            为避免虚构作者、目录和章节，生成已暂停。
+          </p>
+          {verifyState && verifyState.samples.length > 0 && (
+            <div className="rounded-lg bg-surface-2/60 p-2.5 text-xs text-ink-dim">
+              <p className="mb-1 font-medium text-ink">最接近的搜索结果（可能是同名或无关内容）：</p>
+              {verifyState.samples.map((sm, i) => (
+                <p key={i} className="truncate">· {sm}</p>
+              ))}
+            </div>
+          )}
+          <p className="text-ink-dim">两个选择：</p>
+          <div className="space-y-2">
+            <div className="rounded-lg border border-border bg-white p-2.5">
+              <p className="font-medium text-ink">① 换个书名再试</p>
+              <p className="text-xs text-ink-dim">关掉这个弹窗，回到表单修改书名后重新点「生成阅读计划」。</p>
+            </div>
+            <div className="rounded-lg border border-border bg-white p-2.5">
+              <p className="font-medium text-ink">② 我确认要读它（基于我提供的材料）</p>
+              <p className="text-xs text-ink-dim">
+                在表单里粘贴这本书的原文片段或目录（必填），我们基于你给的材料做阅读计划——并如实标注"未经核实"。
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => { setVerifyOpen(false); setVerifyState(null); }}>
+            换个书名
+          </Button>
+          <Button
+            onClick={() => {
+              if (verifyState && !verifyState.pasted.trim()) {
+                toast.error("请先在表单里粘贴这本书的原文片段或目录，再确认生成");
+                return;
+              }
+              const vs = verifyState;
+              setVerifyOpen(false);
+              if (vs) void generateBook(vs.title, vs.author, vs.pasted);
+            }}
+          >
+            确认，基于我的材料生成
           </Button>
         </div>
       </Modal>

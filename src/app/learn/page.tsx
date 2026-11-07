@@ -11,6 +11,8 @@ import { Brain, BookOpen, Compass, GraduationCap, Plus, Trash2 } from "lucide-re
 import { cn } from "@/lib/utils";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { ReadWorkspace } from "@/components/read-workspace";
+import { LifeWorkspace } from "@/components/life-workspace";
+import { Footprints } from "lucide-react";
 
 function goalProgress(goals: ReturnType<typeof useAppStore.getState>["goals"][number]) {
   if (!goals.plan) return { done: 0, total: 0, ratio: 0 };
@@ -38,7 +40,7 @@ export default function LearnPage() {
   const [alsoNotes, setAlsoNotes] = useState(true); // 删计划类笔记(总纲要/阶段/目录)
   const [alsoKnowledge, setAlsoKnowledge] = useState(false); // 连知识点(含复习队列)一起删,默认保护
   /* v23.3：学习 = 教练 + 读书伙伴 两个功能合一个工作台；?tab=read 直达读书 */
-  const [tab, setTab] = useState<"coach" | "read">("coach");
+  const [tab, setTab] = useState<"coach" | "read" | "life">("coach");
   useEffect(() => {
     /* 只认 ?tab=read；setState 放进 rAF（effect 里同步 setState 会被 React Compiler
      * 判为「触发级联渲染」，且 URL 是外部状态，首帧读不到 window 也不能崩）。
@@ -74,6 +76,7 @@ export default function LearnPage() {
         {([
           { key: "coach", label: "学习教练", icon: GraduationCap },
           { key: "read", label: "读书伙伴", icon: BookOpen },
+          { key: "life", label: "学习人生", icon: Footprints },
         ] as const).map((t) => (
           <button
             key={t.key}
@@ -165,8 +168,8 @@ export default function LearnPage() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
-                    <p className="mt-0 min-w-0 flex-1 text-xs text-ink-dim/80 sm:mt-2 sm:flex-none">
+                  <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
+                    <p className="mt-0 min-w-0 flex-1 basis-40 text-xs text-ink-dim/80 sm:mt-2 sm:flex-none">
                       <span className="block truncate">
                         {prog.done}/{prog.total} 天完成 · 每周 {g.weeklyHours} 小时
                         {g.deadline ? ` · 截止 ${g.deadline}` : ""}

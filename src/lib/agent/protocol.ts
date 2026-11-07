@@ -58,6 +58,8 @@ export type ToolName =
   | "update_settings"
   /** 恢复已有工作流：查学习目标/书架/会话的现有进度，返回接续入口（只读） */
   | "resume_workflow"
+  /** 按硬约束重出某阶段的视频学习资源（写入，需确认） */
+  | "update_plan_resources"
   /* ---- 个人扩展（v24.0 二期，action 型；读自动、写需确认） ---- */
   /** 长期记忆：recall / remember / forget */
   | "memory"
@@ -207,6 +209,14 @@ export const TOOLS: Record<ToolName, ToolSpec> = {
     risk: "read",
     description: "用户说\"继续学/接着读/我的进度\"时，查找已有的学习目标、书架或会话，返回当前进度与接续入口。恢复而不是重建。",
     params: "kind?: \"learning\"|\"reading\"|\"council\"（缺省自动识别）, title?: string（按主题/书名/会话名匹配）",
+  },
+  update_plan_resources: {
+    name: "update_plan_resources",
+    label: "重出阶段资源",
+    risk: "write",
+    description:
+      "按用户的资源硬约束（如只要中文视频、大陆可访问、不要文档）重新检索并替换指定阶段各天的学习资源。流程：先 web_search 检索 → 程序化校验（类型/可访问性）→ 用户确认后写回。找不到合格视频时如实说明，不用文档凑数。",
+    params: "topic: string（目标主题）, phaseTitle?: string（阶段名，缺省=当前阶段）, constraintText: string（用户原话，如\"只要中文视频，大陆能访问，不要文档\"）",
   },
   memory: {
     name: "memory",

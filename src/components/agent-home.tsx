@@ -136,6 +136,13 @@ export function AgentHome() {
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const [runPhase, setRunPhase] = useState<"thinking" | "acting" | "answering" | "done" | "failed" | "cancelled">("thinking");
   const abortRef = useRef<AbortController | null>(null);
+  /* v26.1 消息自动滚动：用户在底部附近时跟随最新内容；主动上滚查看历史时不强制拉回 */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const stickBottom = useRef(true);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickBottom.current) el.scrollTop = el.scrollHeight;
+  }, [pending, activeId]);
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   /* 审批门：requestApproval 挂起 runAgent，直到用户对每张卡做出决定 */
@@ -559,7 +566,14 @@ export function AgentHome() {
       )}
 
       {shown.length > 0 && (
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 pb-3">
+        <div
+          ref={scrollRef}
+          onScroll={() => {
+            const el = scrollRef.current;
+            if (!el) return;
+            stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+          }}
+          className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 pb-3">
           {(activeSession?.messages.length ?? 0) > shown.length && (
             <p className="text-center text-[11px] text-ink-dim/60">
               早期消息已折叠，仅显示最近 10 条（完整记录仍保存在会话里）

@@ -1,0 +1,469 @@
+{
+ "promptVersion": "d140112",
+ "task": "agent",
+ "scenario": "意图四路判定基线（①直接回答 ②动手 ③交接工作流 ④恢复工作流）——noTools 下测文本层路由行为；工具级验证在 playwright e2e",
+ "base": "http://localhost:3000",
+ "date": "2026-11-06T16:59:50.026Z",
+ "modelHint": "服务端配置模型（见 /api/health）",
+ "summary": {
+  "total": 30,
+  "pass": 13,
+  "fail": 17
+ },
+ "results": [
+  {
+   "id": "in01-list-tuple",
+   "type": "direct",
+   "ok": true,
+   "ms": 8943,
+   "checks": {
+    "direct.answer": {
+     "pass": true
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "一句话：**list 可变，tuple 不可变**。其他区别基本都从这一条派生出来。\n\n| 维度 | list | tuple |\n|------|------|-------|\n| 可变性 | 增删改都行 | 创建后不能改 |\n| 语法 | `[1, 2, 3]` | `(1, 2, 3)` |\n| 语义 | 同类元素的集合（\"一堆东西\"） | 异构记录的字段（\"一条数据\"） |\n| 可哈希 | ❌ 不能当 dict key | ✅ 可以当 dict key |\n| 性能 | 略慢（多一层可变开销） | 略快，内存占用更小 |\n| 解包 | 可以 | 可以（更常见） |\n\n**实际怎么选：**\n\n- 你后续要 append、pop、排序 → list\n- 这组值代表一个\"结构\"（比如坐标 `(x, y)`、函数多返回值）→ tuple\n- 需要当字典的 key 或放进 set → tuple\n- 不确定时，**默认用 tuple**，需要改再换 list——不可变意味着更少的 bug\n\n顺带一提：你在学 C 的数据结构，Python 的 list 底层其实是一个**动态数组**（连续指针数组 + 预留容量），和顺序表思路一样；tuple 则是一个固定大小的连续结构，创建后内存布局不再变。"
+  },
+  {
+   "id": "in02-redblack",
+   "type": "direct",
+   "ok": true,
+   "ms": 9524,
+   "checks": {
+    "direct.answer": {
+     "pass": true
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "红黑树是一种**自平衡的二叉搜索树**。\n\n它保证每个节点要么是红色、要么是黑色，并通过一组颜色规则来限制树的形状，让树不会退化成“链表”。\n\n核心作用：\n\n- 支持查找、插入、删除，时间复杂度都是 **O(log n)**\n- 比普通二叉搜索树稳定，因为不会随着插入顺序越来越歪\n- 比严格平衡的 AVL 树少一些旋转，写起来更复杂，但删除时通常更划算\n\n你可以把它理解成：  \n**普通二叉搜索树 + 颜色规则 + 旋转/变色修复机制**。\n\n它的关键规则大致是：\n\n1. 根节点是黑色  \n2. 红色节点不能连续出现  \n3. 从任意节点到叶子空指针，经过的黑色节点数量相同  \n4. 新插入节点通常先染红，再通过旋转和变色修复\n\n实际用途很多，比如：\n\n- C++ `std::map` / `std::set`\n- Java `TreeMap` / `TreeSet`\n- Linux 内核调度器、文件系统索引等\n\n如果你正在用 C 学数据结构，红黑树属于“实现难度明显上一个台阶”的内容。它不像顺序表那样靠数组下标就能理解，难点主要在**插入和删除后的修复逻辑**。"
+  },
+  {
+   "id": "in03-tailwind",
+   "type": "direct",
+   "ok": true,
+   "ms": 12917,
+   "checks": {
+    "direct.answer": {
+     "pass": true
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "先说结论：**这俩不是同一维度的东西，不存在绝对的\"谁更好\"。**\n\nTailwind 是**写样式的方式**（utility-first，把样式拆成原子类直接堆在 HTML 上）；CSS Modules 是**样式隔离的方案**（解决\"这个 class 会不会污染全局\"）。你甚至可以同时用——比如 Next.js 项目里 Tailwind 管布局间距，个别组件用 CSS Modules 处理复杂动画。\n\n但如果非要二选一，我的判断框架：\n\n| 维度 | Tailwind | CSS Modules |\n|------|----------|-------------|\n| 上手速度 | 前 2 天痛苦（记类名），之后很快 | 立刻会（就是普通 CSS） |\n| 设计一致性 | 强——token 体系天然约束你 | 弱——各写各的，靠人自觉 |\n| 改样式的心理负担 | 低，不用怕影响别处 | 中，改一个 class 得确认作用域 |\n| 复杂选择器/动画 | 写起来别扭（`group-hover`、任意值方括号语法） | 自然，就是 CSS 该写的样子 |\n| 调试体验 | 差——DOM 里一长串 class，看不出哪个生效 | 好——元素上就一个哈希 class，打开对应文件 |\n| 产物体积 | 小（purge 后只留用到的） | 取决于你写多少 |\n| 团队规模 | 人多时优势明显（不用协调\"这个 class 归谁\"） | 人少时更舒服（不用学一套新词汇） |\n\n**什么时候选 Tailwind：**\n- 项目有设计系统或 UI 库（shadcn、Radix 那套）\n- 前端不止一个人，且不想开样式 review 会议\n- 页面以\"堆布局\"为主，少奇奇怪怪的自定义效果\n\n**什么时候选 CSS Modules：**\n- 你本来 CSS 就熟，项目小，不想多学一层抽象\n- 大量自定义动画、`::before`、复杂嵌套选择器\n- 团队就你一个人，或者项目生命周期短\n\n**我的偏好**（不是建议）：中小项目 + 一个人搞，CSS Modules 更省心，因为\"CSS 就是 CSS\"没有中间层。一旦超过 3 个页面、有统一设计语言，Tailwind 的边际收益会反超。\n\n你是在选技术栈还是碰到具体问题？说一下场景我能给更准的判断。"
+  },
+  {
+   "id": "in04-commit",
+   "type": "direct",
+   "ok": true,
+   "ms": 18039,
+   "checks": {
+    "direct.answer": {
+     "pass": true
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "一句话核心：**commit message 是给三个月后的自己和其他人看的，不是给编译器看的。**\n\n---\n\n## 格式：标题 + 空行 + 正文\n\n```\nfix: 修复顺序表插入时未检查容量的越界问题\n\n当 seqList 已满时，insert 函数直接 memcpy 到越界位置。\n现在插入前先检查 length == capacity，满则 realloc 扩容。\n\nCloses #42\n```\n\n- **标题**：≤ 50 字符，一句话说清\"做了什么\"\n- **正文**：每行 ≤ 72 字符，说清\"为什么\"和\"怎么做的\"（如果做法不明显）\n- **标题和正文之间必须有空行**，git 靠这个区分摘要和详情\n\n## 标题怎么写\n\n用祈使句，像在下命令：\n\n| 差 | 好 |\n|---|---|\n| `fixed a bug` | `fix: 修复链表反转时头节点丢失` |\n| `update code` | `refactor: 提取 seqList 扩容逻辑为独立函数` |\n| `add new feature` | `feat: 支持顺序表按值删除` |\n\n常见前缀（Conventional Commits）：`feat` / `fix` / `refactor` / `docs` / `test` / `chore`。不是死规矩，但团队项目里统一用能省很多沟通成本。\n\n## 正文写什么\n\n标题说\"做了什么\"，正文回答两个问题：\n\n1. **为什么需要这个改动**（bug 现象、需求来源、设计权衡）\n2. **关键实现思路**（如果 diff 本身不够直观）\n\n不需要复述代码。`git diff` 已经告诉别人改了哪几行，你要说的是**代码里看不出来的决策**。\n\n## 几个实操建议\n\n- **一个 commit 只做一件事**。如果你发现标题里出现\"和\"\"以及\"\"同时\"，大概率该拆成两个 commit。\n- **写之前先看 `git diff --staged`**。很多时候你脑子里的\"我改了个 bug\"和实际 diff 对不上，看一眼能避免写出驴唇不对马嘴的 message。\n- **用 `git commit -v`**（带 `-v` 参数），编辑器里会显示 diff，边看边写。\n- **别写废话正文**。`\"This commit updates the file.\"` 这种等于没写。\n\n## 判断标准\n\n写完问自己一句：**如果只看这条 message（不看 diff），我能大致猜出改了什么、为什么改吗？** 能，就合格。不能，就补正文。\n\n---\n\n你是在做数据结构作业还是已经在用 git 管项目了？如果是前者，简单写清\"改了什么函数、解决什么问题\"就够了，不用太纠结格式。"
+  },
+  {
+   "id": "in05-stackoverflow",
+   "type": "direct",
+   "ok": true,
+   "ms": 33315,
+   "checks": {
+    "direct.answer": {
+     "pass": true
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "栈溢出（stack overflow）本质只有一句话：**递归没有收敛，或者每层栈帧太大**。调试就是先确认是哪一种，再定位失控点。\n\n## 第一步：确认症状，别误判\n\n| 现象 | 说明 |\n|---|---|\n| C：`Segmentation fault`，崩溃前无任何输出 | 典型栈溢出（也可能是空指针，需区分） |\n| C：崩溃前有大量输出，越打越慢 | 递归在跑，深度失控 |\n| Python：`RecursionError: maximum recursion depth exceeded` | 解释器主动拦你，没真崩；调高 `setrecursionlimit` 才可能真 segfault |\n| 小输入就崩、大输入更崩 | 栈帧过大（局部数组）或深度失控 |\n\n## 第二步：加一个 depth 参数，这是最快的招\n\n不要一上来就开 gdb。先给递归函数加一层\"仪表盘\"：\n\n```c\nvoid print_list(Node *p, int depth) {\n    printf(\"[%d] p=%p val=%d\\n\", depth, (void*)p, p ? p->data : -1);\n    if (p == NULL) return;\n    print_list(p->next, depth + 1);\n}\n```\n\n看输出规律，三种情况一眼分开：\n\n- **depth 一直涨、指针一直变** → 终止条件不可达（比如传入负数、或链表有环）。\n- **depth 一直涨、指针在几个值之间循环** → 环，`p == NULL` 永远碰不到。\n- **depth 没涨几次就崩** → 不是深度问题，是**单层栈帧太大**，去查函数里的局部数组。\n\n## 第三步：用 gdb 看现场（C）\n\n程序已经崩了、又没加打印，就直接上调试器：\n\n```\ngcc -g -O0 main.c -o main\n./main\n# 崩溃后\ngdb ./main core\n(gdb) bt 20\n```\n\n`bt` 的输出是判断依据：如果看到**同一个函数名重复几百上千次**，那就是这个递归失控了。`-O0` 别省，否则优化后帧被合并，回溯会骗你。\n\n## 第四步：对着根因修，别对着症状修\n\n常见根因，按出现频率排：\n\n1. **base case 被绕过**。经典：`fact(n)` 里写 `if (n == 0)`，结果传了 `-1`，`n-1` 越走越远。\n2. **参数没单调变小**。比如 `f(n) = f(n/2)` 但 `n` 是负数，`n/2` 在 C 里朝 0 收敛的方向可能反复；或者浮点数当终止判断。\n3. **数据结构里有环**。你正在学顺序表，链表版更常见：循环链表用递归遍历必炸。\n4. **每层栈帧太大**。`int buf[100000]` 写在递归函数里，几层就撑爆 8MB 栈。\n5. **互递归成环**。`A` 调 `B`，`B` 调 `A`，没有共同收敛条件。\n\n**完整模拟一遍**（这是真正搞懂的分水岭），拿 `fact(-1)`：\n\n| 步骤 | 调用 | 计算 | 结果 |\n|---|---|---|---|\n| 1 | `fact(-1)` | `-1 == 0`? 否 | 返回 `-1 * fact(-2)` |\n| 2 | `fact(-2)` | `-2 == 0`? 否 | 返回 `-2 * fact(-3)` |\n| 3 | `fact(-3)` | 同上 | 继续压栈 |\n| … | 深度 n→∞ | 永不命中 base | 栈耗尽 → SIGSEGV |\n\n注意它**不是**\"算错了\"，而是\"永远回不来\"，所以崩溃点在最深处，`bt` 顶部是压栈动作本身。\n\n## 第五步：修完之后，考虑要不要用递归\n\n- 深度可控（比如分治、树，深度 O(log n)）→ 递归没问题，写起来清楚。\n- 深度可能上千（线性链表、DFS 大图）→ 改成**显式栈**模拟递归，栈在堆上，不受 8MB 限制：\n\n```c\nvoid print_list_iter(Node *head) {\n    Node **stack = NULL; size_t cap = 0, top = 0;\n    for (Node *p = head; p; p = p->next) {\n        if (top == cap) { cap = cap ? cap*2 : 64; stack = realloc(stack, cap*sizeof(*stack)); }\n        stack[top++] = p;\n    }\n    while (top) printf(\"%d\\n\", stack[--top]->data);\n    free(stack);\n}\n```\n\n- `ulimit -s unlimited`（Linux）能临时续命，但那是治标，别当修复写进代码。\n\n---\n\n**真正要掌握的三点**：① 递归失控和栈帧过大是两种病，先分开；② 一个 `depth` 参数比任何调试器都快；③ 判断标准是\"参数是否单调趋向 base case\"，写完递归先问自己这句话。\n\n要不要我拿你顺序表/链表里具体那段递归代码走一遍？贴上来我直接给你标出失控点。"
+  },
+  {
+   "id": "in06-405",
+   "type": "direct",
+   "ok": true,
+   "ms": 10498,
+   "checks": {
+    "direct.answer": {
+     "pass": true
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "**HTTP 405 Method Not Allowed**——服务器认识你用的方法，但这个资源不接受它。\n\n## 什么时候会遇到\n\n最典型：用 `GET` 去请求一个只接受 `POST` 的接口，或者反过来。\n\n```\nGET /api/login HTTP/1.1\n→ 405 Method Not Allowed\nAllow: POST\n```\n\n服务器在响应头里用 `Allow` 告诉你\"这个 URL 只接受哪些方法\"。\n\n## 跟几个容易混的状态码区分\n\n| 状态码 | 含义 | 关键区别 |\n|--------|------|----------|\n| 404 | 资源不存在 | URL 本身找不到 |\n| 405 | 资源存在，但方法不对 | 路径对了，动词错了 |\n| 403 | 禁止访问 | 方法可能对，但权限不够 |\n| 400 | 请求格式错误 | 方法可能对，但 body/参数有问题 |\n\n## 常见排查方向\n\n1. **看 `Allow` 响应头**——服务器直接告诉你该用什么方法。\n2. **检查客户端代码**——比如前端 fetch/axios 里 `method` 写错了，或者表单提交默认是 GET 但后端只注册了 POST 路由。\n3. **框架路由配置**——Flask/Express/Spring 里路由只绑定了特定方法，漏了你要用的那个。\n4. **代理/网关拦截**——某些反向代理（Nginx、CDN）会限制方法，比如默认只放行 GET/POST，PUT/DELETE 被挡。\n\n一句话总结：**URL 没写错，但 HTTP 动词用错了。**"
+  },
+  {
+   "id": "in07-eqeq",
+   "type": "direct",
+   "ok": true,
+   "ms": 6362,
+   "checks": {
+    "direct.answer": {
+     "pass": true
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "`==` 会做**类型转换**再比较，`===` 不做转换，**类型和值都要一致**才为 `true`。\n\n```js\n0 == \"0\"   // true  （字符串 \"0\" 被转成数字 0）\n0 === \"0\"  // false （类型不同：number vs string）\n\nnull == undefined   // true  （这是 == 的少数合理特例）\nnull === undefined  // false （类型不同）\n\n[] == false   // true  （[] -> \"\" -> 0，false -> 0）\n[] === false  // false\n\nNaN == NaN    // false\nNaN === NaN   // false\n```\n\n实际建议：**默认用 `===`**，可读性更强，也能避免一堆隐式转换坑。  \n少数例外：判断“值是否为 null 或 undefined”时可以写：\n\n```js\nif (x == null) {\n  // x 是 null 或 undefined\n}\n```"
+  },
+  {
+   "id": "in08-seqlist-lookup",
+   "type": "direct",
+   "ok": true,
+   "ms": 6037,
+   "checks": {
+    "direct.answer": {
+     "pass": true
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "看是哪种\"查找\"：\n\n- **按位置访问**（已知下标 i，取 `data[i]`）：**O(1)**，数组直接算地址偏移，一步到位。\n- **按值查找**（遍历找某个元素）：**O(n)**，最好情况第 0 个就命中 O(1)，最坏/平均都要扫完，所以整体记 **O(n)**。\n\n一句话记法：**随机访问快，按值找要线性扫**。这也是顺序表对比链表的优势所在——链表按位置访问是 O(n)，顺序表是 O(1)。"
+  },
+  {
+   "id": "in09-translate",
+   "type": "direct",
+   "ok": false,
+   "ms": 5301,
+   "checks": {
+    "direct.answer": {
+     "pass": false
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "**那只敏捷的棕色狐狸跳过了懒狗。**\n\n这句话是英语经典的 pangram（全字母句），包含 A–Z 全部 26 个字母，常用于字体预览和键盘测试。"
+  },
+  {
+   "id": "in10-joke",
+   "type": "direct",
+   "ok": false,
+   "ms": 5880,
+   "checks": {
+    "direct.answer": {
+     "pass": false
+    },
+    "direct.noHandoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "一个经典款：\n\n> 为什么程序员分不清万圣节和圣诞节？\n> 因为 Oct 31 == Dec 25。\n\n（八进制的 31 = 十进制的 25，冷不冷？）\n\n再附赠一个：\n\n> 我本来想写个关于并行计算的冷笑话，\n> 但得等另外两个先讲完。"
+  },
+  {
+   "id": "in11-python-full",
+   "type": "intent",
+   "ok": true,
+   "ms": 14241,
+   "checks": {
+    "route.handoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "focus": "信息充分：交接且不重复问已提供的信息",
+   "output": "你明确说了\"系统学\"，我帮你把目标立起来。已知背景我直接写进去，不用再复述。"
+  },
+  {
+   "id": "in12-linear-thin",
+   "type": "intent",
+   "ok": true,
+   "ms": 14329,
+   "checks": {
+    "intent.engaged": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "focus": "信息不足：最多问一两个关键问题，不问卷式三连问",
+   "output": "可以。线性代数别一上来背行列式，最好按“能看懂矩阵在干什么”来学。\n\n我建议这条路径：\n\n1. **向量与几何直觉**：点、向量、长度、点积、夹角、投影。\n2. **矩阵与线性变换**：矩阵不是数字表格，而是“空间变形器”。\n3. **线性方程组**：高斯消元、秩、解的存在性与唯一性。\n4. **向量空间与子空间**：列空间、零空间、基、维度。\n5. **特征值与特征向量**：变换中“方向不变”的东西。\n6. **应用线**：投影、最小二乘、图/网络、推荐系统、机器学习基础。\n\n结合你现在的情况，我会把它和编程绑起来：  \n比如用 Python 或 C 实现矩阵乘法、高斯消元、点积投影，这样比纯看公式更容易记住。\n\n先问你一个关键问题：你学线性代数主要是为了**考研/机器学习/图形学/算法竞赛/纯补基础**？  \n你回答后，我可以给你一条更具体的学习路线；如果你想系统学，我也可以直接帮你立一个线性代数学习目标。"
+  },
+  {
+   "id": "in13-influence",
+   "type": "intent",
+   "ok": false,
+   "ms": 7705,
+   "checks": {
+    "route.handoff": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "focus": "书架已有该书时应提出恢复/接续而不是重复加书",
+   "output": "你书架上已经有《影响力》了，我先查一下当前的阅读进度和拆解状态，看是接着往下读还是要从头规划——不重复生成已有的计划。"
+  },
+  {
+   "id": "in14-tsm-add",
+   "type": "intent",
+   "ok": false,
+   "ms": 5567,
+   "checks": {
+    "route.handoff": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "我先看一眼你书架的实际状态——记忆里提到《思考快与慢》可能已经在册了，别重复加。"
+  },
+  {
+   "id": "in15-roundtable",
+   "type": "intent",
+   "ok": true,
+   "ms": 8460,
+   "checks": {
+    "route.handoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "好，帮你开一个圆桌，主题锁定在\"要不要辞职创业\"这个决策上。我会把你目前的背景（在学数据结构、有 Python 基础、正在推进学习目标）一并带进去，这样讨论时不会脱离你的实际处境。"
+  },
+  {
+   "id": "in16-rust",
+   "type": "intent",
+   "ok": true,
+   "ms": 13335,
+   "checks": {
+    "route.handoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "你目前有 C 语言基础（正在用 C 写数据结构）和 Python 经验，学 Rust 正好能在这两者之间架桥——比 C 安全，比 Python 快。我直接帮你把目标立起来，背景从你现有状态里带过去，不用重复讲。"
+  },
+  {
+   "id": "in17-ielts",
+   "type": "intent",
+   "ok": false,
+   "ms": 18869,
+   "checks": {
+    "route.handoff": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "我先按“总分 6.5、考试日期暂未确定”建一个可继续细化的目标草稿；确认后会进入学习引导，补齐当前水平、考试日期、每日可用时间和薄弱项。"
+  },
+  {
+   "id": "in18-calculus",
+   "type": "intent",
+   "ok": true,
+   "ms": 15215,
+   "checks": {
+    "route.handoff": {
+     "pass": true
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "考研高数是个系统活，我帮你把目标立起来，交接给学习引导去拆计划。已知背景我都写进去了，引导接手后只补问最关键的（比如数一/数二/数三、当前基础），你不用从头再说一遍。"
+  },
+  {
+   "id": "in19-clrs",
+   "type": "intent",
+   "ok": false,
+   "ms": 7395,
+   "checks": {
+    "route.handoff": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "先查一下书架，避免重复添加。"
+  },
+  {
+   "id": "in20-council-talk",
+   "type": "intent",
+   "ok": false,
+   "ms": 8180,
+   "checks": {
+    "route.handoff": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "我先看看你的人生伙伴里有没有现成的会话。"
+  },
+  {
+   "id": "in21-resume-ds",
+   "type": "intent",
+   "ok": false,
+   "ms": 7732,
+   "checks": {
+    "route.resume": {
+     "pass": true
+    },
+    "route.noRecreate": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "我先查一下你数据结构目标的当前进度和待复习项。"
+  },
+  {
+   "id": "in22-resume-read",
+   "type": "intent",
+   "ok": false,
+   "ms": 4232,
+   "checks": {
+    "route.resume": {
+     "pass": true
+    },
+    "route.noRecreate": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "我先查一下你书架上正在读的书和上次进度。"
+  },
+  {
+   "id": "in23-resume-english",
+   "type": "intent",
+   "ok": false,
+   "ms": 5725,
+   "checks": {
+    "route.resume": {
+     "pass": false
+    },
+    "route.noRecreate": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "我先查一下你现有的学习目标里有没有英语相关的。"
+  },
+  {
+   "id": "in24-resume-council",
+   "type": "intent",
+   "ok": false,
+   "err": "fetch failed",
+   "ms": 13,
+   "checks": {},
+   "output": ""
+  },
+  {
+   "id": "in25-resume-progress",
+   "type": "intent",
+   "ok": false,
+   "err": "fetch failed",
+   "ms": 4,
+   "checks": {},
+   "output": ""
+  },
+  {
+   "id": "in26-resume-influence",
+   "type": "intent",
+   "ok": false,
+   "err": "fetch failed",
+   "ms": 3,
+   "checks": {},
+   "output": ""
+  },
+  {
+   "id": "in27-resume-python",
+   "type": "intent",
+   "ok": false,
+   "err": "fetch failed",
+   "ms": 4,
+   "checks": {},
+   "output": ""
+  },
+  {
+   "id": "in28-resume-algo",
+   "type": "intent",
+   "ok": false,
+   "err": "fetch failed",
+   "ms": 2,
+   "checks": {},
+   "output": ""
+  },
+  {
+   "id": "in29-resume-review",
+   "type": "intent",
+   "ok": false,
+   "err": "fetch failed",
+   "ms": 4,
+   "checks": {},
+   "output": ""
+  },
+  {
+   "id": "in30-resume-seqlist",
+   "type": "intent",
+   "ok": false,
+   "err": "fetch failed",
+   "ms": 4,
+   "checks": {},
+   "output": ""
+  }
+ ],
+ "mergedRuns": [
+  "2026-11-06T16:50:37.185Z",
+  "2026-11-06T16:59:50.026Z"
+ ]
+}

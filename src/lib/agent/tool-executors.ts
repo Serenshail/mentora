@@ -9,6 +9,7 @@ import { useAppStore } from "@/lib/store";
 import { buildContext, wikiRetrieve } from "@/lib/rag";
 import { todayISO, uid } from "@/lib/utils";
 import { track } from "@/lib/track";
+import { parseResourceConstraint, classifyResource, validateResources } from "@/lib/resources";
 import type {
   PendingAction,
   ToolName,
@@ -488,6 +489,36 @@ function validateWriteTool(name: ToolName, args: Record<string, unknown>): ToolO
     return draftAction("delete_note", "删除笔记", cut(note.title, 30), { id: note.id, title: note.title });
   }
 
+  if (name === "update_plan_resources") {
+    const topic = str(args.topic);
+    const constraintText = str(args.constraintText);
+    if (!topic || !constraintText)
+      return { result: { ok: false, content: "需要 topic 和 constraintText（用户原话）", summary: "参数不足" } };
+    const goal =
+      store.goals.find((g) => g.topic.includes(topic)) ??
+      store.goals.find((g) => topic.includes(g.topic));
+    if (!goal?.plan) return { result: { ok: false, content: "没有找到该目标的计划。", summary: "未找到" } };
+    const days = Object.values(goal.plan.days);
+    const phaseTitle = str(args.phaseTitle);
+    const phase = phaseTitle
+      ? goal.plan.phases.find((ph) => ph.title.includes(phaseTitle))
+      : goal.plan.phases[0];
+    if (!phase) return { result: { ok: false, content: "没有找到指定阶段。", summary: "未找到阶段" } };
+    const dayIds = phase.dayIds.filter((id) => goal.plan!.days[id]);
+    if (dayIds.length === 0) return { result: { ok: false, content: "该阶段还没有天级计划。", summary: "阶段为空" } };
+    const constraint = parseResourceConstraint(constraintText);
+    if (constraint.resourceType !== "video")
+      return { result: { ok: false, content: "本工具只处理视频类硬约束；其他资源调整请在学习页进行。", summary: "约束不支持" } };
+    return draftAction("update_plan_resources", "重出阶段视频资源", cut(`${goal.topic} · ${phase.title}`, 30), {
+      goalId: goal.id,
+      phaseId: phase.id,
+      phaseTitle: phase.title,
+      topic,
+      constraintText,
+      dayIds,
+    });
+  }
+
   if (name === "create_goal") {
     const topic = str(args.topic);
     if (!topic) return { result: { ok: false, content: "缺少 topic", summary: "参数缺失" } };
@@ -568,14 +599,14 @@ export async function executeTool(name: ToolName, args: Record<string, unknown>)
   const isWrite = (
     {
       save_note: 1, update_note: 1, delete_note: 1, create_goal: 1,
-      add_book: 1, create_session: 1, update_settings: 1,
+      add_book: 1, create_session: 1, update_settings: 1, update_plan_resources: 1,
     } as Partial<Record<ToolName, number>>
   )[name] != null;
   track("agent_tool_intent", { tool: name, write: isWrite ? 1 : 0 });
   const spec = (
     {
       save_note: 1, update_note: 1, delete_note: 1, create_goal: 1,
-      add_book: 1, create_session: 1, update_settings: 1,
+      add_book: 1, create_session: 1, update_settings: 1, update_plan_resources: 1,
     } as Partial<Record<ToolName, number>>
   )[name];
   return spec ? validateWriteTool(name, args) : runReadTool(name, args);
@@ -723,6 +754,67 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
         ok: true,
         content: `会话「${str(p.title)}」已创建。去「人生伙伴」打开它开始对话。`,
         summary: "已创建",
+      };
+    }
+    /* ---- V26.1 P0：资源硬约束重出（B4/B5） ---- */
+    case "update_plan_resources": {
+      const goalId = str(p.goalId);
+      const phaseId = str(p.phaseId);
+      const topic = str(p.topic);
+      const dayIds = Array.isArray(p.dayIds) ? (p.dayIds as string[]) : [];
+      const constraint = parseResourceConstraint(str(p.constraintText));
+      const store2 = useAppStore.getState();
+      const goal = store2.goals.find((g) => g.id === goalId);
+      if (!goal?.plan) return { ok: false, content: "目标或计划不存在。", summary: "未找到" };
+
+      /* 每天检索：B站优先（query 直接带 site 或关键词），取结果里能确定性分类为视频且大陆可达的 */
+      const report = { checked: 0, replaced: 0, skipped: 0 };
+      for (const dayId of dayIds.slice(0, 5)) {
+        const day = goal.plan.days[dayId];
+        if (!day) continue;
+        const query = `bilibili ${topic} ${day.title} 教程`;
+        try {
+          const res = await fetch("/api/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query }),
+          });
+          const j = (await res.json().catch(() => ({}))) as {
+            results?: { title: string; url: string; snippet: string }[];
+          };
+          report.checked += 1;
+          const validated = validateResources(j.results ?? [], constraint);
+          const goodVideos = validated.verdicts
+            .filter((v) => v.resType === "video" && v.access === "verified" && v.violations.length === 0)
+            .slice(0, 2);
+          if (goodVideos.length === 0) {
+            report.skipped += 1;
+            continue;
+          }
+          const newResources = goodVideos.map((v) => ({
+            title: cut(v.title, 60),
+            url: v.url || undefined,
+            why: `视频硬约束重出：${day.title}`,
+            kind: "course" as const,
+          }));
+          store2.updateDayResources(goalId, dayId, newResources);
+          report.replaced += 1;
+        } catch {
+          report.skipped += 1;
+        }
+      }
+
+      const failedDays = dayIds.slice(0, 5).length - report.replaced;
+      return {
+        ok: report.replaced > 0,
+        content:
+          report.replaced > 0
+            ? `已为 ${report.replaced}/${dayIds.slice(0, 5).length} 天换上经校验的大陆可访问视频资源（B站单集直链）。` +
+              (failedDays > 0
+                ? `有 ${failedDays} 天暂时没找到合格视频——如实告知：宁缺毋滥，可以稍后再让我重试，或换更宽泛的关键词。`
+                : "")
+            : `没有找到合格的中文视频资源（检索了 ${report.checked} 天）——如实告知：不会用文档凑数。可以换关键词（比如更具体的主题词）再试，或允许部分天使用文档并在 why 里注明。`,
+        summary: report.replaced > 0 ? `${report.replaced} 天已换` : "未找到合格视频",
       };
     }
     case "update_settings": {

@@ -1,0 +1,30 @@
+{
+ "promptVersion": "32246bf",
+ "task": "agent",
+ "scenario": "意图四路判定基线（①直接回答 ②动手 ③交接工作流 ④恢复工作流）——noTools 下测文本层路由行为；工具级验证在 playwright e2e",
+ "base": "http://localhost:3000",
+ "date": "2026-11-06T17:43:26.442Z",
+ "modelHint": "服务端配置模型（见 /api/health）",
+ "summary": {
+  "total": 1,
+  "pass": 0,
+  "fail": 1
+ },
+ "results": [
+  {
+   "id": "in28-resume-algo",
+   "type": "intent",
+   "ok": false,
+   "ms": 6894,
+   "checks": {
+    "resume.honest": {
+     "pass": false
+    },
+    "intent.noDump": {
+     "pass": true
+    }
+   },
+   "output": "我查一下你的学习目标列表。"
+  }
+ ]
+}

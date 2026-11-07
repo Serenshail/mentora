@@ -24,6 +24,7 @@ import {
 import { CmdK } from "@/components/cmdk";
 import { Skeleton } from "@/components/ui";
 import { FeedbackWidget } from "@/components/feedback-widget";
+import { OnboardingModal } from "@/components/onboarding-modal";
 import { AssistantWidget } from "@/components/assistant-widget";
 import { toast } from "sonner";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -355,7 +356,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
     /* 读书伙伴已并入「学习」工作台：/read 列表与详情都归「学习」高亮 */
-    if (href === "/learn") return pathname.startsWith("/learn") || pathname.startsWith("/brain") || pathname.startsWith("/read");
+    if (href === "/learn")
+      return pathname.startsWith("/learn") || pathname.startsWith("/brain") || pathname.startsWith("/read") || pathname.startsWith("/life");
     return pathname.startsWith(href);
   };
 
