@@ -27,6 +27,9 @@ vi.mock("@/lib/resources", () => ({
   classifyResource: () => "other",
   validateResources: () => [],
 }));
+vi.mock("@/lib/book-verify", () => ({
+  verifyBook: async () => ({ status: "verified", hits: [], credible: [], query: "" }),
+}));
 
 import { stripMetaSentences } from "../agent/runner";
 
@@ -116,9 +119,15 @@ describe("stripMetaSentences（B12：剔除混入正文的英文私语/元话语
     expect(stripMetaSentences(input)).toContain("Recursion 递归 works well");
   });
 
-  it("语言一致性：无汉字纯英文句整段移除（V26.1 用户实测泄漏形态）", () => {
-    const r = stripMetaSentences("Recursion works well when the data is nested. The call stack grows on each level.");
-    expect(r).toBe("");
+  it("语言一致性：中文回答里混入的纯英文叙述整段移除（V26.1 用户实测泄漏形态）", () => {
+    /* V26.2-H4 语义更新：泄漏判定的语境是「中文回答里混入英文」——
+     * 单独存在的整段英文回答是教学内容（见下组用例），不再清空 */
+    const r = stripMetaSentences(
+      "我们先看递归的适用条件。Recursion works well when the data is nested. The call stack grows on each level. 接下来看代码。",
+    );
+    expect(r).not.toContain("Recursion works well");
+    expect(r).toContain("我们先看递归的适用条件。");
+    expect(r).toContain("接下来看代码。");
   });
 
   it("空串与纯空白安全（无汉字规则下空白组亦剔除）", () => {
@@ -144,5 +153,48 @@ describe("无汉字纯外文句（语言一致性规则）", () => {
   it("代码块里的纯英文不受影响", () => {
     const r = stripMetaSentences("如下：\n```py\nprint('hello world only english')\n```\n完毕。");
     expect(r).toContain("print('hello world only english')");
+  });
+});
+
+describe("V26.2-H4：整段英文回答不再被清空（外语教学是实质内容）", () => {
+  it("纯英文教学讲解原样保留（无私语形态的句子）", () => {
+    const r = stripMetaSentences(
+      "To rotate an array by k steps, reverse the whole array first. Then reverse the first k elements. Finally reverse the remaining part.",
+    );
+    expect(r).toContain("reverse the whole array first");
+    expect(r).toContain("reverse the remaining part");
+  });
+
+  it("英文回答里开头的独白私语被剔，实质内容保留", () => {
+    const r = stripMetaSentences(
+      "Let me search. Quicksort picks a pivot and partitions the array around it.",
+    );
+    expect(r).not.toContain("Let me search");
+    expect(r).toContain("Quicksort picks a pivot");
+  });
+
+  it("英文回答里的工具复述句被剔", () => {
+    const r = stripMetaSentences(
+      "The plan has three phases. Click the chapter to see the full lesson. Each phase has exercises.",
+    );
+    expect(r).not.toContain("to see the full lesson");
+    expect(r).toContain("The plan has three phases.");
+    expect(r).toContain("Each phase has exercises.");
+  });
+
+  it("英语教学的例句（带中文引导词）保留", () => {
+    const r = stripMetaSentences("例句：I have been to Paris. 这个句子用了现在完成时，强调经历。");
+    expect(r).toContain("I have been to Paris");
+    expect(r).toContain("现在完成时");
+  });
+
+  it("长英文段开头是独白引导词时不清空（长度豁免：>220 字按内容对待，句子级剔私语）", () => {
+    const body =
+      "Let me walk you through the algorithm step by step. " +
+      "First, we choose a pivot element from the array. Then we partition the remaining elements into two sub-arrays. ".repeat(
+        4,
+      );
+    const r = stripMetaSentences(body);
+    expect(r).toContain("choose a pivot element");
   });
 });

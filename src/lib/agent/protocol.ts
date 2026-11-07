@@ -188,8 +188,10 @@ export const TOOLS: Record<ToolName, ToolSpec> = {
     name: "add_book",
     label: "加书上架",
     risk: "write",
-    description: "把一本书加入书架并自动生成阅读计划（拆章节）。耗时较长。",
-    params: "title: string, author?: string, brief?: string",
+    description:
+      "把一本书加入书架并自动生成阅读计划（拆章节）。耗时较长。系统会先核实书籍真实性：核实不过且没有材料时会被拒绝——届时如实告知用户，索要作者/ISBN/出版社或原文材料（material），不要坚持编造。",
+    params:
+      "title: string, author?: string, brief?: string, material?: string（用户粘贴的这本书原文片段/目录/笔记；提供了就基于材料生成并标注，不再要求搜索核实）",
   },
   create_session: {
     name: "create_session",

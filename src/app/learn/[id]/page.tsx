@@ -1182,6 +1182,49 @@ function PlanTimeline({
                   目录 {entries.length} 天 · 已完成 {phaseDone} 天
                 </p>
               )}
+              {/* V26.2-H6（PRD §6.1）：每个阶段都有可见的修改入口——此前只有当前活动阶段
+                  能重排，已通过/未解锁阶段零入口。重排语义见 phase-regen.ts（快照+成绩保留）。 */}
+              {phase.catalog?.length ? (
+                <div className="mb-1.5 pl-4">
+                  <button
+                    className="cursor-pointer rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-surface-2 hover:text-ink"
+                    onClick={async () => {
+                      const note = window.prompt(
+                        `重排「阶段${pi + 1} · ${phase.title}」：说说你不满意什么/想怎么换（留空=换一批角度）` +
+                          (phaseDone > 0
+                            ? `\n\n⚠ 该阶段已有 ${phaseDone} 个完成的学习日。标题相同的天会保留学习记录，其余会被替换（旧目录会存进历史版本，可回看）。`
+                            : "")
+                      );
+                      if (note === null) return;
+                      toast("正在重排…");
+                      const { regeneratePhase } = await import("@/lib/agent/phase-regen");
+                      const r = await regeneratePhase(goal.id, phase.id, note, true);
+                      if (r.ok) toast.success(r.summary + "——目录已重排，逐天进入时重新展开。");
+                      else toast.error(r.content);
+                    }}
+                  >
+                    重排本阶段
+                  </button>
+                </div>
+              ) : null}
+              {/* V26.2-H5：重排历史版本（PRD §6.4/D7——可以找到旧版本） */}
+              {(goal.planHistory ?? []).filter((h) => h.phaseId === phase.id).length > 0 && (
+                <details className="mb-1.5 ml-4 text-[11px] text-ink-dim">
+                  <summary className="cursor-pointer select-none">
+                    历史版本（{(goal.planHistory ?? []).filter((h) => h.phaseId === phase.id).length}）
+                  </summary>
+                  {(goal.planHistory ?? [])
+                    .filter((h) => h.phaseId === phase.id)
+                    .slice()
+                    .reverse()
+                    .map((h, hi) => (
+                      <p key={hi} className="mt-1 pl-2 leading-relaxed">
+                        {h.at.slice(0, 10)} · {h.reason} · 旧目录 {h.dayIds.length} 天：
+                        {h.days.map((d) => d.title).join("、") || "（无天记录）"}
+                      </p>
+                    ))}
+                </details>
+              )}
               {entries.length === 0 && phase.outline && (
                 <ul className="mb-2 ml-1 space-y-1 border-l border-border pl-3">
                   {phase.outline.slice(0, 6).map((o, i) => (

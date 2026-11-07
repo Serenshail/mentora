@@ -26,6 +26,7 @@ import type {
   KnowledgeType,
   NodeStatus,
   Plan,
+  PlanHistoryEntry,
   QuizResult,
   ReadingGoal,
   Settings,
@@ -126,6 +127,8 @@ interface AppState {
     boundary: string,
     catalog: { id: string; title: string; knowledgePoints: string[] }[]
   ) => void;
+  /** 阶段重排前快照旧目录（V26.2-H5，PRD §6.4 版本留痕）：只增不删，每目标最多 5 条 */
+  snapshotPhase: (goalId: string, phaseId: string, reason?: string) => void;
   /** 单日详情回填：把展开后的完整 DayPlan 覆盖进目录占位，保留进度/讲义/答疑等运行态 */
   setDayDetail: (goalId: string, phaseId: string, dayId: string, detail: DayPlan) => void;
   /** 链接体检/替换完成后异步回写资源（不在生成主链路上阻塞） */
@@ -663,6 +666,28 @@ export const useAppStore = create<AppState>()(
             const first = plan.days[phase.dayIds[0]];
             if (first && first.status === "locked") first.status = "active";
             return { ...g, plan };
+          }),
+        })),
+      /* V26.2-H5：重排前快照旧阶段目录（深拷贝，只增不删，最多 5 条——旧数据绝不删除） */
+      snapshotPhase: (goalId, phaseId, reason) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const phase = g.plan.phases.find((ph) => ph.id === phaseId);
+            if (!phase) return g;
+            const entry: PlanHistoryEntry = {
+              at: new Date().toISOString(),
+              reason: reason || "阶段重排",
+              phaseId,
+              phaseTitle: phase.title,
+              boundary: phase.boundary || "",
+              dayIds: [...phase.dayIds],
+              days: phase.dayIds
+                .map((id) => g.plan!.days[id])
+                .filter((d): d is DayPlan => !!d)
+                .map((d) => structuredClone(d)),
+            };
+            return { ...g, planHistory: [...(g.planHistory ?? []), entry].slice(-5) };
           }),
         })),
       setDayDetail: (goalId, phaseId, dayId, detail) =>

@@ -6,6 +6,7 @@
  * 涉密操作（apiKey/baseUrl/密码/注销/整包导入导出）不在此表——模型无法调用不存在的东西。 */
 import { streamChat, extractJson, readingPlanSchema } from "@/lib/ai/client";
 import { useAppStore } from "@/lib/store";
+import { verifyBook } from "@/lib/book-verify";
 import { buildContext, wikiRetrieve } from "@/lib/rag";
 import { todayISO, uid } from "@/lib/utils";
 import { track } from "@/lib/track";
@@ -536,7 +537,7 @@ function validateWriteTool(name: ToolName, args: Record<string, unknown>): ToolO
     if (dayIds.length === 0) return { result: { ok: false, content: "该阶段还没有天级计划。", summary: "阶段为空" } };
     const constraint = parseResourceConstraint(constraintText);
     if (constraint.resourceType !== "video")
-      return { result: { ok: false, content: "本工具只处理视频类硬约束；其他资源调整请在学习页进行。", summary: "约束不支持" } };
+      return { result: { ok: false, content: "本工具目前只处理视频类资源。请直接用一句话告诉我想换成的资源类型（比如“换成图文教程”“换成B站视频”），我按新约束重新检索并更新；文档类资源调整能力在后续版本开放。", summary: "约束不支持" } };
     return draftAction("update_plan_resources", "重出阶段视频资源", cut(`${goal.topic} · ${phase.title}`, 30), {
       goalId: goal.id,
       phaseId: phase.id,
@@ -572,6 +573,7 @@ function validateWriteTool(name: ToolName, args: Record<string, unknown>): ToolO
       title,
       author: str(args.author),
       brief: str(args.brief),
+      material: str(args.material),
     });
   }
 
@@ -713,7 +715,33 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
       const title = str(p.title);
       const author = str(p.author);
       const brief = str(p.brief);
-      const desc = `书名：《${title}》${author ? ` 作者：${author}` : ""}${brief ? `\n简介：${brief}` : ""}`;
+      const material = str(p.material);
+      /* V26.2-H2（PRD §5.4）：正式生成前必须核查书籍真实性。
+       * 用户随材料走的路径（material 非空）→ user_material，仍生成但如实标注；
+       * 无材料且核查不过 → 拒绝生成，由模型向用户转述并索要作者/ISBN/原文材料。 */
+      let verification: "verified" | "user_material" = "user_material";
+      if (!material) {
+        let v: Awaited<ReturnType<typeof verifyBook>> | null = null;
+        try {
+          v = await verifyBook(title, author);
+        } catch {
+          v = null; // 核查服务不可用（C7）——同样拒绝，话术区分
+        }
+        if (!v || v.status !== "verified") {
+          return {
+            ok: false,
+            summary: "书籍未核实",
+            content:
+              !v || v.status === "unsearchable"
+                ? `《${title}》暂时无法核实（核查服务不可用），所以这次没有生成书籍内容——不能为无法确认真实性的书编目录。请告诉用户稍后再试，或请 ta 补充作者/出版社/ISBN，或直接粘贴这本书的原文片段（有材料就能基于材料生成）。`
+                : `没有找到《${title}》的可信图书来源（豆瓣/百科/出版社等）${author ? `，或来源与作者「${author}」不符` : ""}，所以这次没有生成书籍内容。请如实告诉用户，并请 ta 确认书名/作者是否准确（同名书请区分版本），或粘贴原文材料后再试——绝不要为无法确认的书编造目录或作者观点。`,
+          };
+        }
+        verification = "verified";
+      }
+      const desc = `书名：《${title}》${author ? ` 作者：${author}` : ""}${brief ? `\n简介：${brief}` : ""}${
+        material ? `\n用户提供的原文材料/目录（以此为准，不要编造未提供的内容）：\n${material.slice(0, 6000)}` : ""
+      }`;
       const full = await streamChat({
         args: { desc },
         messages: [{ role: "user", content: "生成阅读计划。" }],
@@ -728,6 +756,8 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
         title,
         author: author || undefined,
         status: "reading",
+        verification, // V26.2-H2：核查状态落库，详情页/书架如实展示
+        pastedText: material || undefined,
         /* v25：新链路给 map（认知地图四区域）；旧输出没有 map 时从 bookProfile 转换，两代数据都接 */
         map: plan.map
           ? { ...plan.map, generatedAt: new Date().toISOString() }

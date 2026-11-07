@@ -146,6 +146,14 @@ function health() {
   return requestJson("/api/health", { timeout: 15000 });
 }
 
+/* V26.2-H2：书籍真实性核查（POST /api/search，与 Web 的 /api/search 网关同源） */
+function searchBooks(query) {
+  return requestJson("/api/search", {
+    method: "POST",
+    data: { query: query }
+  });
+}
+
 module.exports = {
   request: request,
   authHeaders: authHeader,
@@ -158,5 +166,6 @@ module.exports = {
   clearSession: clearSession,
   pullCloud: pullCloud,
   pushCloud: pushCloud,
-  health: health
+  health: health,
+  searchBooks: searchBooks
 };

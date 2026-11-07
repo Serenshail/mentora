@@ -1335,6 +1335,9 @@ export default function BookPage() {
         desc={book.author}
         right={
           <div className="flex items-center gap-2">
+            {/* V26.2-H2：书籍核查状态如实标注（PRD §5.5——材料生成 ≠ 已核实完整书目） */}
+            {book.verification === "user_material" && <Badge tone="warn">基于你的材料</Badge>}
+            {book.verification === "unverified" && <Badge tone="warn">未经核实</Badge>}
             <Badge tone={READ_STATUS_META[readStatus].tone}>{READ_STATUS_META[readStatus].label}</Badge>
             <Button variant="outline" onClick={() => void extract()} loading={extracting}>
               <Lightbulb className="size-4" /> 提炼洞见

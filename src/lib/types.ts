@@ -203,6 +203,18 @@ export interface SocraticTurn {
   content: string;
 }
 
+/** 阶段重排历史（V26.2-H5，PRD §6.4 版本留痕）：每次重排前快照该阶段旧目录 */
+export interface PlanHistoryEntry {
+  at: string; // ISO
+  reason: string; // 用户的不满点/重排原因
+  phaseId: string;
+  phaseTitle: string;
+  boundary: string;
+  dayIds: string[];
+  /** 旧目录的天的深拷贝（含当时的状态与内容；重排不删除任何旧数据） */
+  days: DayPlan[];
+}
+
 export interface Goal {
   id: string;
   topic: string; // "Python"
@@ -218,6 +230,8 @@ export interface Goal {
   status: "draft" | "active" | "paused" | "done"; // draft=引导中，可中断可回档
   createdAt: string;
   plan?: Plan;
+  /** 阶段重排历史（V26.2-H5）：最多保留最近 5 次，只增不删 */
+  planHistory?: PlanHistoryEntry[];
   quizLog: QuizResult[];
   intakeTranscript: SocraticTurn[];
   /** 结业回路（v21）：最后一个阶段过门后置 true，UI 生成结业笔记与下一步建议后清掉 */
@@ -532,6 +546,9 @@ export interface Book {
   chatMode?: string;
   /** 刚切换过模式：下一次发送时置位传给服务端（让模型执行该模式的开场协议），发送后清除 */
   modeJustSwitched?: boolean;
+  /** 书籍真实性核查状态（V26.2-H2，PRD §5）：verified=搜索核实；user_material=基于用户粘贴材料；
+   *  unverified=未经核实（历史遗留/绕过路径创建）。undefined=V26.2 之前的旧数据，不展示标记 */
+  verification?: "verified" | "user_material" | "unverified";
   planSummary?: string;
   chapters: BookChapter[];
   insights: BookInsight[];

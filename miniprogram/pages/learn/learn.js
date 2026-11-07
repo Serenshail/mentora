@@ -163,35 +163,93 @@ Page({
     that.setData({ creating: true });
     var author = that.data.author.trim();
     var pasted = that.data.pasted.trim();
-    var desc =
-      "书名：《" +
-      title +
-      "》" +
-      (author ? " 作者：" + author : "") +
-      (pasted ? "\n用户粘贴的内容/笔记：\n" + pasted.slice(0, 6000) : "");
-    chat
-      .streamChat({
-        args: { desc: desc },
-        messages: [{ role: "user", content: "生成阅读计划。" }],
-        temperature: 0.5,
-        task: "reading-plan",
-        onDelta: function () {}
-      })
-      .then(function (full) {
-        var plan = chat.extractJson(full);
-        if (!plan || !Array.isArray(plan.chapters) || plan.chapters.length < 1) {
-          throw new Error("计划不完整，再试一次");
+
+    /* V26.2-H2 书籍真实性核查（与 Web 同语义，PRD §5）：先核查再生成。
+     * 核实通过 → verified；核实不过/服务不可用 → 暂停并弹窗，用户坚持且粘贴了材料
+     * 才允许基于材料生成（user_material）——绝不给编造的书生成目录。 */
+    var generate = function (verification) {
+      var desc =
+        "书名：《" +
+        title +
+        "》" +
+        (author ? " 作者：" + author : "") +
+        (pasted ? "\n用户粘贴的内容/笔记：\n" + pasted.slice(0, 6000) : "");
+      chat
+        .streamChat({
+          args: { desc: desc },
+          messages: [{ role: "user", content: "生成阅读计划。" }],
+          temperature: 0.5,
+          task: "reading-plan",
+          onDelta: function () {}
+        })
+        .then(function (full) {
+          var plan = chat.extractJson(full);
+          if (!plan || !Array.isArray(plan.chapters) || plan.chapters.length < 1) {
+            throw new Error("计划不完整，再试一次");
+          }
+          store.createBookFromPlan(title, author, pasted, plan, verification);
+          util.toast("已建好阅读路线", "success");
+          that.setData({ adding: false, title: "", author: "", pasted: "", tab: "books" });
+          that.render();
+        })
+        .catch(function (e) {
+          util.toast(e.message || "建档失败，稍后再试");
+        })
+        .then(function () {
+          that.setData({ creating: false });
+        });
+    };
+    var pauseWithModal = function (message) {
+      wx.showModal({
+        title: "暂时无法核实这本书",
+        content: message,
+        confirmText: "用我的材料生成",
+        cancelText: "换个书名",
+        success: function (r) {
+          if (r.confirm && pasted) {
+            generate("user_material");
+          } else if (r.confirm) {
+            util.toast("请先在表单里粘贴这本书的原文片段或目录");
+            that.setData({ creating: false });
+          } else {
+            that.setData({ creating: false });
+          }
         }
-        store.createBookFromPlan(title, author, pasted, plan);
-        util.toast("已建好阅读路线", "success");
-        that.setData({ adding: false, title: "", author: "", pasted: "", tab: "books" });
-        that.render();
+      });
+    };
+    api
+      .searchBooks(title + " " + author + " 书 书籍")
+      .then(function (vj) {
+        var hits = (vj && vj.results) || [];
+        /* 与 Web book-verify.judgeBookEvidence 同判据：可信书目来源 + 标题含书名前 8 字 + 作者匹配 */
+        var key = title.replace(/[《》\s：:·、！!？?，,。（()）]/g, "").toLowerCase();
+        if (!key) key = title.toLowerCase();
+        var credible = hits.filter(function (r) {
+          var hay = (r.title || "") + " " + (r.url || "");
+          return /豆瓣|百科|出版社|读书|京东|当当|图书|book|douban|baike|wikipedia|图书馆|书目/i.test(hay) &&
+            (r.title || "").toLowerCase().indexOf(key.slice(0, 8)) >= 0;
+        });
+        if (credible.length === 0) {
+          pauseWithModal(
+            "没有找到《" + title + "》的可信图书来源（豆瓣/百科/出版社记录等）" +
+              (author ? "，或来源与作者「" + author + "」不符" : "") +
+              "。为避免虚构作者和目录，已暂停生成。可以核对书名后重试，或粘贴这本书的原文材料继续。"
+          );
+          return;
+        }
+        if (author && !credible.some(function (r) { return ((r.title || "") + " " + (r.snippet || "")).indexOf(author) >= 0; })) {
+          pauseWithModal(
+            "找到《" + title + "》的图书记录，但与作者「" + author + "」不符（可能是同名不同作者）。" +
+              "请确认作者，或粘贴这本书的原文材料继续。"
+          );
+          return;
+        }
+        generate("verified");
       })
-      .catch(function (e) {
-        util.toast(e.message || "建档失败，稍后再试");
-      })
-      .then(function () {
-        that.setData({ creating: false });
+      .catch(function () {
+        pauseWithModal(
+          "核查服务暂时不可用，无法确认《" + title + "》的真实性。为避免虚构内容已暂停生成——可稍后重试，或粘贴这本书的原文材料继续。"
+        );
       });
   }
 });

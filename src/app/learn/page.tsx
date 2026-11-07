@@ -42,11 +42,13 @@ export default function LearnPage() {
   /* v23.3：学习 = 教练 + 读书伙伴 两个功能合一个工作台；?tab=read 直达读书 */
   const [tab, setTab] = useState<"coach" | "read" | "life">("coach");
   useEffect(() => {
-    /* 只认 ?tab=read；setState 放进 rAF（effect 里同步 setState 会被 React Compiler
-     * 判为「触发级联渲染」，且 URL 是外部状态，首帧读不到 window 也不能崩）。
-     * 这里同时把 setTab 用上，避免 lint 报未使用。 */
-    if (new URLSearchParams(window.location.search).get("tab") !== "read") return;
-    const id = requestAnimationFrame(() => setTab("read"));
+    /* V26.2-H1：?tab=read 与 ?tab=life 都直达（/life 307 到 ?tab=life，
+     * 此前只认 read 导致侧栏「学习人生」永远落在教练 tab）。
+     * setState 放进 rAF（effect 里同步 setState 会被 React Compiler
+     * 判为「触发级联渲染」，且 URL 是外部状态，首帧读不到 window 也不能崩）。 */
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t !== "read" && t !== "life") return;
+    const id = requestAnimationFrame(() => setTab(t));
     return () => cancelAnimationFrame(id);
   }, []);
 
@@ -95,6 +97,10 @@ export default function LearnPage() {
 
       {tab === "read" ? (
         <ReadWorkspace />
+      ) : tab === "life" ? (
+        /* V26.2-H1：补上学习人生渲染分支——LifeWorkspace 此前只 import 未渲染，
+         * 点 tab/侧栏 /life 进入的永远是教练内容（审计 P0-1） */
+        <LifeWorkspace />
       ) : (
         <>
       {/* 方向迷茫：第一性原理引导对话 */}

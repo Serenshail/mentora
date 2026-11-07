@@ -2,6 +2,20 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v26.2 — 2026-11-07（专项整改：学习人生入口恢复/书籍真实性三路径闭环/泄漏收口/重排语义修复）
+
+第二轮整改：先审计（`docs/AUDIT-V26.2-2026-11-07.md`，只读零改动）后开发。审计三答：学习人生组件与数据完好但入口断裂（P0）；数据零丢失零迁移；V26.1 零整体回滚。
+
+- **H1 学习人生入口恢复（P0）**：审计实锤 `LifeWorkspace` 只 import 从未渲染（`learn/page.tsx:96` 仅 read 二元分支）、`?tab=life` 不被解析、`/life` 307 落教练 tab——侧栏「学习人生」点进去是教练内容=用户感知"功能被替换"的全部来源。修复：补 `tab === "life"` 渲染分支 + URL effect 泛化接受 read|life。约 6 行，数据零操作。
+- **H2 书籍真实性三路径闭环（P0，PRD §5）**：新共享服务 `src/lib/book-verify.ts`（可信书目来源+双侧标题归一化+作者匹配→verified/insufficient/unsearchable）。修复四条绕过路径：①粘贴材料不再免检（材料只改证据语义）②搜索异常不再静默放行（unsearchable 弹窗，C7 话术）③agent `add_book` 接核查（协议新增 `material` 参数：核查不过拒生成+由模型如实转述索要材料；有材料→user_material）④小程序接核查（api.searchBooks+showModal 流程）。"未经核实"标注从注释空头承诺变为 `Book.verification` 落库字段+书架/详情双端展示（user_material=「基于你的材料」）。
+- **H3 泄漏三路收口（PRD §4）**：①流式气泡实时过 stripMetaSentences（此前只剥围栏，英文私语/裸 JSON 流式期间逐字可见=泄漏主通道）②五个收尾赋值点（取消/重试/打转/预算）统一过句级清洗再落库③上游错误体（可含 provider 报文/HTML）只进服务端 logEvent，用户 toast 改人话。顺带修 P2-1：`hasWriteCall` 死变量真生效（写入类工具轮次过渡语不并入正文），删除误伤面大的 looksLikeSelfTalk。
+- **H4 过度清洗修正（"答不对题"头号嫌疑）**：`stripMetaSentences` 重构为按「整个回答的语言」判定——中文回答里混入的无汉字句组=泄漏整组剔（B12 保留，锁用户实测泄漏形态）；**整段英文回答=教学内容，句子级只剔私语形态**（独白引导词短句/to see 复述），META_EN_WORDS 词表不再参与英文回答路径（report/tool/confirm 是教学普通词）。trimMetaEdges 不再把纯英文段清空。meta-filter 测试补"不该删保留"5 组。
+- **H5 阶段重排语义修复（PRD §6.4/D2-D7）**：①`alignPhaseDayIds` 标题对齐沿用旧 id——quizLog/成绩引用与「已完成 N 天」显示在重排后保留（修复审计 P1-4 的清零）②`store.snapshotPhase`+`Goal.planHistory` 重排前深拷贝旧目录（≤5 条只增不删），路径设计列表可查历史版本③两处虚假注释改为与实现一致④旧天对象绝不删除。
+- **H6 修改入口补全（PRD §6.1）**：路径设计列表每个阶段卡新增「重排本阶段」入口（此前仅当前活动阶段有）；审批卡 actionPreview 补 regenerate_phase 分支展示完成日警告（此前 payload 里的 completed 从不展示）；update_plan_resources 拒绝话术从死路指引改为可行动指引。
+- **H7 冒烟纪律兑现**：`scripts/smoke-v26.mjs` 场景 A-H **首次真实执行**（此前交付表 ✅ 实为"脚本就绪"）：D/F/G/H 全 PASS（学习人生 F1/F2 修复前必红、修复后过=H1 实证；书籍核查 D1/D2 过=H2 实证；预算文案 H 过）；A/B/C/E2 失败逐条诊断（见 TEST-REPORT）：A=复现失败的 flake（composer 隔离复现健康）、C/E2=测试基建云同步竞态（种子只写 localStorage 被 bootSync 拉取覆盖）、**B=真缺口**（整页刷新 <180s 内静默回放引导，>180s 才有中断提示——PRD F4 部分达成，列入遗留）。
+
+**门禁**：tsc 0 / eslint 0 error / vitest 293（+26）/ build 过 / 真模型 e2e 15/15（天级计划 1 例 qwen 慢 flake 复跑 130s 过）/ smoke 8 PASS。**未部署**——push 前等用户确认。
+
 ## v26.1 — 2026-11-07（用户价值验证与数据闭环：埋点/迁移三级评估/漏斗/流失/后台）
 
 先审计后开发：现有 track→/api/track→events 表（D1/RDS）+ dbEventStats + 后台全复用，零重复建设。

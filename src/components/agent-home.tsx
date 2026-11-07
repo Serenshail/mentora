@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
-import { runAgent, type PendingAction } from "@/lib/agent/runner";
+import { runAgent, stripMetaSentences, type PendingAction } from "@/lib/agent/runner";
 import { TOOLS, type ApprovalDecision, type PlanStep, type ToolCall } from "@/lib/agent/protocol";
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
@@ -109,6 +109,16 @@ function actionPreview(a: PendingAction): string | null {
     return [p.direction, p.motivation, criteria].filter((x) => typeof x === "string" && x).join("\n") || null;
   }
   if (a.kind === "add_book") return [p.author, p.brief].filter((x) => typeof x === "string" && x).join(" · ") || null;
+  /* V26.2-H6：重排阶段审批卡带上完成日警告（此前 payload 里的 completed 从不展示） */
+  if (a.kind === "regenerate_phase") {
+    const done = typeof p.completed === "number" ? (p.completed as number) : 0;
+    return [
+      typeof p.phaseTitle === "string" ? `阶段：${p.phaseTitle}` : "",
+      done > 0 ? `⚠ 该阶段已有 ${done} 个完成/跳过的学习日——标题相同的天保留记录，其余会被替换（旧目录存入历史版本）。` : "",
+    ]
+      .filter(Boolean)
+      .join("\n") || null;
+  }
   if (a.kind === "update_settings") return a.summary;
   return null;
 }
@@ -276,10 +286,14 @@ export function AgentHome() {
           },
           onReasoning: () => {}, // v26.1：不展示原始推理文本，只保留阶段标签
           onDelta: (d) => {
-            /* 流式期间剥掉 tool/plan 指令块：用户不该看到 JSON 协议 */
+            /* 流式期间剥掉 tool/plan 指令块 + 私语句（V26.2-H3）：用户不该看到
+             * JSON 协议或内部独白——此前只剥围栏，英文私语/裸 JSON 在流式期间逐字可见。 */
             setPending((prev) => {
               const merged = prev + d;
-              return merged.replace(/```(?:tool|plan)[\s\S]*?```/g, "").replace(/```(?:tool|plan)[\s\S]*$/, "");
+              const noFence = merged
+                .replace(/```(?:tool|plan)[\s\S]*?```/g, "")
+                .replace(/```(?:tool|plan)[\s\S]*$/, "");
+              return stripMetaSentences(noFence);
             });
           },
           requestApproval,

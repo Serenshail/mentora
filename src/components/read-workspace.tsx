@@ -10,6 +10,7 @@ import { useHydrated } from "@/lib/use-chat";
 import { extractJson, readingPlanSchema } from "@/lib/ai/client";
 import { READING_GOAL_LABELS } from "@/lib/types";
 import { trackReading } from "@/lib/track";
+import { verifyBook } from "@/lib/book-verify";
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
 import { BookOpen, Plus, Trash2 } from "lucide-react";
@@ -27,8 +28,11 @@ export function ReadWorkspace() {
   const [creating, setCreating] = useState(false);
   /* 删除确认：与学习页同约定——删书会连章节进度/洞见/对话一起删，且随云同步双端丢失 */
   const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
-  /* V26.1 书籍真实性核查：无可信来源时暂停生成，弹窗交给用户决定（PRD §4.1 情况 C） */
-  const [verifyState, setVerifyState] = useState<{ title: string; author: string; pasted: string; samples: string[] } | null>(null);
+  /* V26.1/V26.2 书籍真实性核查：无可信来源或核查不可用时暂停生成，弹窗交给用户决定（PRD §5） */
+  const [verifyState, setVerifyState] = useState<{
+    title: string; author: string; pasted: string; samples: string[];
+    status: "insufficient" | "unsearchable";
+  } | null>(null);
   const [verifyOpen, setVerifyOpen] = useState(false);
 
   /* 生成中的取消手柄：旧实现弹窗可被 Esc/遮罩随时关掉而生成照跑，
@@ -44,44 +48,51 @@ export function ReadWorkspace() {
     setCreating(true);
     const ctrl = new AbortController();
     createAbortRef.current = ctrl;
-    /* V26.1 P0-书籍真实性：先核查再生成。搜索书名，无可信来源时暂停并给用户四选一处理
-     * （PRD §4.1：确认存在/同名候选/无法核实暂停/用户坚持→基于用户材料）。 */
-    if (!pasted.trim()) {
-      try {
-        const vres = await fetch("/api/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: `${title.trim()} ${author.trim()} 书 书籍` }),
-          signal: ctrl.signal,
+    /* V26.2-H2（PRD §5）：任何路径都先核查——粘贴材料不再免检（材料只改变证据语义：
+     * 核实通过 → verified；未核实但用户坚持且提供了材料 → user_material，生成结果如实标注）。
+     * 核查服务不可用 → unsearchable，同样暂停（C7：明确提示暂时无法核实，不静默放行）。 */
+    try {
+      const v = await verifyBook(title, author, ctrl.signal);
+      if (v.status !== "verified") {
+        setCreating(false);
+        setVerifyState({
+          title: title.trim(),
+          author: author.trim(),
+          pasted: pasted.trim(),
+          samples: v.hits.slice(0, 3).map((r) => `${r.title} — ${r.url}`),
+          status: v.status,
         });
-        const vj = (await vres.json().catch(() => ({}))) as {
-          results?: { title: string; url: string; snippet: string }[];
-        };
-        const results = vj.results ?? [];
-        const key = title.trim().replace(/[《》\s]/g, "");
-        const credible = results.filter(
-          (r) =>
-            /豆瓣|百科|出版社|读书|京东|当当|图书|book|douban|baike|wikipedia/i.test(r.title + r.url) &&
-            r.title.toLowerCase().includes(key.slice(0, 8).toLowerCase())
-        );
-        if (results.length === 0 || credible.length === 0) {
-          setCreating(false);
-          setVerifyState({
-            title: title.trim(),
-            author: author.trim(),
-            pasted: pasted.trim(),
-            samples: results.slice(0, 3).map((r) => `${r.title} — ${r.url}`),
-          });
-          setVerifyOpen(true);
-          return; // 暂停：等用户在弹窗里决定
-        }
-      } catch { /* 核查服务不可用 → 不阻断流程，但会在生成结果里如实标注未经核实 */ }
+        setVerifyOpen(true);
+        return; // 暂停：等用户在弹窗里决定
+      }
+      await generateBook(title.trim(), author.trim(), pasted.trim(), "verified");
+      return;
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setCreating(false);
+        return; // 用户取消
+      }
+      // 核查服务不可用（网络/限流）→ unsearchable，走弹窗而不是静默生成（PRD C7）
+      setCreating(false);
+      setVerifyState({
+        title: title.trim(),
+        author: author.trim(),
+        pasted: pasted.trim(),
+        samples: [],
+        status: "unsearchable",
+      });
+      setVerifyOpen(true);
+      return;
     }
-    await generateBook(title.trim(), author.trim(), pasted.trim());
   };
 
   /* 生成阅读计划并创建书。bTitle/bAuthor/bPasted：核查弹窗"我确认要读"时带上的原书名与用户材料。 */
-  const generateBook = async (bTitle: string, bAuthor: string, bPasted: string) => {
+  const generateBook = async (
+    bTitle: string,
+    bAuthor: string,
+    bPasted: string,
+    verification: "verified" | "user_material"
+  ) => {
     setCreating(true);
     const ctrl = new AbortController();
     createAbortRef.current = ctrl;
@@ -120,6 +131,7 @@ export function ReadWorkspace() {
         pastedText: bPasted.trim() || undefined,
         status: "reading",
         readStatus: "reading",
+        verification, // V26.2-H2：verified=搜索核实 / user_material=基于用户材料（详情页如实标注）
         map,
         profile: plan.bookProfile || undefined,
         planSummary: plan.planSummary,
@@ -218,6 +230,13 @@ export function ReadWorkspace() {
                   <div className="min-w-0">
                     <h3 className="truncate font-bold text-ink">《{b.title}》</h3>
                     {b.author && <p className="mt-0.5 text-xs text-ink-dim">{b.author}</p>}
+                    {/* V26.2-H2：核查状态如实展示（旧数据无该字段不标记） */}
+                    {b.verification === "user_material" && (
+                      <p className="mt-0.5 text-[11px] text-warn">基于你的材料 · 未经搜索核实</p>
+                    )}
+                    {b.verification === "unverified" && (
+                      <p className="mt-0.5 text-[11px] text-warn">未经核实</p>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button
@@ -318,13 +337,21 @@ export function ReadWorkspace() {
         </div>
       </Modal>
 
-      {/* V26.1 书籍真实性核查（PRD §4.1 情况 C/D）：无法核实 → 暂停生成，交给用户决定 */}
+      {/* V26.1/V26.2 书籍真实性核查（PRD §5.4/§5.6）：无法核实 → 暂停生成，交给用户决定 */}
       <Modal open={verifyOpen} onClose={() => { setVerifyOpen(false); setVerifyState(null); }} title="暂时无法核实这本书">
         <div className="space-y-3 text-sm leading-relaxed text-ink">
-          <p>
-            我们搜索了「<b>{verifyState?.title}</b>」，没有找到可信的图书来源（豆瓣/百科/出版社记录等）。
-            为避免虚构作者、目录和章节，生成已暂停。
-          </p>
+          {verifyState?.status === "unsearchable" ? (
+            <p>
+              核查服务暂时不可用，无法确认「<b>{verifyState?.title}</b>」的真实性。
+              为避免虚构作者、目录和章节，生成已暂停——稍后重试，或直接粘贴这本书的材料继续。
+            </p>
+          ) : (
+            <p>
+              我们搜索了「<b>{verifyState?.title}</b>」，没有找到可信的图书来源（豆瓣/百科/出版社记录等）
+              {verifyState?.author ? <>，或来源信息与作者「{verifyState?.author}」不符</> : null}。
+              为避免虚构作者、目录和章节，生成已暂停。
+            </p>
+          )}
           {verifyState && verifyState.samples.length > 0 && (
             <div className="rounded-lg bg-surface-2/60 p-2.5 text-xs text-ink-dim">
               <p className="mb-1 font-medium text-ink">最接近的搜索结果（可能是同名或无关内容）：</p>
@@ -342,7 +369,8 @@ export function ReadWorkspace() {
             <div className="rounded-lg border border-border bg-white p-2.5">
               <p className="font-medium text-ink">② 我确认要读它（基于我提供的材料）</p>
               <p className="text-xs text-ink-dim">
-                在表单里粘贴这本书的原文片段或目录（必填），我们基于你给的材料做阅读计划——并如实标注"未经核实"。
+                在表单里粘贴这本书的原文片段或目录（必填），我们基于你给的材料做阅读计划——
+                书籍详情会如实标注「基于你的材料」，不会冒充已核实的完整书目。
               </p>
             </div>
           </div>
@@ -359,7 +387,7 @@ export function ReadWorkspace() {
               }
               const vs = verifyState;
               setVerifyOpen(false);
-              if (vs) void generateBook(vs.title, vs.author, vs.pasted);
+              if (vs) void generateBook(vs.title, vs.author, vs.pasted, "user_material");
             }}
           >
             确认，基于我的材料生成

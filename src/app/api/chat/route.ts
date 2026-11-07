@@ -362,7 +362,8 @@ async function fetchUpstream(
   // OpenAI 官方、DeepSeek、华为云 MaaS（OpenAI 兼容）支持流式回带 usage；其余 provider 保守不发（防 400）
   const wantsUsage = cfg.provider === "deepseek" || cfg.provider === "openai" || cfg.provider === "maas";
   let useTools = Array.isArray(tools) && tools.length > 0;
-  let lastErr = "";
+  let lastErr = ""; // 用户可见的错误话术（V26.2-H3：不携带上游原始响应体）
+  let lastErrDetail = ""; // 仅服务端日志（logEvent），含上游 body 摘要
   let attempt = 0;
   while (attempt < MAX_ATTEMPTS) {
     const ctrl = new AbortController();
@@ -398,7 +399,10 @@ async function fetchUpstream(
         return res;
       }
       const text = await res.text().catch(() => "");
-      lastErr = `上游模型返回 ${res.status}：${text.slice(0, 300)}`;
+      /* V26.2-H3：上游响应体（可含 provider 内部报文/HTML）只进服务端日志，
+       * 不再拼进用户可见错误（此前经 NDJSON t=e → client throw → toast 直接弹给用户 300 字原始报文） */
+      lastErr = `上游模型暂时不可用（${res.status}）`;
+      lastErrDetail = `上游模型返回 ${res.status}：${text.slice(0, 300)}`;
       /* 网关不认识 tools 参数 → 立即降级（围栏协议已在 system 里，模型仍能调工具）。
        * 不消耗重试预算：这是一次确定性能力探测，不是故障。 */
       if (res.status === 400 && useTools) {
@@ -423,8 +427,8 @@ async function fetchUpstream(
       await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1))); // 500ms → 1s
     }
   }
-  logEvent({ route: "chat-upstream", status: "fail", lastErr, attempts: MAX_ATTEMPTS });
-  throw new Error(`${lastErr || "上游模型不可用"}（已重试 ${MAX_ATTEMPTS} 次）`);
+  logEvent({ route: "chat-upstream", status: "fail", lastErr: lastErrDetail || lastErr, attempts: MAX_ATTEMPTS });
+  throw new Error(`${lastErr || "上游模型不可用"}，请稍后重试或切换模型（已重试 ${MAX_ATTEMPTS} 次）`);
 }
 
 async function* upstreamDeltas(

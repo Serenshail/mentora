@@ -82,7 +82,7 @@ export function OnboardingModal() {
           </div>
         ))}
         <p className="text-[11px] text-ink-dim/70">
-          这条引导只会出现一次。想再看，可以在对话里说"新手引导"。
+          这条引导只会出现一次。想再看，可以在对话里说&ldquo;新手引导&rdquo;。
         </p>
       </div>
       <div className="mt-4 flex justify-end">

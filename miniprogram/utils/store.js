@@ -750,8 +750,10 @@ function addBookMsg(id, msg) {
   markDirty();
 }
 
-/* 由阅读计划草稿建档（task=reading-plan 的产物） */
-function createBookFromPlan(title, author, pastedText, plan) {
+/* 由阅读计划草稿建档（task=reading-plan 的产物）。
+ * verification（V26.2-H2 书籍真实性，与 Web Book.verification 同语义）：
+ * "verified"=搜索核实 / "user_material"=基于用户粘贴材料；不传=旧链路不标记 */
+function createBookFromPlan(title, author, pastedText, plan, verification) {
   var chapters = (plan.chapters || []).map(function (c, i) {
     return {
       id: "c" + i + "-" + util.uid(""),
@@ -791,6 +793,7 @@ function createBookFromPlan(title, author, pastedText, plan) {
     pastedText: pastedText || "",
     status: "reading",
     readStatus: "reading",
+    verification: verification || undefined,
     planSummary: plan.planSummary || "",
     chapters: chapters,
     insights: [],

@@ -190,7 +190,8 @@ export async function runAgent(opts: {
     });
     if (full === null || signal.aborted) {
       cb.onPhase("cancelled");
-      lastAnswer = stripDirectives(full ?? streamed) || lastAnswer;
+      /* V26.2-H3：取消/断连路径的半截流同样过句子级清洗再落库 */
+      lastAnswer = stripMetaSentences(trimMetaEdges(stripDirectives(full ?? streamed))) || lastAnswer;
       return answer();
     }
 
@@ -233,10 +234,10 @@ export async function runAgent(opts: {
       });
       if (retry === null || signal.aborted) {
         cb.onPhase("cancelled");
-        lastAnswer = stripDirectives(retry ?? streamed) || lastAnswer;
+        lastAnswer = stripMetaSentences(trimMetaEdges(stripDirectives(retry ?? streamed))) || lastAnswer;
         return answer();
       }
-      const txt = stripDirectives(retry);
+      const txt = stripMetaSentences(trimMetaEdges(stripDirectives(retry)));
       lastAnswer = txt || "（这次没能生成答案，请再问一次。）";
       cb.onPhase("done");
       return answer();
@@ -271,10 +272,13 @@ export async function runAgent(opts: {
       });
       if (forced === null || signal.aborted) {
         cb.onPhase("cancelled");
-        lastAnswer = stripDirectives(forced ?? streamed) || stock || lastAnswer;
+        lastAnswer =
+          stripMetaSentences(trimMetaEdges(stripDirectives(forced ?? streamed))) ||
+          stripMetaSentences(trimMetaEdges(stock)) ||
+          lastAnswer;
         return answer();
       }
-      lastAnswer = stripDirectives(forced) || stock;
+      lastAnswer = stripMetaSentences(trimMetaEdges(stripDirectives(forced))) || stripMetaSentences(trimMetaEdges(stock));
       cb.onPhase("done");
       return answer();
     }
@@ -285,18 +289,18 @@ export async function runAgent(opts: {
      * 私有独白不入列——判据：提到确认卡/调用工具的元话语，或整段没有汉字。
      * 另外修剪段落首尾的无汉字行（见模块级 trimMetaEdges）。 */
     const cleanedThisRound = stripMetaSentences(trimMetaEdges(stripDirectives(full)));
-    /* 写入类工具的轮次：批准后模型会给正式汇报，这里的过渡语（常是私语）
-     * 一律不并入最终回答；读工具轮次保留（深讲正文常在那里产生）。 */
+    /* 写入类工具的轮次（V26.2 收口：此前 hasWriteCall 是死变量，注释与实现不符——
+     * 批准后模型会给正式汇报，这里的过渡语（常是私语）一律不并入最终回答；
+     * 读工具轮次保留（深讲正文常在那里产生）。 */
     const hasWriteCall = calls.some((c) => TOOLS[c.name]?.risk === "write");
-    const looksLikeSelfTalk =
-      cleanedThisRound.length < 200 &&
-      /确认|批准|汇报|简洁|纪律|report|briefly|final answer|confirm/i.test(cleanedThisRound);
     const isPrivateMeta =
       /确认卡|调用工具|先调用|批准后|等待用户|report the|call the tool|user (will see|approved)/i.test(cleanedThisRound) ||
-      !/[\u4e00-\u9fff]/.test(cleanedThisRound);
+      /* V26.2-H4：无汉字轮次不再一概当私语丢弃——改用统一判据（外语教学的整段英文讲解是真内容） */
+      (!/[\u4e00-\u9fff]/.test(cleanedThisRound) && isForeignPrivateTalk(cleanedThisRound));
     if (
       cleanedThisRound &&
       cleanedThisRound.length > 60 &&
+      !hasWriteCall &&
       !isPrivateMeta &&
       cleanedThisRound !== answerParts[answerParts.length - 1]
     ) {
@@ -441,8 +445,10 @@ export async function runAgent(opts: {
 }
 
 /** 修剪段落首尾的无汉字行：模型常以英文私语起头/收尾（"Fine. Give final answer briefly."），
- *  它们混在有中文的段落里，整段过滤会误伤内容。 */
+ *  它们混在有中文的段落里，整段过滤会误伤内容。
+ *  V26.2-H4：整段无汉字（纯英文回答/讲解）不再清空返回 ""——句子级过滤会处理其中的私语。 */
 function trimMetaEdges(text: string): string {
+  if (!CJK_CHAR.test(text)) return text.trim();
   const lines = text.split("\n");
   const hasCjk = (l: string) => /[\u4e00-\u9fff]/.test(l);
   let a = 0;
@@ -459,6 +465,10 @@ function trimMetaEdges(text: string): string {
 
 /** 英文私语特征词（模型自言自语/工具复述） */
 const META_EN_WORDS = /report|confirm|briefly|final answer|call the|tool|stage list|give the user/i;
+/** 独白式引导句干（V26.2-H4）：无汉字短私语的典型开头——"Here is…/Let me…/I'll…"。
+ *  只用于「短」无汉字句组；长英文段落（外语教学/整段英文讲解）不因句干误伤。 */
+const META_EN_STEMS =
+  /^(here (is|are)|let me|let's|i'll|i will|i've|i (was|think|need|should)|sure[,!.]?|got it|fine[,!.]?|okay[,!.]?|ok[,!.]?|alright|certainly|of course|done\.?)/i;
 /** 中文元话语特征词；"调用工具函数/先调用工具函数" 是教学表述，不判私语 */
 const META_ZH_WORDS = /先调用(?!工具函数)|调用工具(?!函数)|用户会看到确认卡|等待用户|批准后/;
 const CJK_CHAR = /[\u4e00-\u9fff]/;
@@ -476,13 +486,22 @@ function hasRealChinese(s: string): boolean {
   return CJK_CHAR.test(stripped);
 }
 
-/** 单句是否为私语/元话语 */
-function isMetaSentence(s: string): boolean {
-  /* 语言一致性硬规则（交互节第 2 条）：中文回答里不允许无汉字的纯外文句子——
-   * "here is a note per phase. Let me search." 这类私语整句剔除。
-   * 含汉字的混排句（"O(n) 复杂度"、"Python 里…"）不受此条影响。 */
-  if (!CJK_CHAR.test(s)) return true;
+/** 无汉字文本是否为私语形态（V26.2-H4 统一判据，isMetaSentence/isPrivateMeta/英文回答路径共用）：
+ *  独白引导词开头的短句（<220 字）或工具复述（to see/to view）。
+ *  故意不含 META_EN_WORDS——report/tool/confirm 是英语教学里的普通词，按词表剔会误伤实质内容。 */
+function isForeignPrivateTalk(s: string): boolean {
+  if (!s.trim()) return true; // 纯空白组：nothing lost
+  if (/to see |to view /i.test(s)) return true;
+  return s.length < 220 && META_EN_STEMS.test(s.trim());
+}
+
+/** 单句/句组是否为私语/元话语。
+ *  V26.2-H4 关键语义：该不该剔无汉字句取决于「整个回答的语言」——
+ *  中文回答里的无汉字句组 = 泄漏（B12 语言一致性，整组剔）；
+ *  整段英文回答 = 教学内容，走句子级 isForeignPrivateTalk 只剔私语形态。 */
+function isMetaSentence(s: string, chineseAnswer: boolean): boolean {
   if (META_ZH_WORDS.test(s)) return true; // 中文元话语（先调用/确认卡/等待批准…）
+  if (!CJK_CHAR.test(s)) return chineseAnswer;
   if (/to see |to view /i.test(s) && !hasRealChinese(s)) return true; // 工具复述（"…to see stage list."）
   // 英文私语：英文开头 + 特征词，且整句以英文为主（含实质中文的教学句不误伤）
   return /^[A-Za-z]/.test(s.trim()) && latinRatio(s) > 0.6 && META_EN_WORDS.test(s);
@@ -514,10 +533,16 @@ function tokenizeSentences(seg: string): { text: string; sep: string }[] {
   return units;
 }
 
-/** 过滤一段非代码正文：相邻的无汉字单元并成一组（"Fine."+"Give final answer briefly."），
- *  组不跨行；命中的组整组剔除（连同其后的空白）。 */
-function filterPlainSegment(seg: string): string {
+/** 过滤一段非代码正文。
+ *  中文回答（chineseAnswer=true）：相邻无汉字单元并成组（"Fine."+"Give final answer briefly."），
+ *  命中的组整组剔除（连同其后的空白）——B12 语言一致性。
+ *  整段英文回答（chineseAnswer=false）：句子级过滤，只剔私语形态（isForeignPrivateTalk），
+ *  英语教学的实质内容（例句/讲解/对话）保留。 */
+function filterPlainSegment(seg: string, chineseAnswer: boolean): string {
   const units = tokenizeSentences(seg);
+  if (!chineseAnswer) {
+    return units.map(({ text, sep }) => (isForeignPrivateTalk(text) ? "" : text + sep)).join("");
+  }
   const groups: { text: string; sep: string }[] = [];
   for (const u of units) {
     const prev = groups[groups.length - 1];
@@ -530,17 +555,19 @@ function filterPlainSegment(seg: string): string {
   }
   let out = "";
   for (const g of groups) {
-    if (!isMetaSentence(g.text)) out += g.text + g.sep;
+    if (!isMetaSentence(g.text, chineseAnswer)) out += g.text + g.sep;
   }
   return out;
 }
 
-/** 句子级私语过滤：代码块整体原样保留，只过滤围栏外的正文 */
+/** 句子级私语过滤：代码块整体原样保留，只过滤围栏外的正文。
+ *  「整个回答的语言」由全部非代码段判定（有任一汉字 = 中文回答）。 */
 export function stripMetaSentences(text: string): string {
   if (!text) return text;
-  return text
-    .split(/(```[\s\S]*?(?:```|$))/g)
-    .map((part, i) => (i % 2 === 1 ? part : filterPlainSegment(part)))
+  const parts = text.split(/(```[\s\S]*?(?:```|$))/g);
+  const chineseAnswer = parts.some((p, i) => i % 2 === 0 && CJK_CHAR.test(p));
+  return parts
+    .map((part, i) => (i % 2 === 1 ? part : filterPlainSegment(part, chineseAnswer)))
     .join("");
 }
 
