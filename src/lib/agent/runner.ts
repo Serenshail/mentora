@@ -478,6 +478,10 @@ function hasRealChinese(s: string): boolean {
 
 /** 单句是否为私语/元话语 */
 function isMetaSentence(s: string): boolean {
+  /* 语言一致性硬规则（交互节第 2 条）：中文回答里不允许无汉字的纯外文句子——
+   * "here is a note per phase. Let me search." 这类私语整句剔除。
+   * 含汉字的混排句（"O(n) 复杂度"、"Python 里…"）不受此条影响。 */
+  if (!CJK_CHAR.test(s)) return true;
   if (META_ZH_WORDS.test(s)) return true; // 中文元话语（先调用/确认卡/等待批准…）
   if (/to see |to view /i.test(s) && !hasRealChinese(s)) return true; // 工具复述（"…to see stage list."）
   // 英文私语：英文开头 + 特征词，且整句以英文为主（含实质中文的教学句不误伤）

@@ -111,14 +111,38 @@ describe("stripMetaSentences（B12：剔除混入正文的英文私语/元话语
     );
   });
 
-  it("纯英文技术句（无 meta 关键词）保留", () => {
-    const input = "Recursion works well when the data is nested. The call stack grows on each level.";
-    expect(stripMetaSentences(input)).toBe(input);
+  it("混排技术句保留（latinRatio 保护）", () => {
+    const input = "Recursion 递归 works well 嵌套场景. The call stack 调用栈 grows.";
+    expect(stripMetaSentences(input)).toContain("Recursion 递归 works well");
   });
 
-  it("空串与纯空白安全", () => {
+  it("语言一致性：无汉字纯英文句整段移除（V26.1 用户实测泄漏形态）", () => {
+    const r = stripMetaSentences("Recursion works well when the data is nested. The call stack grows on each level.");
+    expect(r).toBe("");
+  });
+
+  it("空串与纯空白安全（无汉字规则下空白组亦剔除）", () => {
     expect(stripMetaSentences("")).toBe("");
-    expect(stripMetaSentences("   \n\t  ")).toBe("   \n\t  ");
+    expect(stripMetaSentences("   \n\t  ")).toBe("");
     expect(stripMetaSentences("")).not.toContain("undefined");
+  });
+});
+
+describe("无汉字纯外文句（语言一致性规则）", () => {
+  it("here is a note per phase. Let me search. 整段剔除", () => {
+    const r = stripMetaSentences("先看笔记。\nhere is a note per phase. Let me search.\n正文继续。");
+    expect(r).toBe("先看笔记。\n正文继续。");
+  });
+
+  it("中段插入的纯英文句被剔除，前后中文保留", () => {
+    const r = stripMetaSentences("顺序表的核心是连续内存。Let me search for it. 接下来讲扩容。");
+    expect(r).toContain("顺序表的核心是连续内存");
+    expect(r).toContain("接下来讲扩容");
+    expect(r).not.toContain("Let me search");
+  });
+
+  it("代码块里的纯英文不受影响", () => {
+    const r = stripMetaSentences("如下：\n```py\nprint('hello world only english')\n```\n完毕。");
+    expect(r).toContain("print('hello world only english')");
   });
 });

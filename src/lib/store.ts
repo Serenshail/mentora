@@ -1484,12 +1484,15 @@ export const useAppStore = create<AppState>()(
         })),
       appendAgentMsg: (msg, sessionId) => {
         /* v23.2：写入激活会话；v26.1：支持显式 sessionId（生成中途切会话，
-         * 回答仍落回发起会话——串台根修）。没有可用会话时自动建一个，
-         * 标题取首条用户消息截断——"新建对话框"由此实现 */
+         * 回答仍落回发起会话——串台根修）。
+         * 隔离纪律：显式 sessionId（后台完成回写）时**不改 agentActiveId**——
+         * 用户此刻可能在别的会话里，绝不能把视图拽回发起会话；
+         * 仅无 sessionId（用户刚在当前会话发出消息）时才跟随激活。 */
+        const explicit = typeof sessionId === "string" && sessionId;
         let resolved = "";
         set((s) => {
           let sessions = s.agentSessions;
-          let activeId = sessionId ?? s.agentActiveId ?? "";
+          let activeId = explicit || s.agentActiveId || "";
           const valid = sessions.find((x) => x.id === activeId);
           if (!valid) {
             const now = new Date().toISOString();
@@ -1519,7 +1522,8 @@ export const useAppStore = create<AppState>()(
                   }
                 : x
             ),
-            agentActiveId: activeId,
+            /* 显式回写不拽动用户当前所在会话；无显式（用户刚发出）才跟随 */
+            ...(explicit ? {} : { agentActiveId: activeId }),
           };
         });
         return resolved;
