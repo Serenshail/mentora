@@ -19,41 +19,43 @@
 - 首轮 14/15：「天级计划」超时。复跑单例 **130s PASS**（qwen3.8-flash 长生成的已知 flake，非回归；该用例历史上即能力边界敏感项）。
 - 结论：**15/15 有效通过**。runner.ts 清洗改动未破坏任何判分/出题/讲解链路。
 
-## 3. smoke-v26 场景 A-H（首次真实执行——H7 纪律兑现）
+## 3. smoke-v26 场景 A-H（首次真实执行——H7 纪律兑现；dev 与腾讯云生产各一轮）
 
-`node scripts/smoke-v26.mjs`（探针 probe-x2@163.com，真实 UI + 真实模型）：
+`node scripts/smoke-v26.mjs`（探针 probe-x2@163.com，真实 UI + 真实模型）——**两轮结果完全同构**：
 
-| 场景 | 结果 | 说明 |
-|---|---|---|
-| D 不存在的书 | ✅ D1/D2 | **H2 UI 路径实证**：编造书名「XXZYQ 幻之书」→ 核查弹窗出现；弹窗外粘贴为空时确认被拦截 |
-| F 学习人生结果层 | ✅ F1/F2 | **H1 实证**：种子 mastered 条目出现在足迹、目录骨架被过滤——修复前该断言必红（LifeWorkspace 零渲染） |
-| G 自动滚动 | ✅ | 发新消息 2s 后容器贴底 <300px |
-| H 工具预算 | ✅ | 大对比题 12807 字回答，不含旧「上限 5 次」文案 |
-| E 重排入口 | ✅ E1 / ❌ E2 | E1 入口存在 PASS。E2 FAIL 根因=测试基建缺陷（见 §3.1） |
-| A 跨对话隔离 | ❌ | 输入框 disabled 超时。隔离复现**未复现**（见 §3.2），composer 实测健康 |
-| B 后台生成 | ❌ | **真产品缺口**（见 §3.3，PRD F4 部分达成） |
-| C 视频约束 | ❌ | 测试基建缺陷：种子目标被云同步覆盖（见 §3.1） |
+| 场景 | dev | 腾讯云生产 | 说明 |
+|---|---|---|---|
+| D 不存在的书 | ✅ | ✅ | **H2 UI 路径实证**：编造书名「XXZYQ 幻之书」→ 核查弹窗出现；粘贴为空时确认被拦截 |
+| F 学习人生结果层 | ✅ | ✅ | **H1 实证**：真实掌握条目进足迹、目录骨架被过滤——修复前必红 |
+| G 自动滚动 | ✅ | ✅ | 发新消息 2s 后容器贴底 <300px |
+| H 工具预算 | ✅（12807 字） | ✅（6810 字） | 不含旧「上限 5 次」文案 |
+| E 重排入口 | ✅ E1 / ❌ E2 | ✅ E1 / ❌ E2 | E2 根因见 §3.1（基建竞态）；重排本身已另行端到端实证（§3.4） |
+| A 跨对话隔离 | ❌ | ❌ | composer disabled 超时；三次隔离复现（含新 dev server+newChat 步骤）均健康（§3.2） |
+| B 后台生成 | ❌ | ❌ | **真产品缺口**（§3.3，PRD F4 部分达成） |
+| C 视频约束 | ❌ | ❌ | 基建竞态：种子目标被云同步覆盖（§3.1）；生产 C1 另见预算收尾文案出现（回答正常收尾非崩溃） |
 
-**汇总：8 PASS / 5 FAIL，其中 4 项 FAIL 经逐条取证定性为非产品回归，1 项（B）为真实缺口。**
+**两轮均 8 PASS / 5 FAIL；5 FAIL 中 4 项定性非产品回归，1 项（B）真实缺口。**
 
 ### 3.1 C/E2 失败根因：种子与云同步竞态（测试基建缺陷）
 
-证据链：①探针配额实测正常（最小 chat 请求 200 正常回复）②页面零 pageerror ③E 诊断脚本复现：种子 goal 写入 localStorage → 页面渲染正常（下一程面板出现）→ 交互时 goal 已从 store 消失（evaluate 读不到）→ regeneratePhase 返回「没有找到目标或阶段」→ 该 toast 在 sonner 默认 4s 后自动消失 → E2 的 +8s 检查点测到 errorToast=0 且按钮已消失（normal=false）→ FAIL。④C 场景 agent 回答「目标列表只有 1 个：测试学科99」——只看到场景 B 经真实 UI 创建的目标（该目标已推送云端），看不到只写过 localStorage 的种子。
+证据链：①探针配额实测正常 ②页面零 pageerror ③种子 goal 只写 localStorage（绕过 zustand→从不 pushCloud）→ 页面加载 bootSync 拉云端快照即覆盖；④E2 的 +8s 检查点落在「没有找到目标或阶段」toast（sonner 默认 4s）消失之后 → errorToast=0 且按钮消失 → FAIL；⑤C 场景 agent 只看到经真实 UI 创建、已推云端的目标。**补充证据（部署后诊断）**：重排结果落库后若浏览器在 2.5s 防抖推送前关闭，云端仍是旧目录——下次加载被拉回（dump 实测"目录已就绪（3 天）"旧态）。真实用户的写操作全走 store→自动推送，不受影响。**修复方向（下轮）**：smoke 种子改走 /api/sync 直推云端，或种子后强制 flush。
 
-机理：smoke 种子直接写 localStorage（绕过 zustand），从不触发 pushCloud；下次导航 bootSync 拉取云端快照即覆盖本地。真实用户的写操作全部走 store→自动推送，不受影响。**修复方向（下轮）**：smoke 种子后立即手动 pushCloud，或种子改走 store 水合注入。
+### 3.2 A 失败定性：未复现的 harness flake
 
-### 3.2 A 失败定性：未复现的 flake
-
-诊断脚本（`scripts/diag-ae-smoke.mjs` Part 1）按 smoke 完全相同前置（reset→gotoHome→新对话）复现：composer `disabled=false`、无 Modal、0 pageerror、控制台零错误。同 run 中场景 G 对同一 composer 执行了完全相同的 fill+send 并 PASS。结论：一次性环境态（长驻 dev server 的 HMR 状态或水合时序抖动），非产品回归。**遗留**：干净重启 dev server 后重跑 A 确认。
+三次隔离复现（reset→gotoHome→新对话→检查）：composer 全部健康（disabled=false、无 Modal、0 pageerror、控制台零错误）——第二次在全新重启的 dev server 上、含 newChat 步骤。同 run 中场景 G 对同一 composer 执行完全相同的 fill+send 两轮全 PASS。结论：smoke 完整序列下的环境态问题（疑似首场景水合时序），非产品回归。**遗留**：smoke harness 加固（首场景前增加 composer 可用等待）。
 
 ### 3.3 B 失败定性：真实缺口（PRD F4 部分达成）
 
 表现：确认生成总纲要 → 整页导航离开 → 返回 `/learn/new?goal=` → 页面**静默回放引导对话**，无任何"生成中断/后台生成中"信号。现有实现（learn/new:144-155）：KV 残留 running 且 >180s 才标记 interrupted + toast；**<180s 内返回则无任何提示**（模块注册表已随整页导航销毁，KV 只记账不恢复）。SPA 内切页场景（F1/F3）不受影响（注册表存活）。
 定性：**P1 遗留**。修复方向：KV running 且本地注册表无活跃任务时（区分多标签页：updatedAt 新鲜则提示"可能在其他窗口生成中"）→ 立即显示中断条+「重新生成」入口。原计划/草稿不受影响（PRD §9.3 语义已满足"原计划没有改变"）。
 
-## 4. H5 阶段重排语义（store 级验证，绕开浏览器竞态）
+## 4. H5 阶段重排语义（store 级 + 端到端双层验证）
 
-`store-snapshot.test.ts` 5 用例全过：快照含旧目录/原因且为深拷贝（改原不影响快照）；7 次快照只留 5 条（只增不删）；标题匹配的天沿用旧 id → passed 状态与 quizLog 引用保留、stub 天目录跟随新目录（设计行为）；全换角度时旧天对象**绝不删除**。
+**store 级**（`store-snapshot.test.ts` 5 用例全过）：快照含旧目录/原因且为深拷贝；7 次快照只留 5 条；标题匹配沿用旧 id → passed 状态与 quizLog 引用保留；全换角度时旧天对象**绝不删除**。
+
+**端到端**（`scripts/diag-ae-smoke.mjs` Part 2，真实模型驱动窗口弹窗流程）：种子阶段 → 点「重排本阶段」→ prompt 收集"想要更实践向的内容" → 真模型重排成功——store 断言：新目录 4 天（全换角度，按 userNote 重排）、`planHistory` 长度 1 且 reason 与弹窗输入一致、`daysCount 7 = 旧 3 天（孤儿保留）+ 新 4 天`、quizLog 完好。**快照→重排→留痕→不删数据 全链路成立**。
+
+**H6 入口可见性（实测修正）**：路径设计列表（含每个阶段的「重排本阶段」）在**天详情视图**渲染（PlanTimeline 挂在 LearnBody 内）；阶段视图只有当前活动阶段的 PhasePlanPanel 按钮。合并覆盖=默认视图见当前阶段入口、天视图见全部阶段入口；非当前阶段的入口需先进任意一天。已如实记录（PRD §6.1 的"阶段卡入口"理想形态待后续把路径列表提为常显）。
 
 ## 5. 回归覆盖（REGRESSION-V26.2 内容并节）
 
@@ -68,14 +70,15 @@
 | # | 问题 | 级别 | 状态 |
 |---|---|---|---|
 | 1 | B2 整页刷新 <180s 静默回放引导（F4 部分） | P1 | 遗留，修复方向已写 §3.3 |
-| 2 | smoke 种子云同步竞态（A/C/E2 的复跑障碍） | 测试基建 | 遗留，修复方向已写 §3.1 |
+| 2 | smoke 种子云同步竞态（A/C/E2 复跑障碍）+ smoke harness 首场景加固 | 测试基建 | 遗留，修复方向已写 §3.1/§3.2 |
 | 3 | 小程序书籍核查标注：数据已落库（verification 字段），小程序 UI 徽章未加 | P2 | 遗留（Web 端已展示） |
 | 4 | 纯英文回答中句中部的 META 词句（如 "the Array tool"）仍会被剔（句级残余误伤） | P2 | 记录，需真实语料再收敛 |
 | 5 | C4 同名不同作者仅靠作者字符串匹配启发式，无结构化候选列表 UI | P2 | 记录（弹窗样本列表部分缓解） |
+| 6 | H6 路径设计列表仅天详情视图渲染，非当前阶段的入口需先进任意一天 | P2 | 记录（§4 实测修正），理想形态=路径列表常显 |
 
 ## 7. 证据文件
 
-- 冒烟原始输出：`.tmp-smoke-v262.log`（本机，不入库）
-- 诊断脚本：`scripts/diag-ae-smoke.mjs`（A 复现 + E 全流程，可复用）
+- 冒烟原始输出：`.tmp-smoke-v262.log`（dev）、`.tmp-smoke-prod-tx.log`（腾讯云生产，本机不入库）
+- 诊断脚本：`scripts/diag-ae-smoke.mjs`（A 复现 + E 端到端含 H5 断言）、`scripts/check-f-vercel.mjs`（Vercel 生产 F 验证，带代理）
 - 单测：`src/lib/__tests__/{book-verify,phase-align,store-snapshot,meta-filter}.test.ts`
 - 审计：`docs/AUDIT-V26.2-2026-11-07.md`（全部 file:line 取证）
