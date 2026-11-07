@@ -141,6 +141,18 @@ function IntakeInner() {
           return;
         }
         // V26.1-B2：总纲要后台任务若在跑（切页/刷新后回来），挂提示并订阅完成自动跳转
+        // V26.1 补：整页刷新会杀死浏览器端任务——查 KV 发现 running 残留则标记中断并给重新生成入口
+        void (async () => {
+          try {
+            const r = await fetch(`/api/tasks?goalId=${resumeId}`, { signal: AbortSignal.timeout(6000) });
+            const j = await r.json();
+            const t = (j.tasks ?? [])[0];
+            if (t && t.status === "running" && Date.now() - new Date(t.updatedAt).getTime() > 180000) {
+              await fetch("/api/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...t, status: "interrupted" }) });
+              toast("上次的计划生成被页面刷新中断了——点「确认，生成总纲要」再来一次。");
+            }
+          } catch { /* 查询失败不阻塞 */ }
+        })();
         if (getRunningPlanTask(resumeId)) {
           setBgTask(true);
           setStage("planning");

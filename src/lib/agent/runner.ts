@@ -208,7 +208,7 @@ export async function runAgent(opts: {
 
     /* 没有工具调用 → 这就是最终回答；正文为空时补一次（模型只在思维链里想） */
     if (calls.length === 0) {
-      const cleaned = trimMetaEdges(stripDirectives(full));
+      const cleaned = stripMetaSentences(trimMetaEdges(stripDirectives(full)));
       if (cleaned) {
         cb.onPhase("answering");
         lastAnswer = cleaned;
@@ -284,7 +284,7 @@ export async function runAgent(opts: {
      * 短寒暄（"我查一下"）不入列；与上一段相同不重复入列；
      * 私有独白不入列——判据：提到确认卡/调用工具的元话语，或整段没有汉字。
      * 另外修剪段落首尾的无汉字行（见模块级 trimMetaEdges）。 */
-    const cleanedThisRound = trimMetaEdges(stripDirectives(full));
+    const cleanedThisRound = stripMetaSentences(trimMetaEdges(stripDirectives(full)));
     /* 写入类工具的轮次：批准后模型会给正式汇报，这里的过渡语（常是私语）
      * 一律不并入最终回答；读工具轮次保留（深讲正文常在那里产生）。 */
     const hasWriteCall = calls.some((c) => TOOLS[c.name]?.risk === "write");
@@ -431,7 +431,7 @@ export async function runAgent(opts: {
 
     if (round === MAX_TOOL_ROUNDS) {
       cb.onPhase("failed");
-      lastAnswer = `（已达到单轮工具调用上限 ${MAX_TOOL_ROUNDS} 次，先停在这里。需要继续可以再问一次。）`;
+      lastAnswer = `（工具预算已用完——上面已基于获取到的信息给出回答。没讲完的部分你再发一句"继续"，我从停下的地方接着来。）`;
       return answer();
     }
   }
@@ -451,5 +451,94 @@ function trimMetaEdges(text: string): string {
   while (b > a && !hasCjk(lines[b - 1])) b--;
   return lines.slice(a, b).join("\n").trim();
 }
+
+/* ---------- 私语句子过滤（B12） ----------
+ * trimMetaEdges 只修剪段落首尾的无汉字行；混在有中文的段落**中间**的英文私语句
+ * （"Fine. Give final answer briefly."、"…" to see stage list."）会漏过。
+ * 这里按句子切分后逐句判定并整句剔除；代码块（```…```）整体跳过不参与过滤。 */
+
+/** 英文私语特征词（模型自言自语/工具复述） */
+const META_EN_WORDS = /report|confirm|briefly|final answer|call the|tool|stage list|give the user/i;
+/** 中文元话语特征词；"调用工具函数/先调用工具函数" 是教学表述，不判私语 */
+const META_ZH_WORDS = /先调用(?!工具函数)|调用工具(?!函数)|用户会看到确认卡|等待用户|批准后/;
+const CJK_CHAR = /[\u4e00-\u9fff]/;
+
+/** 英文字母占比（分母为中文字符+英文字母）：>0.6 才视作"英文为主"的句子 */
+function latinRatio(s: string): number {
+  const latin = (s.match(/[A-Za-z]/g) ?? []).length;
+  const cjk = (s.match(CJK_CHAR) ?? []).length;
+  return latin + cjk === 0 ? 0 : latin / (latin + cjk);
+}
+
+/** 剥掉书名号/引号引用后还剩中文实词吗（书名号与引号内的引用不算实词） */
+function hasRealChinese(s: string): boolean {
+  const stripped = s.replace(/《[^》]*》|“[^”]*”|"[^"]*"|‘[^’]*’|'[^']*'/g, "");
+  return CJK_CHAR.test(stripped);
+}
+
+/** 单句是否为私语/元话语 */
+function isMetaSentence(s: string): boolean {
+  if (META_ZH_WORDS.test(s)) return true; // 中文元话语（先调用/确认卡/等待批准…）
+  if (/to see |to view /i.test(s) && !hasRealChinese(s)) return true; // 工具复述（"…to see stage list."）
+  // 英文私语：英文开头 + 特征词，且整句以英文为主（含实质中文的教学句不误伤）
+  return /^[A-Za-z]/.test(s.trim()) && latinRatio(s) > 0.6 && META_EN_WORDS.test(s);
+}
+
+/** 把一段正文切成句子单元：text 为句子（含结尾标点），sep 为其后的空白/换行 */
+function tokenizeSentences(seg: string): { text: string; sep: string }[] {
+  const units: { text: string; sep: string }[] = [];
+  const wsEnd = (i: number) => {
+    let j = i;
+    while (j < seg.length && /\s/.test(seg[j])) j++;
+    return j;
+  };
+  let start = 0;
+  for (let i = 0; i < seg.length; ) {
+    const ch = seg[i];
+    const zhEnd = ch === "。" || ch === "！" || ch === "？" || ch === "；" || ch === "?" || ch === "!";
+    const enEnd = ch === "." && (i + 1 >= seg.length || /\s/.test(seg[i + 1]));
+    if (zhEnd || enEnd) {
+      const j = wsEnd(i + 1);
+      units.push({ text: seg.slice(start, i + 1), sep: seg.slice(i + 1, j) });
+      i = j;
+      start = j;
+      continue;
+    }
+    i++;
+  }
+  if (start < seg.length) units.push({ text: seg.slice(start), sep: "" });
+  return units;
+}
+
+/** 过滤一段非代码正文：相邻的无汉字单元并成一组（"Fine."+"Give final answer briefly."），
+ *  组不跨行；命中的组整组剔除（连同其后的空白）。 */
+function filterPlainSegment(seg: string): string {
+  const units = tokenizeSentences(seg);
+  const groups: { text: string; sep: string }[] = [];
+  for (const u of units) {
+    const prev = groups[groups.length - 1];
+    if (prev && !CJK_CHAR.test(prev.text) && !CJK_CHAR.test(u.text) && !/\n/.test(prev.sep)) {
+      prev.text += prev.sep + u.text;
+      prev.sep = u.sep;
+    } else {
+      groups.push({ text: u.text, sep: u.sep });
+    }
+  }
+  let out = "";
+  for (const g of groups) {
+    if (!isMetaSentence(g.text)) out += g.text + g.sep;
+  }
+  return out;
+}
+
+/** 句子级私语过滤：代码块整体原样保留，只过滤围栏外的正文 */
+export function stripMetaSentences(text: string): string {
+  if (!text) return text;
+  return text
+    .split(/(```[\s\S]*?(?:```|$))/g)
+    .map((part, i) => (i % 2 === 1 ? part : filterPlainSegment(part)))
+    .join("");
+}
+
 /* 保留给老引用：parse/strip 仍可从 runner 导入（向后兼容） */
 export { parseDirectives, stripDirectives } from "./parse";

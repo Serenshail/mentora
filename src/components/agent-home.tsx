@@ -491,10 +491,8 @@ export function AgentHome() {
           </button>
           <button
             onClick={() => {
-              if (busy) return;
               if (!activeSession || activeSession.messages.length > 0) newAgentSession();
             }}
-            disabled={busy}
             className="flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-black/[0.04] hover:text-ink disabled:opacity-40"
             title="开始一段新对话"
           >
