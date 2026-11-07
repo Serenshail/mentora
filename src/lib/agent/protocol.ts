@@ -60,6 +60,8 @@ export type ToolName =
   | "resume_workflow"
   /** 按硬约束重出某阶段的视频学习资源（写入，需确认） */
   | "update_plan_resources"
+  /** 重排某阶段的天级目录（写入，需确认；完成日>0 时审批卡带警告） */
+  | "regenerate_phase"
   /* ---- 个人扩展（v24.0 二期，action 型；读自动、写需确认） ---- */
   /** 长期记忆：recall / remember / forget */
   | "memory"
@@ -209,6 +211,13 @@ export const TOOLS: Record<ToolName, ToolSpec> = {
     risk: "read",
     description: "用户说\"继续学/接着读/我的进度\"时，查找已有的学习目标、书架或会话，返回当前进度与接续入口。恢复而不是重建。",
     params: "kind?: \"learning\"|\"reading\"|\"council\"（缺省自动识别）, title?: string（按主题/书名/会话名匹配）",
+  },
+  regenerate_phase: {
+    name: "regenerate_phase",
+    label: "重排阶段",
+    risk: "write",
+    description: "用户对某个学习阶段不满意时，重排该阶段的天级目录（换一批角度/主题）。只动目标阶段，其他阶段与已完成记录由 store 语义保留。需经确认卡。",
+    params: "topic: string（目标主题）, phaseTitle?: string（阶段名，缺省=当前阶段）, userNote?: string（用户为什么不满意/想怎么换）",
   },
   update_plan_resources: {
     name: "update_plan_resources",

@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import type { ChatMsg } from "@/lib/types";
 
 /* 工作台「产物」统计的写入类工具集合（与 tool-executors 的写工具一致） */
-const WRITE_TOOL_NAMES = new Set(["save_note", "update_note", "delete_note", "create_goal", "add_book", "create_session", "update_settings", "memory", "reminders"]);
+const WRITE_TOOL_NAMES = new Set(["save_note", "update_note", "delete_note", "create_goal", "add_book", "create_session", "update_settings", "memory", "reminders", "update_plan_resources", "regenerate_phase"]);
 
 /** SOLO 右栏的分块容器 */
 function RailBlock({ title, children }: { title: string; children: ReactNode }) {

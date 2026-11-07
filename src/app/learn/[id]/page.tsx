@@ -1046,6 +1046,31 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
             ? `目录已就绪（${phase.catalog!.length} 天）· 继续`
             : `生成「${phase.title}」的学习日目录`}
       </Button>
+      {hasCatalog && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="mt-2 w-full"
+          onClick={async () => {
+            const doneDays = phase.dayIds.filter((id) => {
+              const d = goal.plan!.days[id];
+              return d && (d.status === "passed" || d.status === "skipped");
+            }).length;
+            const note = window.prompt(
+              `重排「${phase.title}」：说说你不满意什么/想怎么换（留空=换一批角度）` +
+                (doneDays > 0 ? `\n\n⚠ 该阶段已有 ${doneDays} 个完成的学习日，重排后学习日结构会变化。` : "")
+            );
+            if (note === null) return;
+            toast("正在重排…");
+            const { regeneratePhase } = await import("@/lib/agent/phase-regen");
+            const r = await regeneratePhase(goal.id, phase.id, note, true);
+            if (r.ok) toast.success(r.summary + "——目录已重排，逐天进入时重新展开。");
+            else toast.error(r.content);
+          }}
+        >
+          重排本阶段（换一批学习日）
+        </Button>
+      )}
     </Card>
   );
 }

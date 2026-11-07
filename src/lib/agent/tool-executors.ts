@@ -489,6 +489,34 @@ function validateWriteTool(name: ToolName, args: Record<string, unknown>): ToolO
     return draftAction("delete_note", "删除笔记", cut(note.title, 30), { id: note.id, title: note.title });
   }
 
+  if (name === "regenerate_phase") {
+    const topic = str(args.topic);
+    const userNote = str(args.userNote);
+    if (!topic) return { result: { ok: false, content: "需要 topic", summary: "参数不足" } };
+    const goal =
+      store.goals.find((g) => g.topic.includes(topic)) ??
+      store.goals.find((g) => topic.includes(g.topic));
+    if (!goal?.plan) return { result: { ok: false, content: "没有找到该目标的计划。", summary: "未找到" } };
+    const phaseTitle = str(args.phaseTitle);
+    const phase = phaseTitle
+      ? goal.plan.phases.find((ph) => ph.title.includes(phaseTitle))
+      : goal.plan.phases.find((ph) => goal.plan!.days && Object.values(goal.plan!.days).some((d) => d.phaseId === ph.id && d.status === "active")) ??
+        goal.plan.phases.find((ph) => ph.status === "active") ??
+        goal.plan.phases[0];
+    if (!phase) return { result: { ok: false, content: "没有找到指定阶段。", summary: "未找到阶段" } };
+    const completed = phase.dayIds.filter((id) => {
+      const d = goal.plan!.days[id];
+      return d && (d.status === "passed" || d.status === "skipped");
+    }).length;
+    return draftAction("regenerate_phase", "重排学习阶段", cut(`${goal.topic} · ${phase.title}`, 30), {
+      goalId: goal.id,
+      phaseId: phase.id,
+      phaseTitle: phase.title,
+      userNote,
+      completed,
+    });
+  }
+
   if (name === "update_plan_resources") {
     const topic = str(args.topic);
     const constraintText = str(args.constraintText);
@@ -599,7 +627,7 @@ export async function executeTool(name: ToolName, args: Record<string, unknown>)
   const isWrite = (
     {
       save_note: 1, update_note: 1, delete_note: 1, create_goal: 1,
-      add_book: 1, create_session: 1, update_settings: 1, update_plan_resources: 1,
+      add_book: 1, create_session: 1, update_settings: 1, update_plan_resources: 1, regenerate_phase: 1,
     } as Partial<Record<ToolName, number>>
   )[name] != null;
   track("agent_tool_intent", { tool: name, write: isWrite ? 1 : 0 });
@@ -755,6 +783,12 @@ export async function executeAction(action: PendingAction): Promise<ToolResult> 
         content: `会话「${str(p.title)}」已创建。去「人生伙伴」打开它开始对话。`,
         summary: "已创建",
       };
+    }
+    /* ---- V26.1 P0-B7/B11：阶段重排（结构性修改，完成日>0 时审批卡带警告） ---- */
+    case "regenerate_phase": {
+      const { regeneratePhase } = await import("@/lib/agent/phase-regen");
+      const r = await regeneratePhase(str(p.goalId), str(p.phaseId), str(p.userNote), true);
+      return { ok: r.ok, content: r.content, summary: r.summary };
     }
     /* ---- V26.1 P0：资源硬约束重出（B4/B5） ---- */
     case "update_plan_resources": {
