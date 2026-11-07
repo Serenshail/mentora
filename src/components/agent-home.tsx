@@ -124,6 +124,8 @@ export function AgentHome() {
   const removeAgentSession = useAppStore((s) => s.removeAgentSession);
   const activeSession = sessions.find((x) => x.id === activeId) ?? null;
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  /* v26.1：本轮生成归属的会话——切走会话后，运行态（流式/工具/审批卡）只在归属会话视图渲染 */
+  const [runSessionId, setRunSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState("");
   const [busy, setBusy] = useState(false);
@@ -132,7 +134,6 @@ export function AgentHome() {
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [tools, setTools] = useState<ToolCall[]>([]);
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-  const [reasoning, setReasoning] = useState("");
   const [runPhase, setRunPhase] = useState<"thinking" | "acting" | "answering" | "done" | "failed" | "cancelled">("thinking");
   const abortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -215,7 +216,6 @@ export function AgentHome() {
     setPlan([]);
     setTools([]);
     setPendingActions([]);
-    setReasoning("");
     const ac = new AbortController();
     abortRef.current = ac;
     const imgForModel = attach?.dataUrl ?? null;
@@ -228,7 +228,8 @@ export function AgentHome() {
     ]);
 
     const userMsg: ChatMsg = { id: uid("m"), role: "user", content: q || "（图片）", at: new Date().toISOString() };
-    appendAgentMsg(userMsg);
+    const runSid = useAppStore.getState().appendAgentMsg(userMsg);
+    setRunSessionId(runSid);
 
     try {
       setPhases([
@@ -266,7 +267,7 @@ export function AgentHome() {
               return copy;
             });
           },
-          onReasoning: (r) => setReasoning((prev) => (prev + r).slice(-48)),
+          onReasoning: () => {}, // v26.1：不展示原始推理文本，只保留阶段标签
           onDelta: (d) => {
             /* 流式期间剥掉 tool/plan 指令块：用户不该看到 JSON 协议 */
             setPending((prev) => {
@@ -284,6 +285,7 @@ export function AgentHome() {
       );
       if (answer.trim() || meta.tools.length > 0 || meta.citations.length > 0) {
         appendAgentMsg({
+          // v26.1：显式落回发起会话
           id: uid("m"),
           role: "assistant",
           content: answer,
@@ -301,7 +303,7 @@ export function AgentHome() {
               : undefined,
             citations: meta.citations.length ? meta.citations.slice(0, 8) : undefined,
           },
-        });
+        }, runSid);
       }
       setPending("");
     } catch (e) {
@@ -354,7 +356,7 @@ export function AgentHome() {
       <RailBlock title="任务">
         {plan.length > 0 || tools.length > 0 ? (
           <>
-            {plan.length > 0 && (
+            {runSessionId === activeId && plan.length > 0 && (
               <ol className="space-y-1">
                 {plan.map((st) => (
                   <li key={st.id} className="flex items-start gap-1.5 text-[11.5px]">
@@ -376,7 +378,7 @@ export function AgentHome() {
                 ))}
               </ol>
             )}
-            {tools.length > 0 && (
+            {runSessionId === activeId && tools.length > 0 && (
               <div className={cn("space-y-1", plan.length > 0 && "mt-2")}>
                 {tools.map((t) => (
                   <div
@@ -577,7 +579,7 @@ export function AgentHome() {
               )}
             </div>
           ))}
-          {pending && (
+          {pending && runSessionId === activeId && (
             <div
               aria-live="polite"
               className="max-w-[92%] whitespace-pre-wrap rounded-2xl rounded-bl-md border border-border bg-white px-3.5 py-2.5 text-[12.5px] leading-relaxed text-ink"
@@ -588,7 +590,7 @@ export function AgentHome() {
           )}
 
           {/* 审批卡队列：写入操作等待用户逐个决定 */}
-          {pendingActions.map((a) => {
+          {runSessionId === activeId && pendingActions.map((a) => {
             const preview = actionPreview(a);
             return (
               <div key={a.id} className="rounded-xl border border-accent/30 bg-accent/[0.04] p-3">
@@ -620,28 +622,22 @@ export function AgentHome() {
           })}
 
           {/* 思考摘要（Codex ReasoningItem 模型）：只给骨架，不给完整思维链 */}
-          {(reasoning || (busy && runPhase !== "answering")) && (
+          {(busy && runPhase !== "answering") && (
             <div className="flex items-center gap-2 text-[11.5px] text-ink-dim">
-              {busy && runPhase !== "answering" ? (
-                <Loader2 className="size-3 animate-spin text-accent" />
-              ) : (
-                <Check className="size-3 text-ok/70" />
-              )}
+              <Loader2 className="size-3 animate-spin text-accent" />
               <span className="line-clamp-2 leading-4">
-                {reasoning
-                  ? reasoning.replace(/\s+/g, " ").slice(-40)
-                  : runPhase === "thinking"
-                    ? "正在理解你的问题…"
-                    : runPhase === "acting"
-                      ? "正在调用工具…"
-                      : "准备回答"}
+                {runPhase === "thinking"
+                  ? "正在理解你的问题…"
+                  : runPhase === "acting"
+                    ? "正在调用工具…"
+                    : "准备回答"}
               </span>
             </div>
           )}
 
 
 
-          <AgentTrace phases={phases} />
+          {runSessionId === activeId && <AgentTrace phases={phases} />}
         </div>
       )}
 
@@ -703,13 +699,18 @@ export function AgentHome() {
           <ArrowUp className="size-4" />
         </button>
       </div>
-      {busy && (
+      {busy && runSessionId === activeId && (
         <button
           onClick={() => abortRef.current?.abort()}
           className="mt-2 cursor-pointer text-[11px] text-ink-dim hover:text-ink"
         >
           停止
         </button>
+      )}
+      {busy && runSessionId !== activeId && (
+        <p className="mt-2 text-center text-[11px] text-ink-dim">
+          上一段对话仍在后台生成中——切回「{sessions.find((x) => x.id === runSessionId)?.title ?? "原会话"}」查看或停止。
+        </p>
       )}
       </section>
 

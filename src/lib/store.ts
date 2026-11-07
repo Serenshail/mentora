@@ -210,7 +210,8 @@ interface AppState {
   updateSession: (id: string, patch: Partial<CouncilSession>) => void;
   removeSession: (id: string) => void;
   addSessionMsg: (id: string, msg: ChatMsg) => void;
-  appendAgentMsg: (msg: ChatMsg) => void;
+  /** sessionId 显式指定写入目标会话（缺省=当前激活会话）——生成中途切会话时，回答仍落回发起会话 */
+  appendAgentMsg: (msg: ChatMsg, sessionId?: string) => string;
   clearAgentChat: () => void;
   /** v23.2 多会话：新建（返回新 id 并激活）、切换、删除；appendAgentMsg 写入当前激活会话 */
   newAgentSession: () => string;
@@ -1481,12 +1482,14 @@ export const useAppStore = create<AppState>()(
             x.id === id ? { ...x, messages: [...x.messages, msg] } : x
           ),
         })),
-      appendAgentMsg: (msg) =>
+      appendAgentMsg: (msg, sessionId) => {
+        /* v23.2：写入激活会话；v26.1：支持显式 sessionId（生成中途切会话，
+         * 回答仍落回发起会话——串台根修）。没有可用会话时自动建一个，
+         * 标题取首条用户消息截断——"新建对话框"由此实现 */
+        let resolved = "";
         set((s) => {
-          /* v23.2：写入当前激活会话；没有激活会话（或已失效）就自动建一个，
-           * 标题取首条用户消息截断——"新建对话框"由此实现 */
           let sessions = s.agentSessions;
-          let activeId = s.agentActiveId;
+          let activeId = sessionId ?? s.agentActiveId ?? "";
           const valid = sessions.find((x) => x.id === activeId);
           if (!valid) {
             const now = new Date().toISOString();
@@ -1500,6 +1503,7 @@ export const useAppStore = create<AppState>()(
             sessions = [fresh, ...sessions];
             activeId = fresh.id;
           }
+          resolved = activeId;
           return {
             agentSessions: sessions.map((x) =>
               x.id === activeId
@@ -1517,7 +1521,9 @@ export const useAppStore = create<AppState>()(
             ),
             agentActiveId: activeId,
           };
-        }),
+        });
+        return resolved;
+      },
       clearAgentChat: () =>
         set((s) => ({
           /* 语义跟随多会话：清空当前激活会话的消息；没有会话时清 legacy 字段 */

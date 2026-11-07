@@ -6,9 +6,11 @@ import { Badge, Button, Card, Input, Textarea } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
 import { AgentTrace } from "@/components/agent-trace";
 import { useChat, useHydrated } from "@/lib/use-chat";
+import { streamChat } from "@/lib/ai/client";
 import { extractJson, splitGoalReply, type GoalCard } from "@/lib/ai/client";
 import { useAppStore } from "@/lib/store";
 import { masterDraftToPlan } from "@/lib/plan";
+import { startPlanTask, getRunningPlanTask, subscribePlanTask } from "@/lib/plan-tasks";
 import { track } from "@/lib/track";
 
 function planTitle(topic: string) {
@@ -26,6 +28,8 @@ import { ArrowRight, Compass, Loader2, Target } from "lucide-react";
 function IntakeInner() {
   const params = useSearchParams();
   const router = useRouter();
+  /* V26.1：本目标有在跑的总纲要任务时，页面重挂也显示"后台生成中"，完成自动进入目标页 */
+  const [bgTask, setBgTask] = useState(false);
   const topicParam = params.get("topic");
   const resumeId = params.get("goal");
   const userName = useAppStore((s) => s.settings.userName);
@@ -133,6 +137,18 @@ function IntakeInner() {
             userText: `我想学${goal.topic}`,
             task: "intake",
             onDone: handleDone,
+          });
+          return;
+        }
+        // V26.1-B2：总纲要后台任务若在跑（切页/刷新后回来），挂提示并订阅完成自动跳转
+        if (getRunningPlanTask(resumeId)) {
+          setBgTask(true);
+          setStage("planning");
+          subscribePlanTask(resumeId, (st) => {
+            if (st.status === "completed") {
+              const g = useAppStore.getState().goals.find((x) => x.id === resumeId);
+              if (g?.plan) router.replace(`/learn/${resumeId}`);
+            }
           });
           return;
         }
@@ -260,11 +276,22 @@ function IntakeInner() {
       criteria: finalCard.successCriteria.length,
     });
 
-    await send({
-      args: { mode: "master", cardJson: JSON.stringify(finalCard, null, 2) },
-      userText: "目标卡已确认，请生成总学习纲要（只要 JSON）。",
-      task: "plan",
-    }).then(async (full) => {
+    /* V26.1 P0-B2：总纲要生成脱离 useChat（页面卸载即 abort），
+     * 挂到模块级任务注册表 + KV 状态——切页/回页/刷新都能接续或恢复结果。 */
+    const planTask = startPlanTask(goalId, "master");
+    setBgTask(true);
+    await (async () => {
+      const full = await streamChat({
+        args: { mode: "master", cardJson: JSON.stringify(finalCard, null, 2) },
+        messages: [{ role: "user", content: "目标卡已确认，请生成总学习纲要（只要 JSON）。" }],
+        task: "plan",
+        temperature: 0.5,
+        signal: planTask.signal,
+        onDelta: () => {},
+      }).catch((e: unknown) => {
+        planTask.finish(e instanceof Error ? e.message : "生成失败");
+        throw e;
+      });
       // send 失败时内部已吞掉异常并返回 ""：必须在这里收口，
       // 否则界面永远停在"计划生成中…"（旧实现依赖 onDone，失败就再也不触发）。
       if (!full) {
@@ -298,14 +325,17 @@ function IntakeInner() {
           `${finalCard.topic} · 总纲要`
         );
         toast.success("总纲要已生成。第一阶段的天级计划在目标页一键生成。");
+        planTask.finish();
+        setBgTask(false);
         router.replace(`/learn/${goalId}`);
       } catch (e) {
         console.error(e);
         setMessages(beforeMessages);
         toast.error("纲要格式解析失败——目标已保存，可从目标列表进入该目标重试。");
+        planTask.finish("parse failed");
         setStage("confirm");
       }
-    });
+    })();
   };
 
   return (
@@ -325,6 +355,7 @@ function IntakeInner() {
           </p>
         </div>
         {stage === "planning" && <Badge tone="accent">计划生成中…</Badge>}
+        {bgTask && <Badge tone="accent">后台生成中——切页不会中断</Badge>}
         {resumeId && stage === "chat" && messages.length > 0 && (
           <Badge tone="ok">已恢复上次对话</Badge>
         )}
