@@ -13,7 +13,8 @@ import { verifySession, type SessionUser } from "./auth";
  * 降级哲学与 verifySession 的差异（有意为之）：verifySession 超时放行，因为 cookie 里
  * 自带身份；设备令牌的身份在云端档案里，超时拿不到可信身份——fail-open 只能返回伪
  * 身份，会污染 usage/entitlement 记账。故设备通道超时一律拒绝（401），客户端重试。
- * 插件是次要入口，可用性损失可接受，误记账不可接受。 */
+ * 预算 3s：腾讯云↔D1 实测波动 1.0~1.9s（1.2s 首版在真机上贴线误杀过 401），
+ * 3s 仍远小于网关 15s 无数据熔断线。插件是次要入口，可用性损失可接受，误记账不可接受。 */
 
 const DEVICE_PREFIX = "d1";
 const SECRET_BYTES = 32;
@@ -87,7 +88,7 @@ export async function verifyDeviceAuth(req: AuthRequest): Promise<SessionUser | 
       )
         .then((r) => r ?? null)
         .catch(() => "timeout" as const),
-      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 1200)),
+      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 3000)),
     ]);
     if (!rec || rec === "timeout") return null; // 见头部注释：设备通道超时拒绝，不 fail-open
     if (!rec.userId || !rec.email) return null; // 档案不完整不当登录
