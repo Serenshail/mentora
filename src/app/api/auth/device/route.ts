@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
+import crypto from "node:crypto";
 import { dbGet, dbPut, emailHash } from "@/lib/server/db";
 import { verifyPassword } from "@/lib/server/auth";
 import { dummyScryptVerify, getFailState, bumpFail, clearFail } from "@/lib/server/login-guard";
-import { issueDeviceToken, type DeviceRecord } from "@/lib/server/device-auth";
+import { issueDeviceToken, parseDeviceToken, hashDeviceToken, type DeviceRecord } from "@/lib/server/device-auth";
 import { computeEntitlement, type UserPlanRecord } from "@/lib/server/entitlement";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 
@@ -86,4 +87,37 @@ export async function POST(req: NextRequest) {
       entitlement,
     },
   });
+}
+
+/** 吊销设备令牌（v27.0-m1 补充，插件「退出登录」语义）：当前请求所持令牌立即失效。
+ *  幂等：令牌已被吊销/不存在时照常返回 ok（remaining=0）。带 ?all=1 清空全部设备。
+ *  指定 deviceId 吊销他机的管理语义列 P1（后台设备管理页）。 */
+export async function DELETE(req: NextRequest) {
+  const parsed = parseDeviceToken(req.headers.get("x-device-token"));
+  if (!parsed) return Response.json({ error: "未登录" }, { status: 401 });
+  try {
+    const rec = await dbGet<UserRecord>(`users/${parsed.key}.json`, { encrypted: true });
+    if (!rec) return Response.json({ error: "未登录" }, { status: 401 });
+    const hash = hashDeviceToken(parsed.token);
+    const all = req.nextUrl.searchParams.has("all");
+    const devices = all
+      ? []
+      : (rec.devices ?? []).filter(
+          (d) =>
+            !(
+              typeof d?.hash === "string" &&
+              d.hash.length === hash.length &&
+              crypto.timingSafeEqual(Buffer.from(d.hash), Buffer.from(hash))
+            )
+        );
+    const { _sha, ...clean } = rec;
+    await dbPut(`users/${parsed.key}.json`, { ...clean, devices }, {
+      encrypted: true,
+      sha: _sha ?? null,
+      overwriteOnConflict: true,
+    });
+    return Response.json({ ok: true, revoked: all ? "all" : "self", remaining: devices.length });
+  } catch {
+    return Response.json({ error: "吊销失败，稍后再试" }, { status: 503 });
+  }
 }
