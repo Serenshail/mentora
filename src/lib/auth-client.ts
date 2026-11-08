@@ -185,6 +185,9 @@ function localData() {
     books: s.books,
     sessions: s.sessions,
     customPersonas: s.customPersonas,
+    /* v27：主对话多会话入云（修 AUDIT-V26.1 C2「换设备丢主对话」）。
+     * 当前活跃会话指针不同步——UI 焦点状态跨端回写会拽动视图（v26.1.5 教训）。 */
+    agentSessions: s.agentSessions ?? [],
     settings: { ...s.settings, apiKey: "" },
   };
 }
@@ -193,7 +196,12 @@ function hasLocalData() {
   const s = useAppStore.getState();
   // customPersonas 与 cloudHasData 同口径：只有自定义智能体的用户登录后也能触发上传/回推
   return (
-    s.goals.length + s.knowledge.length + s.books.length + s.sessions.length + s.customPersonas.length >
+    s.goals.length +
+      s.knowledge.length +
+      s.books.length +
+      s.sessions.length +
+      s.customPersonas.length +
+      (s.agentSessions?.length ?? 0) >
     0
   );
 }

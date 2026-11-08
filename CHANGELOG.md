@@ -2,6 +2,19 @@
 
 版本史此前散在 git log 与 Obsidian 项目志（v1→v16.5 见 `git log`，仓库首个带 tag 的版本是本文件记录的 v17）。
 
+## v27.0-m1 — 2026-11-08（插件重构 M1：设备令牌鉴权 + agentSessions 入云）
+
+Mentora Obsidian 插件重构 PRD V2.0 的服务端最小集（审计 `docs/AUDIT-PLUGIN-V2-2026-11-08.md`、方案 `docs/PLAN-PLUGIN-V2-2026-11-08.md`，四项决策 D1-D4 已由用户拍板）：
+
+- **`POST /api/auth/device`**：邮箱密码登录换 90 天设备令牌（`d1.<emailHash>.<secret>`，服务端只存 sha256）。复用 login 全套防爆破；插件等无 cookie 宿主自此走正式认证体系（PRD 7.1），不再依赖共享 open-token/admin 密码。
+- **`verifyAnyAuth`**：sync（GET/POST）、chat、memory、reminders 统一扩展为「会话 cookie 优先、`x-device-token` 兜底」。设备通道档案读取超时**拒绝**（不 fail-open）——与 verifySession 相反是有意的：设备身份在云端档案，fail-open 只能返回伪身份污染记账。
+- **改密/重置（sv+1）同时清空 devices[]**：设备令牌与 cookie 会话同拍全端吊销。
+- **agentSessions 入云同步**（sync FIELDS + auth-client localData + store sanitizeBackup/importData）：修 AUDIT-V26.1 C2「换设备丢主对话历史」；活跃会话指针仍仅本地（v26.1.5 焦点教训）。
+- **login 防爆破逻辑抽到 `src/lib/server/login-guard.ts`**（login 与 device 单一真源）。
+- sync POST 响应的 `updatedAt` 基线此前已存在，插件端（M2）将按 Web 同款水位纪律消费。
+
+验证：四门禁绿（tsc 0 / eslint 0 error / vitest 302 通过含新增 9 条 device-auth 用例 / build 38 页）；本地真链路冒烟 12/12（签发/错密码/坏令牌/无凭据 401 分明、sync 读写、memory/reminders、chat 真模型流式、versions 存档）；e2e 14/15（1 条为 qwen 长文已知能力边界，与鉴权无关）。已知边界：设备通道无单设备吊销端点（P1）、agentSessions 整快照携带使 4.2MB 闸更紧（小程序 plain 通道需留意）。
+
 ## v26.2 — 2026-11-07（专项整改：学习人生入口恢复/书籍真实性三路径闭环/泄漏收口/重排语义修复）
 
 第二轮整改：先审计（`docs/AUDIT-V26.2-2026-11-07.md`，只读零改动）后开发。审计三答：学习人生组件与数据完好但入口断裂（P0）；数据零丢失零迁移；V26.1 零整体回滚。

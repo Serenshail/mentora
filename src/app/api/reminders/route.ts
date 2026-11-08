@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { verifySession } from "@/lib/server/auth";
+import { verifyAnyAuth } from "@/lib/server/device-auth";
 import { rateLimitPersistent } from "@/lib/server/rate-limit";
 import { isDeployed } from "@/lib/server/deploy-env";
 import {
@@ -18,8 +18,8 @@ export const runtime = "nodejs";
  * 到点由 /api/cron/tick（腾讯云 systemd timer 每分钟 / Vercel 每日兜底）发邮件。
  * 确定性发送：正文就是用户写的 prompt，不再调用模型（零 token 成本）。 */
 
-async function guard(bucket: string) {
-  const session = await verifySession();
+async function guard(bucket: string, req: NextRequest) {
+  const session = await verifyAnyAuth(req); // 会话 cookie 或设备令牌（插件）
   if (!session) return { error: Response.json({ error: "请先登录" }, { status: 401 }) };
   const ok = await rateLimitPersistent(`${bucket}:${session.userId}`, { capacity: 30, refillPerSec: 30 / 60 });
   if (!ok) return { error: Response.json({ error: "操作太频繁，稍后再试" }, { status: 429 }) };
@@ -27,8 +27,8 @@ async function guard(bucket: string) {
   return { userId: session.userId, email: session.email };
 }
 
-export async function GET() {
-  const g = await guard("reminders-read");
+export async function GET(req: NextRequest) {
+  const g = await guard("reminders-read", req);
   if (g.error) return g.error;
   const reminders = await listReminders(g.userId).catch(() => []);
   const now = new Date();
@@ -45,7 +45,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const g = await guard("reminders-write");
+  const g = await guard("reminders-write", req);
   if (g.error) return g.error;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const clean = sanitizeReminderInput(body);
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const g = await guard("reminders-write");
+  const g = await guard("reminders-write", req);
   if (g.error) return g.error;
   const id = req.nextUrl.searchParams.get("id") || "";
   if (!id) return Response.json({ error: "缺少 id" }, { status: 400 });

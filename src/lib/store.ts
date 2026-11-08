@@ -558,6 +558,18 @@ function sanitizeBackup(raw: unknown): SanitizedBackup | null {
   if (personas === null) return null;
   if (personas) out.customPersonas = personas as unknown as CustomPersona[];
 
+  /* v27：主对话多会话入云（与 /api/sync FIELDS 同步扩）。
+   * 单条形状只做最宽容校验（id/messages），逐条深校验交给各消费端的既有兜底。 */
+  const agentSessions = optionalRecords(raw.agentSessions);
+  if (agentSessions === null) return null;
+  if (agentSessions) {
+    out.agentSessions = agentSessions.map((s) => ({
+      ...s,
+      id: typeof s.id === "string" ? s.id : uid("as"),
+      messages: Array.isArray(s.messages) ? s.messages : [],
+    })) as unknown as AgentSession[];
+  }
+
   if (raw.folders !== undefined && raw.folders !== null) {
     if (!Array.isArray(raw.folders)) return null;
     out.folders = raw.folders.filter((f): f is string => typeof f === "string");
@@ -1607,6 +1619,7 @@ export const useAppStore = create<AppState>()(
             books: clean.books ?? s.books,
             sessions: clean.sessions ?? s.sessions,
             customPersonas: clean.customPersonas ?? s.customPersonas,
+            ...(clean.agentSessions ? { agentSessions: clean.agentSessions } : {}),
             ...(clean.folders ? { folders: clean.folders } : {}),
             settings,
           };

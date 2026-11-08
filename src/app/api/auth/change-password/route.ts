@@ -54,7 +54,8 @@ export async function POST(req: NextRequest) {
   const { _sha, ...clean } = record;
   const sv = (record.sv ?? 0) + 1;
   try {
-    await dbPut(path, { ...clean, salt, hash, sv }, {
+    // devices 清空与 sv+1 同拍：设备令牌（v27）与 cookie 会话一起全端吊销
+    await dbPut(path, { ...clean, salt, hash, sv, devices: [] }, {
       encrypted: true,
       sha: _sha ?? null,
       overwriteOnConflict: true,

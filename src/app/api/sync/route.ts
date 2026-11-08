@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbPut, dbList, dbDelete } from "@/lib/server/db";
-import { verifySession } from "@/lib/server/auth";
+import { verifyAnyAuth } from "@/lib/server/device-auth";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { logEvent } from "@/lib/server/config";
 import zlib from "node:zlib";
@@ -8,7 +8,11 @@ import zlib from "node:zlib";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const FIELDS = ["goals", "knowledge", "books", "sessions", "customPersonas"] as const;
+/* agentSessions（主对话框多会话，v27 加入）：
+ * 此前仅 localStorage——换设备丢全部主对话历史（AUDIT-V26.1 C2 债）。
+ * 入云后插件端（设备令牌）与 Web 端共享会话，PRD 场景 C「其他端验证会话」成立。
+ * agentActiveId 仍不同步：那是 UI 焦点状态，跨端回写会拽动视图（v26.1.5 教训）。 */
+const FIELDS = ["goals", "knowledge", "books", "sessions", "customPersonas", "agentSessions"] as const;
 
 /* v17 数据生命线加固：
  * ① 体积闸：请求体上限 4.2MB（Vercel 4.5MB 前的自我裁决，给 413 一个明确文案）；
@@ -65,7 +69,7 @@ async function archivePrevious(userId: string, prev: { data?: unknown; updatedAt
 /** 拉取云端快照（大快照自动 gzip，绕开 4.5MB 响应限制）。
  *  查询参数：?versions=1 列出历史版本时间戳；?v=<ts> 拉取指定历史版本。 */
 export async function GET(req: NextRequest) {
-  const user = await verifySession();
+  const user = await verifyAnyAuth(req); // 会话 cookie（Web/小程序）或设备令牌（插件）
   if (!user) return Response.json({ error: "未登录" }, { status: 401 });
   /* GET 也要分桶：插件/多端轮询会反复全量读。与 POST 分开计数，
    * 避免正常写同步把读配额挤掉（反之亦然）。 */
@@ -120,7 +124,7 @@ export async function GET(req: NextRequest) {
 
 /** 上传本地快照（last-write-wins，但覆盖前自动存档上一份；大快照以 application/x-gzip 上传） */
 export async function POST(req: NextRequest) {
-  const user = await verifySession();
+  const user = await verifyAnyAuth(req);
   if (!user) return Response.json({ error: "未登录" }, { status: 401 });
   /* 写放大最重的端点（读旧快照+归档+分块写）：自动同步 2.5s 防抖正常上限约 24 次/分，
    * 给到 60 次/分只拦重试风暴/脚本刷写，不影响真实编辑节奏。 */

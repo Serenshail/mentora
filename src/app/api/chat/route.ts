@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import type { AIConfig } from "@/lib/ai/providers";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { withBudget, dbEventSave } from "@/lib/server/db";
-import { verifySession, type SessionUser } from "@/lib/server/auth";
+import { verifySession } from "@/lib/server/auth";
+import { verifyDeviceAuth } from "@/lib/server/device-auth";
 import { checkAndCountServerKey } from "@/lib/server/quota";
 import { readEntitlement } from "@/lib/server/entitlement";
 import { withinFreeBudget, addUsage } from "@/lib/server/usage";
@@ -526,7 +527,8 @@ export async function POST(req: NextRequest) {
       true,
       1500
     ),
-    hasCookie ? verifySession() : Promise.resolve(null as SessionUser | null),
+    // 会话 cookie（Web/小程序）或设备令牌（Obsidian 插件）二者其一
+    hasCookie ? verifySession() : verifyDeviceAuth(req),
   ]);
   if (!rlOk) {
     return Response.json({ error: "请求太频繁，请稍后再试" }, { status: 429 });
