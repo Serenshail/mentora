@@ -21,7 +21,15 @@
   <view wx:if="{{outLinks.length}}" class="sec-sm">
     <view class="label" style="margin: 0 0 14rpx">出链 · {{outLinks.length}}</view>
     <view class="list">
-      <view wx:for="{{outLinks}}" wx:key="id" class="item" data-id="{{item.id}}" bindtap="openLinked">
+      <view
+        wx:for="{{outLinks}}"
+        wx:key="id"
+        class="item"
+        data-id="{{item.id}}"
+        bindtap="openLinked"
+        aria-role="button"
+        aria-label="打开笔记 {{item.title}}"
+      >
         <text class="flex-1 accent-text" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
         <view class="chev">›</view>
       </view>
@@ -31,7 +39,15 @@
   <view wx:if="{{backLinks.length}}" class="sec-sm">
     <view class="label" style="margin: 0 0 14rpx">反向链接 · {{backLinks.length}}</view>
     <view class="list">
-      <view wx:for="{{backLinks}}" wx:key="id" class="item" data-id="{{item.id}}" bindtap="openLinked">
+      <view
+        wx:for="{{backLinks}}"
+        wx:key="id"
+        class="item"
+        data-id="{{item.id}}"
+        bindtap="openLinked"
+        aria-role="button"
+        aria-label="打开反向链接 {{item.title}}"
+      >
         <text class="flex-1 accent-text" style="font-size: 29rpx; font-weight: 500">{{item.title}}</text>
         <view class="chev">›</view>
       </view>

@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Badge, Button, Card, Input, Modal, PageHeader, Skeleton } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
+import { ChatActivity } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
 import { useChat, useHydrated } from "@/lib/use-chat";
 import {
-  ALL_SEAT_METAS, seatById, type SeatMeta,
+  ALL_SEAT_METAS, seatById, normalizeSeatColor, type SeatMeta,
 } from "@/lib/ai/persona-meta";
 import { extractJson, personaDistillSchema, streamChat } from "@/lib/ai/client";
+import { rebuildRtRetry } from "@/lib/rt-retry";
+import { runDiscussion, isSessionBusy, type SeatStatus } from "@/lib/agent/council-engine";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { ChevronRight, Compass, FlaskConical, Plus, Trash2, UserPlus, Users, Zap } from "lucide-react";
+import { ChevronRight, Compass, FlaskConical, Plus, Trash2, UserPlus, Users, X, Zap } from "lucide-react";
 import type { CustomPersona } from "@/lib/types";
 
 /* 内置席位在前端只有展示元数据（无 system 提示词）；自建人物带用户自己蒸馏的 system */
@@ -58,7 +62,7 @@ function PersonaAvatar({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-xl bg-[#1d1d1f] font-black text-white",
+        "flex shrink-0 items-center justify-center rounded-xl bg-ink font-black text-white",
         className
       )}
     >
@@ -68,6 +72,12 @@ function PersonaAvatar({
 }
 
 export default function CouncilPage() {
+  return <Suspense fallback={<Skeleton className="h-40 rounded-2xl" />}><CouncilWorkspace /></Suspense>;
+}
+
+function CouncilWorkspace() {
+  const searchParams = useSearchParams();
+  const requestedSession = searchParams.get("session");
   const hydrated = useHydrated();
   const sessions = useAppStore((s) => s.sessions);
   const addSession = useAppStore((s) => s.addSession);
@@ -78,16 +88,40 @@ export default function CouncilPage() {
   const addCustomPersona = useAppStore((s) => s.addCustomPersona);
   const removeCustomPersona = useAppStore((s) => s.removeCustomPersona);
 
-  const [activeId, setActiveId] = useState<string | null>(null);
-  /* 手机：会话历史默认收起（对话区优先），桌面始终左栏常驻（PRD §5.7） */
-  const [sessionsOpen, setSessionsOpen] = useState(false);
+  /* 结果入口直达（批次 D 补充）：/council?session=<id> 自动选中对应会话，
+   * 用户从首页执行结果点进来不需要再翻历史列表找。
+   * 用惰性初始化读取（与页面既有 window.innerWidth 默认值同一模式），
+   * 不在 effect 里同步 setState（避免级联渲染）。会话由本地持久化水合，
+   * 客户端首次渲染时 store 已可用；目标不存在则回退到默认选择流程。 */
+  /* 深链（E2 验收 4）：?session=<id> 直接选中；指向不存在的会话时界面明确提示，不静默回退。
+   * 读 URL 是纯函数式取值，惰性初始化里算一次，两个 state 共享同一结果（不碰 ref）。 */
+  const deepLinkState = (() => {
+    const target = requestedSession;
+    if (!target) return { id: null, missing: false };
+    const exists = useAppStore.getState().sessions.some((s) => s.id === target);
+    return { id: exists ? target : null, missing: !exists };
+  })();
+  const [activeId, setActiveId] = useState<string | null>(deepLinkState.id);
+  const [deepLinkMissing, setDeepLinkMissing] = useState(deepLinkState.missing);
+  /* 用户已对哪个深链目标点了「知道了」。不能用 setDeepLinkMissing(false) 表达关闭：
+   * 深链 effect 的依赖含 deepLinkMissing，且未命中目标从不登记 appliedDeepLinkRef
+   * （「云水合可能稍后补上」是刻意设计），effect 重跑的 rAF 会立刻把 missing 置回
+   * true——「知道了」会闪回成死控件。按目标记录关闭，换目标自动失效。 */
+  const [deepLinkDismissedFor, setDeepLinkDismissedFor] = useState<string | null>(null);
   const activeIdRef = useRef<string | null>(null);
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+  /* 手机：会话历史默认收起（对话区优先），桌面始终左栏常驻（PRD §5.7） */
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const [picking, setPicking] = useState(false);
-  const { messages, setMessages, pending, streaming, error, send, stop } = useChat();
-  const [input, setInput] = useState("");
+  const { messages, setMessages, pending, streaming, activity, error, send, stop, cancel, isBusy } = useChat();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const input = activeId ? drafts[activeId] ?? "" : "";
+  const setInput = (text: string) => {
+    if (!activeId) return;
+    setDrafts((current) => ({ ...current, [activeId]: text }));
+  };
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // 圆桌状态（Roundtable-First PR1）：每轮一个 runId，可取消、失败诚实、会话间隔离
@@ -96,7 +130,7 @@ export default function CouncilPage() {
   const [rtHost, setRtHost] = useState("");
   const [rtBusy, setRtBusy] = useState(false);
   const rtBusyRef = useRef(false); // 同步互斥：双击 Enter/重试按钮不靠异步 state 拦
-  const [rtPhase, setRtPhase] = useState<"takes" | "host" | null>(null);
+  const [rtPhase, setRtPhase] = useState<"searching" | "takes" | "host" | null>(null);
   const [rtSessionId, setRtSessionId] = useState<string | null>(null); // 运行归属会话（UI 只在该会话显示）
   const [rtSeatStatus, setRtSeatStatus] = useState<Record<string, "pending" | "streaming" | "done" | "failed">>({});
   const [rtRetry, setRtRetry] = useState<null | {
@@ -108,6 +142,29 @@ export default function CouncilPage() {
   }>(null);
   const runIdRef = useRef<string | null>(null);
   const rtAbortRef = useRef<AbortController | null>(null);
+  const appliedDeepLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!hydrated) return;
+    // Apply each URL target once; ordinary message writes must not steal selection.
+    if (requestedSession === appliedDeepLinkRef.current && !deepLinkMissing) return;
+    const target = requestedSession;
+    const exists = !!target && sessions.some((s) => s.id === target);
+    const raf = requestAnimationFrame(() => {
+      setDeepLinkMissing(!!target && !exists);
+      if (!target) { appliedDeepLinkRef.current = null; return; }
+      // Leave unresolved targets pending: cloud hydration may supply them later.
+      if (!exists) return;
+      appliedDeepLinkRef.current = target;
+      if (target !== activeId) {
+        cancel();
+        rtAbortRef.current?.abort();
+      }
+      setActiveId(target);
+      setPicking(false);
+      setSessionsOpen(false);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [requestedSession, sessions, hydrated, activeId, cancel, deepLinkMissing]);
 
   const active = sessions.find((s) => s.id === activeId) ?? null;
   const isRoundtable = active?.personaId === "roundtable";
@@ -121,6 +178,7 @@ export default function CouncilPage() {
     return undefined;
   };
   const persona = active ? resolvePersona(active.personaId) : undefined;
+  const unanswered = active?.messages.at(-1);
 
   /* 贴底守卫：流式期间每个 delta 都会触发滚底，用户上滑回读时会被一直拽回底部。
    * 只在「用户本来就在底部附近」时跟随滚动；上滑离开底部即停手。 */
@@ -137,10 +195,18 @@ export default function CouncilPage() {
   useEffect(() => {
     if (!stickBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, pending, rtTakes, rtHost]);
+  }, [messages.length, pending, streaming, rtTakes, rtHost]);
 
   useEffect(() => {
     if (active) setMessages(active.messages);
+    /* 切回圆桌会话时从历史重建补答入口：rtRetry 是组件内存态，路由切换/刷新即丢，
+     * 而失败席位/主持人失败的消息已永久写进会话历史并承诺「可单独重试」——
+     * 不重建的话补救入口静默失效，用户只能整题重问（历史里还会留下重复的问题消息）。
+     * 无失败（或补答已完成）的会话重建结果为 null，等于顺手清掉过期入口。 */
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 只随 activeId 切换执行一次；「忽略」按钮置 null 的入口不能改到渲染期派生（会被重建复活）
+    setRtRetry(
+      active?.personaId === "roundtable" ? rebuildRtRetry(active, resolvePersona) : null
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
@@ -153,7 +219,7 @@ export default function CouncilPage() {
     ...customPersonas.map((c) => ({ id: c.id, name: c.name, color: c.color, custom: true })),
   ];
 
-  const startWith = async (personaId: string) => {
+  const startWith = (personaId: string) => {
     setPicking(false);
     const sessionId = uid("sess");
     if (personaId === "roundtable") {
@@ -167,6 +233,7 @@ export default function CouncilPage() {
       setForgeRoundtableOpen(true);
       return;
     }
+    cancel();
     const p = resolvePersona(personaId);
     addSession({
       id: sessionId,
@@ -177,20 +244,6 @@ export default function CouncilPage() {
     });
     setActiveId(sessionId);
     setMessages([]);
-    await send({
-      args: { mode: "single", personaId: p?.id, customSystem: p && isCustomPersona(p) ? p.system : undefined },
-      userText: "（请用你的风格开场：你是谁、你处理什么问题、以及你会先反问用户什么。50字内，不要列清单。）",
-      task: "council",
-      onDone: (full) => {
-        if (full)
-          addSessionMsg(sessionId, {
-            id: uid("m"),
-            role: "assistant",
-            content: full,
-            at: new Date().toISOString(),
-          });
-      },
-    });
   };
 
   /* 圆桌会话创建（选完与会者） */
@@ -204,6 +257,9 @@ export default function CouncilPage() {
     const names = rtParticipants
       .map((id) => allPersonaOptions.find((p) => p.id === id)?.name ?? id)
       .join(" · ");
+    /* 同 startWith：选完与会者才真正换会话，此刻作废在途单人流，
+     * 否则旧流的 delta 与完成时的整表替换会盖到这张新圆桌上。 */
+    cancel();
     addSession({
       id: sessionId,
       personaId: "roundtable",
@@ -230,36 +286,51 @@ export default function CouncilPage() {
         toast("另一张圆桌还在出纪要，等它跑完再发。");
         return;
       }
+      /* 不在这里清输入框：roundtableSend 内部还有 isSessionBusy 守卫可能拒绝本次发送，
+       * 先清的话被拒时用户草稿已丢。清空在守卫全部通过后进行（roundtableSend 内）。 */
       void roundtableSend(text);
-      setInput("");
       return;
     }
-    setInput("");
-    const base = active.messages;
-    const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
-    addSessionMsg(active.id, userMsg);
+    sendSingle(text);
+  };
+
+  const sendSingle = (text: string, retry = false) => {
+    if (!active || !persona || isBusy()) return;
+    if (isSessionBusy(active.id)) {
+      toast("这段对话正在回复，请稍等。");
+      return;
+    }
+    const sessionId = active.id;
+    const history = useAppStore.getState().sessions.find((s) => s.id === sessionId)?.messages;
+    if (!history) return;
+    if (!retry) {
+      setInput("");
+      addSessionMsg(sessionId, { id: uid("m"), role: "user", content: text, at: new Date().toISOString() });
+    }
     void send({
-      args: { mode: "single", personaId: persona?.id, customSystem: persona && isCustomPersona(persona) ? persona.system : undefined },
-      userText: text,
+      args: { mode: "single", personaId: persona.id, customSystem: isCustomPersona(persona) ? persona.system : undefined },
+      userText: retry ? undefined : text,
       task: "council",
-      history: base,
+      history,
       onDone: (full) => {
-        if (full)
-          addSessionMsg(active.id, {
+        if (full.trim())
+          addSessionMsg(sessionId, {
             id: uid("m"),
             role: "assistant",
             content: full,
             at: new Date().toISOString(),
           });
       },
-      temperature: 0.8,
+      temperature: 0.7,
     });
   };
 
   /* 圆桌发送：全员并行独立发言 → 主持人纪要。
-   * PR1 纪律：①每轮一个 runId——取消/新轮/切会话后，旧轮的一切 UI 写入与收尾都被拒之门外；
-   * ②外层 finally 保证任何异常都能解锁输入；③有效发言 ≥2 席主持人才综合，残片不伪装完成；
-   * ④失败留可重试入口（失败席位重试 / 仅重试主持人）。 */
+   * 批次 D：执行逻辑委托共享引擎（src/lib/agent/council-engine.ts）——
+   * 首页智能体 run_discussion 与本页使用同一套席位/主持/门槛/重试语义。
+   * 页面保留：runId 隔离 UI 写入、停止（abort）、补答横幅（setRtRetry 由结果驱动；
+   * 跨轮重建仍走 rebuildRtRetry 从历史扫描）。引擎负责：store 落库（经 signal 守卫）、
+   * pendingRetry 持久化（跨入口重试）、同会话互斥登记。 */
   const roundtableSend = async (
     text: string,
     retry?: { sessionId: string; question: string; seats: ResolvedPersona[]; goodTakes: Record<string, string> }
@@ -268,168 +339,124 @@ export default function CouncilPage() {
     if (!sessionId || rtBusyRef.current) return;
     if (!retry && !text.trim()) return;
     if (retry && activeIdRef.current !== sessionId) setActiveId(sessionId); // 重试时把用户带回那张桌
+    /* 同会话互斥（共享引擎登记）：首页智能体正在跑同一张桌时拒绝，防交叉写入 */
+    if (isSessionBusy(sessionId)) {
+      toast("这场讨论正在执行中，等它结束再操作。");
+      return;
+    }
+    /* 重试时按当前人物表重解席位：结果驱动的 rtRetry 存的是 resolvePersona 当时解析出的
+     * 快照对象，人物此后被删除时快照仍带旧 system——直接跑会向 participants 已不含此席
+     * 的会话写回孤儿发言、多烧一次调用。已删除席位跳过（与 rebuildRtRetry「席位已被
+     * 删除/失效：无法重跑」同口径）；全部被删则无可重跑对象，撤下补答入口。 */
+    let retrySeats = retry?.seats ?? [];
+    if (retry) {
+      retrySeats = retry.seats.filter((s) => resolvePersona(s.id) != null);
+      if (retrySeats.length !== retry.seats.length) {
+        if (retrySeats.length === 0) {
+          setRtRetry(null);
+          return;
+        }
+        // 横幅同步收敛为仍可重跑的席位（功能更新拿 state 里现成的 note，不在此处杜撰）
+        setRtRetry((prev) => (prev && prev.sessionId === retry.sessionId ? { ...prev, seats: retrySeats } : prev));
+      }
+    }
     rtAbortRef.current?.abort(); // 掐掉可能还在飞的旧轮，防双写
     const runId = uid("rt");
     runIdRef.current = runId;
     const ac = new AbortController();
     rtAbortRef.current = ac;
-    const alive = () => runIdRef.current === runId && !ac.signal.aborted;
-    const question = retry?.question ?? text.trim();
-
-    const participants = retry
-      ? retry.seats
-      : ((active?.participants ?? []).map((id) => resolvePersona(id)).filter(Boolean) as ResolvedPersona[]);
-
     rtBusyRef.current = true;
     setRtBusy(true);
-    setRtPhase("takes");
     setRtSessionId(sessionId);
     setRtHost("");
     setRtTakes({});
-    setRtSeatStatus((prev) => {
-      const next: Record<string, "pending" | "streaming" | "done" | "failed"> = {};
+
+    const question = retry?.question ?? text.trim();
+    const participants = retry
+      ? retrySeats
+      : ((active?.participants ?? []).map((id) => resolvePersona(id)).filter(Boolean) as ResolvedPersona[]);
+
+    setRtSeatStatus(() => {
+      const next: Record<string, SeatStatus> = {};
       for (const p of participants) next[p.id] = "pending";
       for (const id of Object.keys(retry?.goodTakes ?? {})) next[id] = "done";
-      void prev;
       return next;
     });
 
-    if (!retry && active) {
-      const userMsg = { id: uid("m"), role: "user" as const, content: question, at: new Date().toISOString() };
-      addSessionMsg(sessionId, userMsg);
-      setMessages([...active.messages, userMsg]);
-      // 第一个问题落地后，把「圆桌(N人)：…」换成问题摘要——历史列表才分得清哪次决策
-      if (active.messages.length === 0) {
-        const d = new Date();
-        updateSession(sessionId, {
-          title: `${question.replace(/\s+/g, " ").slice(0, 16)} · ${participants.length}人 · ${d.getMonth() + 1}/${d.getDate()}`,
-        });
-      }
+    /* 第一个问题落地后，把「圆桌(N人)：…」换成问题摘要——历史列表才分得清哪次决策。
+     * 用户消息本身由引擎落库（userMessage=question），页面在这里只管标题。 */
+    if (!retry && active && active.messages.length === 0) {
+      const d = new Date();
+      updateSession(sessionId, {
+        title: `${question.replace(/\s+/g, " ").slice(0, 16)} · ${participants.length}人 · ${d.getMonth() + 1}/${d.getDate()}`,
+      });
     }
-    setInput("");
+    /* 守卫全部通过才清输入框：被互斥拒绝时用户草稿不丢（与 sendSingle 的守卫后清空
+     * 同序）；重试补答不消费输入框草稿，不清。 */
+    if (!retry) setInput("");
 
-    const takesMap: Record<string, string> = { ...(retry?.goodTakes ?? {}) };
     try {
-      await Promise.all(
-        participants.map(async (p) => {
-          let take = "";
-          try {
-            const full = await streamChat({
-              task: "council",
-              /* 内置席位只发 personaId，system 由服务端解析；自建人物才携带用户自己的 system */
-              args: { mode: "take", name: p.name, personaId: p.id, customSystem: isCustomPersona(p) ? p.system : undefined },
-              messages: [{ role: "user", content: question }],
-              temperature: 0.8,
-              signal: ac.signal,
-              onDelta: (d) => {
-                if (!alive()) return; // 已取消/已被新轮取代：增量一律不写
-                take += d;
-                setRtTakes((prev) => ({ ...prev, [p.id]: take }));
-              },
-            });
-            if (!alive()) return;
-            takesMap[p.id] = full || take;
-            setRtSeatStatus((s) => ({ ...s, [p.id]: "done" }));
-            addSessionMsg(sessionId, {
-              id: uid("m"),
-              role: "assistant",
-              content: `**【${p.name}】**\n\n${takesMap[p.id]}`,
-              at: new Date().toISOString(),
-            });
-          } catch {
-            if (!alive()) return;
-            setRtSeatStatus((s) => ({ ...s, [p.id]: "failed" }));
-            addSessionMsg(sessionId, {
-              id: uid("m"),
-              role: "assistant",
-              content: `**【${p.name}】**（发言失败——本轮结束后可单独重试）`,
-              at: new Date().toISOString(),
-            });
-          }
-        })
+      const result = await runDiscussion(
+        {
+          sessionId,
+          question,
+          userMessage: retry ? "" : question, // 重试补答轮不重复落用户消息
+          participants: participants.map((p) => ({
+            id: p.id,
+            name: p.name,
+            system: isCustomPersona(p) ? p.system : undefined,
+          })),
+          mode: "roundtable",
+          goodTakes: retry?.goodTakes,
+          onlySeats: retry ? retrySeats.map((s) => s.id) : undefined,
+          signal: ac.signal,
+          callbacks: {
+            onPhase: (ph) => {
+              if (runIdRef.current === runId) setRtPhase(ph);
+            },
+            onSeatDelta: (id, cum) => {
+              if (runIdRef.current === runId) setRtTakes((prev) => ({ ...prev, [id]: cum }));
+            },
+            onSeatStatus: (id, st) => {
+              if (runIdRef.current === runId) setRtSeatStatus((s) => ({ ...s, [id]: st }));
+            },
+            onHostDelta: (d) => {
+              if (runIdRef.current === runId) setRtHost((h) => h + d);
+            },
+            onSaved: () => {
+              if (runIdRef.current !== runId) return;
+              if (activeIdRef.current === sessionId) {
+                setMessages(useAppStore.getState().sessions.find((x) => x.id === sessionId)?.messages ?? []);
+              }
+            },
+          },
+        },
+        (id) => customPersonas.find((c) => c.id === id)
       );
-      if (!alive()) return;
 
-      // 主持人门槛：有效发言（含上一轮重试保留的）≥2 席才综合
-      const seatNames = new Map(participants.map((p) => [p.id, p.name]));
-      const nameOf = (id: string) => seatNames.get(id) ?? resolvePersona(id)?.name ?? "与会者";
-      const validIds = Object.keys(takesMap).filter((id) => takesMap[id]);
-      if (validIds.length < 2) {
-        const failedSeats = participants.filter((p) => !takesMap[p.id]);
-        /* 补答后仍凑不够 2 席（席位全失效 / 只剩 1 席）时不留重试入口：
-         * 否则「重试主持人纪要」会带着同样的 1 席再来一轮，永远空转成死局。 */
-        const retryable = validIds.length + failedSeats.length >= 2;
-        addSessionMsg(sessionId, {
-          id: uid("m"),
-          role: "assistant",
-          content: retryable
-            ? `> 本轮有效发言不足 2 席（${validIds.length}/${participants.length + Object.keys(retry?.goodTakes ?? {}).length}），主持人不强行综合。失败席位可单独重试，补齐后再出纪要。`
-            : "> 这张圆桌凑不出 2 席有效发言（与会者已被删除或席位全部失效），无法生成纪要。请新建一张圆桌重新选人。",
-          at: new Date().toISOString(),
-        });
+      /* 结果 → 补答横幅（引擎已把 pendingRetry 持久化到会话，跨入口可重试） */
+      if (runIdRef.current !== runId || ac.signal.aborted) return;
+      const failedSeats = participants.filter((p) => result.failedSeatIds.includes(p.id));
+      if (result.status === "insufficient") {
+        const retryable = result.failedSeatIds.length > 0 && participants.length + Object.keys(retry?.goodTakes ?? {}).length >= 2;
         setRtRetry(
           retryable
-            ? { sessionId, question, seats: failedSeats, goodTakes: takesMap, note: `${failedSeats.length} 席发言失败` }
+            ? { sessionId, question, seats: failedSeats, goodTakes: result.goodTakes, note: `${failedSeats.length} 席发言失败` }
             : null
         );
-        return;
-      }
-
-      setRtPhase("host");
-      /* 部分失败：≥2 席足以综合，但失败席位必须留补答入口，否则标红的席位永远补不齐 */
-      const failedSeats = participants.filter((p) => !takesMap[p.id]);
-      if (failedSeats.length > 0) {
+      } else if (result.status === "partial") {
         setRtRetry({
           sessionId,
           question,
           seats: failedSeats,
-          goodTakes: takesMap,
-          note: `${failedSeats.length} 席发言失败（纪要已按 ${validIds.length} 席生成）`,
+          goodTakes: result.goodTakes,
+          note: `${failedSeats.length} 席发言失败（纪要已按 ${Object.keys(result.goodTakes).length} 席生成）`,
         });
-      }
-      try {
-        const names = validIds.map(nameOf).join("、");
-        const takes = validIds.map((id) => `【${nameOf(id)}】${takesMap[id]}`).join("\n\n");
-        const full = await streamChat({
-          task: "council",
-          args: { mode: "host", names, takes, question },
-          messages: [{ role: "user", content: "请写圆桌纪要。" }],
-          temperature: 0.4,
-          signal: ac.signal,
-          onDelta: (d) => {
-            if (alive()) setRtHost((h) => h + d);
-          },
-        });
-        if (!alive()) return;
-        addSessionMsg(sessionId, {
-          id: uid("m"),
-          role: "assistant",
-          // 重试补齐后的第二份纪要标明席位数，避免两条纪要看起来互相矛盾
-          content: retry ? `## 圆桌纪要（补答后重出 · ${validIds.length} 席）\n\n${full}` : `## 圆桌纪要\n\n${full}`,
-          at: new Date().toISOString(),
-        });
-      } catch {
-        if (!alive()) return;
-        addSessionMsg(sessionId, {
-          id: uid("m"),
-          role: "assistant",
-          content: "> 主持人纪要生成失败：各席发言已完整保留，可点「重试主持人纪要」。",
-          at: new Date().toISOString(),
-        });
-        /* 合并而非覆盖：若本轮已有失败席位的补答入口（上面刚 setRtRetry），
-         * 直接 seats:[] 会把它们抹掉，失败席位永远补不齐（与 353 行承诺相悖）。 */
-        setRtRetry((prev) =>
-          prev && prev.sessionId === sessionId && prev.question === question
-            ? {
-                ...prev,
-                goodTakes: takesMap,
-                note:
-                  prev.seats.length > 0
-                    ? `${prev.seats.length} 席发言失败 + 主持人纪要失败（先补答失败席位，再重出纪要）`
-                    : "主持人纪要失败",
-              }
-            : { sessionId, question, seats: [], goodTakes: takesMap, note: "主持人纪要失败" }
-        );
+      } else if (result.status === "failed" && result.hostFailed) {
+        setRtRetry({ sessionId, question, seats: [], goodTakes: result.goodTakes, note: "主持人纪要失败" });
+      } else if (result.status === "done") {
+        /* 全部席位到齐且纪要落定：撤下本会话的补答入口（防重复发言/重复计费） */
+        setRtRetry((prev) => (prev && prev.sessionId === sessionId ? null : prev));
       }
     } finally {
       // 只有当前轮才能收尾：旧轮不许清掉新轮的 live 状态（多轮并发隔离的关键）
@@ -467,6 +494,9 @@ export default function CouncilPage() {
   };
 
   const newChat = () => {
+    /* 新建会话即离开当前轮：作废在途单人流，否则它的 delta 会盖在选择页上、
+     * 完成时还会用旧线程整体替换下一个会话的视图。 */
+    cancel();
     setActiveId(null);
     setMessages([]);
     setPicking(true);
@@ -498,6 +528,12 @@ export default function CouncilPage() {
     setForging(false);
   };
 
+  /* 卸载（路由切换）同样要中止蒸馏：persona-distill 是服务端长任务（LONG_GEN_TASKS，
+   * 超时放宽到 120s），开着弹窗直接切路由时请求会继续跑完——BYOK 下烧的是用户的钱，
+   * 结果还因组件卸载被丢弃；中途失败更会在下一个页面弹全局「蒸馏失败」toast。
+   * gen 守卫保证迟到的失败不会误报（149 行圆桌清理 / use-chat.ts 卸载清理同款）。 */
+  useEffect(() => () => forgeAbortRef.current?.abort(), []);
+
   const forge = async () => {
     if (!forgeName.trim()) {
       toast.error("先告诉我要蒸馏谁");
@@ -525,11 +561,18 @@ export default function CouncilPage() {
         name: p.name,
         tag: p.tag,
         bio: p.bio,
-        color: p.color || "violet",
+        color: normalizeSeatColor(p.color),
         system: p.system,
       });
     } catch (e) {
       if (gen !== forgeGenRef.current || ac.signal.aborted) return; // 主动中止不是失败
+      /* ZodError 的 message 是 issues 数组的 JSON 转储（BYOK 弱模型输出缺字段/类型不符
+       * 并不罕见），直接进 toast 用户看到的是一段 [ {"code":…} ]。给可读文案，
+       * 与同弹窗 extractJson 失败的中文口径一致。 */
+      if (e instanceof Error && e.name === "ZodError") {
+        toast.error("模型输出的人物资料不完整，换更明确的线索再蒸馏一次。");
+        return;
+      }
       toast.error(e instanceof Error ? e.message : "蒸馏失败，请重试");
     } finally {
       if (gen === forgeGenRef.current) setForging(false);
@@ -538,6 +581,15 @@ export default function CouncilPage() {
 
   const saveForged = () => {
     if (!forged) return;
+    /* 重名拦截：圆桌历史按 **【显示名】** 前缀归属各席发言（引擎落库 council-engine.ts
+     * 与补答重建 rt-retry.ts 都只用名字），同名两个人物进同一张桌会把同一段历史错配给
+     * 两席——goodTakes 重复引用、一人失败两人同时标失败、重试重复烧调用。
+     * 内置席位名同样占用（同一张桌里「Elon Musk」+自建同名人也是同前缀）。 */
+    const name = forged.name.trim();
+    if (allPersonaOptions.some((p) => p.name === name)) {
+      toast.error(`已有同名人物「${name}」，换一个名字或补充线索重新蒸馏再入库。`);
+      return;
+    }
     const id = `custom:${uid("p")}`;
     addCustomPersona({
       id,
@@ -566,10 +618,37 @@ export default function CouncilPage() {
         desc="拿不定的事，问他们。他们不说客套话。"
         right={
           <Button variant="outline" onClick={newChat}>
-            <Plus className="size-4" /> 新对话
+            <Plus className="size-4" /> 选择伙伴或圆桌
           </Button>
         }
       />
+
+      {/* deepLinkMissing 初值在挂载首帧计算，而 persist 为 skipHydration、store 要等
+          /api/auth/me 后才切到用户仓（use-chat.ts useHydrated）——有效深链也会先被算成
+          「不存在」。渲染期再用当前 sessions 复核：有效目标即使 state 尚未纠正（rAF
+          前的一帧）也不亮横幅，误报消灭在渲染层，而不是闪一下再消失。 */}
+      {deepLinkMissing &&
+        !!requestedSession &&
+        !sessions.some((s) => s.id === requestedSession) &&
+        deepLinkDismissedFor !== requestedSession && (
+        <Card className="mb-4 border-warn/30 bg-warn/[0.05] py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex min-w-0 items-center gap-1.5 text-sm text-ink-dim">
+              <X className="size-4 shrink-0 text-warn" aria-hidden />
+              <span className="min-w-0">
+                链接指向的会话不存在（可能已被删除）。可以从下面的对话记录里重新选择，或开始新对话。
+              </span>
+            </p>
+            <button
+              type="button"
+              onClick={() => setDeepLinkDismissedFor(requestedSession)}
+              className="shrink-0 cursor-pointer text-xs font-semibold text-accent hover:opacity-75"
+            >
+              知道了
+            </button>
+          </div>
+        </Card>
+      )}
 
       <div className="mb-4 flex items-center gap-2 lg:hidden">
         <button
@@ -583,6 +662,38 @@ export default function CouncilPage() {
         </button>
       </div>
 
+      {/* E2 验收 3：当前会话 / 参与人物 / 本轮议题一眼可见（不靠翻历史猜） */}
+      {active && (
+        <Card className="mb-4 border-accent/25 bg-accent/[0.03] py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-accent">当前会话</p>
+              <h3 className="mt-0.5 break-words text-base font-bold text-ink">{active.title}</h3>
+              {(() => {
+                const firstUser = active.messages.find((m) => m.role === "user");
+                return firstUser ? (
+                  <p className="mt-1 line-clamp-2 break-words text-sm text-ink-dim">
+                    议题：{firstUser.content}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-sm text-ink-dim/70">还没有议题——在下面输入框说你的问题。</p>
+                );
+              })()}
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              {active.personaId === "roundtable" ? (
+                (active.participants ?? []).map((pid) => {
+                  const p = resolvePersona(pid);
+                  return p ? <Badge key={pid} tone="dim">{p.name}</Badge> : null;
+                })
+              ) : (
+                <Badge tone="dim">{resolvePersona(active.personaId)?.name ?? active.personaId}</Badge>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
         {/* 会话列表：桌面=左栏常驻；手机=可折叠横条（默认收起，对话区占首屏，M6-4） */}
         <Card className={cn("h-fit lg:sticky lg:top-8", !sessionsOpen && "hidden lg:block")}>
@@ -594,13 +705,18 @@ export default function CouncilPage() {
           ) : (
             <div className="space-y-1">
               {sessions.map((s) => {
-                const p = resolvePersona(s.personaId);
                 /* 会话行补键盘语义：div+onClick 时代键盘/读屏用户打不开历史会话。
                  * 行内含删除按钮，故不能换成真 button，用 role+tabIndex+Enter/Space。 */
                 const openSession = () => {
                   // 点会话必须同时退出选择页：newChat 会把 picking 置 true，
                   // 只设 activeId 的话界面仍停在会话选择页（点旧会话看起来"没反应"）
                   setPicking(false);
+                  /* 切换即作废在途单人流：整页只有一份 useChat（messages/pending 与
+                   * 会话无关），不掐的话旧流的 delta 与完成时的整表替换会串到这张会话上。
+                   * 视图作废 ≠ 丢回答：若响应恰在 abort 生效前已完整到达，use-chat 的
+                   * send 会照常执行 onDone 把完整回答落回发起它的会话（use-chat.ts:87-93
+                   * 刻意保留的语义，切回来能看到）——别把它当死代码移除。 */
+                  if (s.id !== activeId) cancel();
                   setActiveId(s.id);
                   setSessionsOpen(false); // 手机折叠条：选完即收，消息区回首屏
                 };
@@ -659,7 +775,7 @@ export default function CouncilPage() {
                   className="group rounded-2xl border border-accent/25 bg-accent/[0.04] p-5 text-left transition hover:border-accent/45 cursor-pointer sm:col-span-2 lg:col-span-3"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="flex size-11 items-center justify-center rounded-xl bg-[#1d1d1f]">
+                    <div className="flex size-11 items-center justify-center rounded-xl bg-ink">
                       <Users className="size-5 text-white" />
                     </div>
                     <div>
@@ -739,7 +855,7 @@ export default function CouncilPage() {
               <Card className="mb-4 flex items-center gap-3">
                 {isRoundtable ? (
                   <>
-                    <div className="flex size-10 items-center justify-center rounded-xl bg-[#1d1d1f]">
+                    <div className="flex size-10 items-center justify-center rounded-xl bg-ink">
                       <Users className="size-5 text-white" />
                     </div>
                     <div>
@@ -754,41 +870,52 @@ export default function CouncilPage() {
                     <PersonaAvatar id={persona?.id ?? ""} name={persona?.name ?? "?"} className="size-10 text-sm" />
                     <div>
                       <p className="font-bold text-ink">{persona?.name}</p>
+                      {persona && (
+                        <button type="button" onClick={() => startWith(persona.id)} className="mt-1 text-xs font-medium text-accent hover:underline">
+                          与 {persona.name} 新开对话
+                        </button>
+                      )}
                       <p className="text-xs text-ink-dim">{persona?.tag} · {persona?.bio}</p>
                     </div>
                   </>
                 )}
               </Card>
 
-              <div className="space-y-4">
+              <div className="space-y-5">
+                {!isRoundtable && messages.length === 0 && (
+                  <p className="py-6 text-center text-sm text-ink-dim">直接向 {persona?.name} 提问。涉及最新消息时会自动查询公开网页。</p>
+                )}
                 {messages.map((m) => (
                   <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                     {m.role === "user" ? (
-                      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-4 py-2.5 text-sm text-white">
+                      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-ink px-4 py-2.5 text-sm text-white">
                         {m.content}
                       </div>
                     ) : (
                       <Card
                         className={cn(
-                          "max-w-[92%] rounded-2xl rounded-bl-md py-4",
+                          "w-full max-w-[72ch] rounded-xl border-border/70 px-4 py-3 shadow-none sm:px-5",
                           m.content.startsWith("## 圆桌纪要") && "border-accent/25 bg-accent/[0.04]"
                         )}
                       >
-                        <Markdown text={m.content} />
+                        <Markdown text={m.content} className="prose-reading council-prose" />
                       </Card>
                     )}
                   </div>
                 ))}
+                {!isRoundtable && streaming && (
+                  <ChatActivity activity={activity} waitingLabel={"正在等待 " + (persona?.name ?? "伙伴") + " 回复"} />
+                )}
                 {pending && !isRoundtable && (
-                  <Card aria-live="polite" className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
-                    <Markdown text={pending} />
+                  <Card className="w-full max-w-[72ch] rounded-xl border-border/70 px-4 py-3 shadow-none sm:px-5">
+                    <Markdown text={pending} className="prose-reading council-prose" />
                     <span className="stream-cursor" />
                   </Card>
                 )}
-
-                {/* 圆桌并行发言（流式中；只在本会话显示，切走不串台） */}
+                {/* 圆桌并行发言（流式中；只在本会话显示，切走不串台。
+                 * 不挂 aria-live：席位正文逐 token 更新，播报交给下面的状态横幅） */}
                 {isRoundtable && rtBusy && rtSessionId === activeId && (
-                  <div className="grid gap-3 sm:grid-cols-2" aria-live="polite">
+                  <div className="grid gap-3 sm:grid-cols-2">
                     {(active?.participants ?? []).map((pid) => {
                       const p = resolvePersona(pid);
                       if (!p) return null;
@@ -798,12 +925,14 @@ export default function CouncilPage() {
                         <Card key={pid} className="py-3.5">
                           <p className="mb-1.5 text-xs font-bold text-accent">{p.name}</p>
                           {text ? (
-                            <div className="text-sm text-ink-dim">
-                              <Markdown text={text} />
+                            <div className="text-ink-dim">
+                              <Markdown text={text} className="prose-reading council-prose" />
                               <span className="stream-cursor" />
                             </div>
                           ) : st === "failed" ? (
-                            <p className="text-xs text-bad">发言失败（本轮结束后可单独重试）</p>
+                            <p className="flex items-center gap-1.5 text-xs font-medium text-bad">
+                              <X className="size-3.5 shrink-0" aria-hidden /> 发言失败（本轮结束后可单独重试）
+                            </p>
                           ) : st === "done" ? (
                             <p className="text-xs text-ink-dim/60">已完成，发言见下方记录</p>
                           ) : (
@@ -815,7 +944,7 @@ export default function CouncilPage() {
                     {rtHost && (
                       <Card className="border-accent/25 bg-accent/[0.04] py-3.5 sm:col-span-2">
                         <p className="mb-1.5 text-xs font-bold text-accent">主持人纪要（生成中）</p>
-                        <Markdown text={rtHost} />
+                        <Markdown text={rtHost} className="prose-reading council-prose" />
                         <span className="stream-cursor" />
                       </Card>
                     )}
@@ -824,13 +953,21 @@ export default function CouncilPage() {
                 <div ref={bottomRef} />
               </div>
 
-              <div className="above-mobile-nav sticky mt-4">
+              <div className="above-mobile-nav sticky mt-4 bg-bg py-2">
                 {isRoundtable && rtBusy && rtSessionId === activeId && (
-                  <div className="mb-2 flex items-center justify-between rounded-xl border border-accent/25 bg-accent/[.05] px-3 py-2 text-xs text-accent">
+                  <div
+                    aria-live="polite"
+                    className="mb-2 flex items-center justify-between rounded-xl border border-accent/25 bg-accent/[.05] px-3 py-2 text-xs text-accent"
+                  >
                     <span>
                       {rtPhase === "host"
                         ? "主持人正在综合各席发言…"
-                        : `独立发言进行中 · ${Object.values(rtSeatStatus).filter((s) => s === "done").length}/${Object.keys(rtSeatStatus).length || (active?.participants ?? []).length} 席完成`}
+                        : rtPhase === "searching"
+                          /* 联网检索最长 27 秒（web-search.ts AbortSignal.timeout），此前这段
+                           * 时间被误标成「独立发言进行中 · 0/N 席完成」——用户看到在发言却
+                           * 长时间 0 席动弹。现在如实说明当前在做什么。 */
+                          ? "正在联网查找资料…（拿到资料后各席才开始发言）"
+                          : `独立发言进行中 · ${Object.values(rtSeatStatus).filter((s) => s === "done").length}/${Object.keys(rtSeatStatus).length || (active?.participants ?? []).length} 席完成`}
                     </span>
                     <button onClick={cancelRoundtable} className="cursor-pointer font-semibold hover:opacity-75">
                       停止
@@ -839,7 +976,15 @@ export default function CouncilPage() {
                 )}
                 {isRoundtable && !rtBusy && rtRetry && rtRetry.sessionId === activeId && (
                   <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-warn/25 bg-warn/[.06] px-3 py-2 text-xs text-ink-dim">
-                    <span>{rtRetry.note}，已完成的发言都保留着。</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <X className="size-3.5 shrink-0 text-warn" aria-hidden />
+                      <span className="min-w-0">
+                        {rtRetry.seats.length > 0
+                          ? `${rtRetry.seats.map((s) => s.name).join("、")} 发言失败；${Object.keys(rtRetry.goodTakes).length} 席发言已保留`
+                          : "主持人纪要生成失败；各席发言已保留"}
+                        （{rtRetry.note}）
+                      </span>
+                    </span>
                     <span className="flex shrink-0 items-center gap-3">
                       <button
                         onClick={() => void roundtableSend("", rtRetry)}
@@ -853,10 +998,12 @@ export default function CouncilPage() {
                     </span>
                   </div>
                 )}
-                {error && !isRoundtable && (
-                  <p className="mb-2 rounded-lg border border-bad/25 bg-bad/[0.05] px-3 py-2 text-xs leading-relaxed text-bad">
-                    {error}
-                  </p>
+                {!isRoundtable && error && <p role="alert" className="mb-2 text-xs text-bad">{error}</p>}
+                {!isRoundtable && !streaming && persona && unanswered?.role === "user" && (
+                  <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-ink-dim">
+                    <span>上一条问题还没收到回复。</span>
+                    <Button size="sm" variant="outline" onClick={() => sendSingle(unanswered.content, true)}>继续回答</Button>
+                  </div>
                 )}
                 <div className="flex gap-2">
                   <Input
@@ -888,9 +1035,6 @@ export default function CouncilPage() {
                     发送
                   </Button>
                 </div>
-                <p className="mt-2 text-center text-[11px] text-ink-dim/70">
-                  他们给判断，不是标准答案。最后拍板的还是你。
-                </p>
               </div>
             </>
           )}

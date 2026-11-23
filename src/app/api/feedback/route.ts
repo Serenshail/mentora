@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { dbFeedbackSave } from "@/lib/server/db";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
+import { readJsonBody } from "@/lib/server/body-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -16,9 +17,19 @@ export async function POST(req: NextRequest) {
   if (!(await rateLimitPersistent(`feedback:${clientIp(req)}`, { capacity: 5, refillPerSec: 2 / 60 }))) {
     return Response.json({ error: "反馈太频繁，请稍后再试" }, { status: 429 });
   }
-  const body = await req.json().catch(() => null);
+  /* 体积闸（与 auth 全系、linkcheck 同一纪律）：本端点未登录即可调（限流 5 突发/2 每分回填），
+   * req.json() 会把整个请求体缓冲并解析后才截断 content/contact——自托管（Caddy 默认不限
+   * body）下限流额度内的 GB 级 JSON 就足以让 JSON.parse 的内存尖峰 OOM 杀掉单进程 Node
+   * （body-limit.ts 头注释的威胁模型）。512KB 声明闸 + 流式终闸，超标回 413。 */
+  const body = await readJsonBody(req);
+  if (body === null) {
+    return Response.json({ error: "反馈内容太大，请精简后重试" }, { status: 413 });
+  }
   const content = String(body?.content ?? "").trim();
-  const type = ["建议", "问题", "其他"].includes(body?.type) ? body.type : "其他";
+  /* body 来自 readJsonBody（Record<string, unknown>）：type 用逐值等值判定（与旧
+   * includes(body?.type) 的同一性语义一致，数组等非字符串值不会误中）。 */
+  const rawType: unknown = body?.type;
+  const type = rawType === "建议" || rawType === "问题" || rawType === "其他" ? rawType : "其他";
   /* contact 是唯一没截断的用户输入：超长会把 GitHub Issue body 顶爆（API 直接 400 → 用户收到 502） */
   const contact = String(body?.contact ?? "").trim().slice(0, 200);
   const page = String(body?.page ?? "").slice(0, 120);
@@ -65,6 +76,11 @@ export async function POST(req: NextRequest) {
         body: `${content}\n\n${meta}`,
         labels: ["user-feedback"],
       }),
+      /* 全站远端调用统一 5s 硬超时（db.ts REMOTE_FETCH_TIMEOUT_MS、admin/feedback-state
+       * 同值同注释）：GitHub API 网络黑洞时裸 fetch 会挂到 undici headersTimeout 默认 300s
+       * （Vercel maxDuration=30 有平台强杀兜底，腾讯云自托管长驻 Node 没有），期间占住
+       * 连接槽、用户侧长时间无响应；本端点是公开端点，故障期每个提交都挂满。 */
+      signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) {
       const t = await res.text().catch(() => "");
@@ -77,7 +93,14 @@ export async function POST(req: NextRequest) {
     /* 双写：D1 也存一份（冗余备份，失败不影响主流程） */
     await dbFeedbackSave({ number: issue.number, type, content, contact, page });
     return Response.json({ ok: true, url: issue.html_url, number: issue.number });
-  } catch {
+  } catch (e) {
+    /* TimeoutError 显式定性（与 admin/feedback-state 同口径）：运营/用户看到的是
+     * 「超时可重试」而不是笼统的「网络错误」。504 与 502 都不在客户端 fatal 判定
+     * （feedback-widget 只认 400），会照常进 retry 队列。 */
+    const isTimeout = (e as { name?: string }).name === "TimeoutError";
+    if (isTimeout) {
+      return Response.json({ error: "反馈提交超时，已转入稍后自动重试" }, { status: 504 });
+    }
     return Response.json({ error: "网络错误，反馈未送达" }, { status: 502 });
   }
 }

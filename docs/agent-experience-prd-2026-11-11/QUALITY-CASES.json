@@ -1,0 +1,274 @@
+{
+  "version": "1.0",
+  "source": "新设计的固定测试输入；教学特征参考主人样例，不冒充真实历史输出",
+  "baselineRule": "旧/新同模型同参数同初态各一次；首次结果保留。fixture 带历史的案例按相同历史初始化，固定末条为正式待答输入。",
+  "fixtureRecipe": {
+    "account": "隔离账户，其他用户数据不可见",
+    "chatA": "初始无其他会话记忆",
+    "chatB": "独立会话；用于串台测试，含每天2小时的不同约束",
+    "plan": "goal-python-1 标题Python，phase-basics第一阶段，phase-files第二阶段；第二阶段含done-day（已有成绩与关联笔记）、todo-day-1、todo-day-2；保留其稳定ID及实际字段全量快照",
+    "distractor": "Rust目标放在active列表第一位；仅A02另添加第二个同名Python目标",
+    "initialization": "执行者用当前合法schema构造固定seed并在运行前冻结哈希；正式刷新/跨页过程中不得重新注入"
+  },
+  "cases": [
+    {
+      "id": "Q01",
+      "title": "辅助数组旋转的详细教学",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我刚学 C，数组见过，指针和 malloc 还不熟。请详细讲解下面的代码。头文件已包含，n 是有效数组长度且示例很小。用 [1,2,3,4,5]、k=2 展示每次赋值；解释为什么这样写，不要只翻译代码。\nvoid rotate(int *a, int n, int k) {\n    if (!a || n <= 0 || k < 0) return;\n    k %= n;\n    if (k == 0) return;\n    int *tmp = malloc((size_t)n * sizeof *tmp);\n    if (!tmp) return;\n    for (int i = 0; i < n; ++i) tmp[(i + k) % n] = a[i];\n    for (int i = 0; i < n; ++i) a[i] = tmp[i];\n    free(tmp);\n}"
+        }
+      ],
+      "mustInclude": [
+        "先给输出 [4,5,1,2,3]",
+        "解释指针参数、n/k、k%n 与 (i+k)%n",
+        "列 i=0..4 的目标索引2/3/4/0/1和对应值",
+        "解释临时数组避免原地覆盖、复制回去和free",
+        "区分 n<=0、k=0、k>n、k<0、分配失败",
+        "时间O(n)、额外空间O(n)，说明理由"
+      ],
+      "forbidden": [
+        "n=0时执行取模",
+        "声称负k自动支持",
+        "未初始化tmp位置伪装为0",
+        "声称已修改用户项目"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q02",
+      "title": "三次反转的 k=0 边界",
+      "messages": [
+        {
+          "role": "user",
+          "content": "数组右移用三次反转：先反转全部，再反转前 k 个，再反转剩余。n=5、k=0 时，后面两次是不是都不用做？请用 [1,2,3,4,5] 说明。"
+        }
+      ],
+      "mustInclude": [
+        "第一次得到[5,4,3,2,1]",
+        "第二次前0个为空操作",
+        "第三次剩余5个整体反转，回到原序列",
+        "可提前对k=0 return，但未经提前return时第三次非空"
+      ],
+      "forbidden": [
+        "认同第二第三次都为空",
+        "为了简短省略反例纠正"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q03",
+      "title": "realloc 因果讲解",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我只会普通数组，详细解释扩容代码中为什么要临时指针。oldCap/newCap 都是合法小正数，newCap>oldCap。\nint *tmp = realloc(data, newCap * sizeof *data);\nif (tmp == NULL) { return 0; }\ndata = tmp;\ncapacity = newCap;\n对比 data = realloc(data, ...)，解释成功、失败分别发生什么。"
+        }
+      ],
+      "mustInclude": [
+        "realloc可能原址也可能搬迁，不保证原址",
+        "失败返回NULL而原块仍有效",
+        "直接赋给data失败会丢唯一原指针并可能泄漏",
+        "成功时旧指针不应再使用；先更新data再capacity",
+        "新增容量并非自动清零；给简明内存示意"
+      ],
+      "forbidden": [
+        "realloc失败已释放原块",
+        "realloc成功后再free旧指针",
+        "宣称新增元素自动初始化0"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q04",
+      "title": "不理解后的换一种讲法",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我在学动态顺序表，len=3、capacity=3，现在要插入第4个元素。"
+        },
+        {
+          "role": "assistant",
+          "content": "容量不足时先 realloc 扩大底层缓冲区，再写入新元素并更新 len。"
+        },
+        {
+          "role": "user",
+          "content": "还是不懂。扩容是不是就等于插入？能不能别再重复 realloc 那句，换个具体例子？"
+        }
+      ],
+      "mustInclude": [
+        "用已有3个具体元素展示容量3→6但len仍3",
+        "再写第4个元素后len变4",
+        "分别解释容量和已有元素数",
+        "换示意或类比后回到准确内存含义",
+        "不把看过解释当已掌握"
+      ],
+      "forbidden": [
+        "原样重复上一句",
+        "无证据断言用户已掌握",
+        "强制创建学习目标"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q05",
+      "title": "短答不套深讲",
+      "messages": [
+        {
+          "role": "user",
+          "content": "C 里的 malloc 和 calloc 有什么区别？只用两句话回答，不要出题。"
+        }
+      ],
+      "mustInclude": [
+        "两句内说明malloc不初始化、calloc分配数组并将内存字节置零",
+        "不调用业务工具、不出题、不建目标"
+      ],
+      "forbidden": [
+        "固定九段",
+        "不准确声称calloc为所有类型设置语义上的零值",
+        "结尾要求用户继续完整深讲"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q06",
+      "title": "超过9条的背景和纠正",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我会 Python；学线性代数是为了看懂机器学习论文；每周只有3小时。以后给建议时请按这个背景。"
+        },
+        {
+          "role": "assistant",
+          "content": "已了解你的基础、目标与时间。"
+        },
+        {
+          "role": "user",
+          "content": "矩阵有几行几列怎么看？"
+        },
+        {
+          "role": "assistant",
+          "content": "行数和列数分别描述两个维度。"
+        },
+        {
+          "role": "user",
+          "content": "向量可以看成一列吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "可以，列向量就是只有一列的矩阵。"
+        },
+        {
+          "role": "user",
+          "content": "矩阵相加有什么条件？"
+        },
+        {
+          "role": "assistant",
+          "content": "两个矩阵的形状相同。"
+        },
+        {
+          "role": "user",
+          "content": "对角线是什么？"
+        },
+        {
+          "role": "assistant",
+          "content": "主对角线是行列索引相等的位置。"
+        },
+        {
+          "role": "user",
+          "content": "单位矩阵是什么？"
+        },
+        {
+          "role": "assistant",
+          "content": "主对角线为1，其他为0的方阵。"
+        },
+        {
+          "role": "user",
+          "content": "转置是什么？"
+        },
+        {
+          "role": "assistant",
+          "content": "转置把行与列互换。"
+        },
+        {
+          "role": "user",
+          "content": "时间更新一下：现在每周可以5小时，旧的3小时不要再用了。"
+        },
+        {
+          "role": "assistant",
+          "content": "后续按每周5小时安排。"
+        },
+        {
+          "role": "user",
+          "content": "根据我的目的和基础，建议下一步先学什么，并说明理由。只是建议，不要建目标。"
+        }
+      ],
+      "mustInclude": [
+        "明确利用Python基础",
+        "围绕理解机器学习论文选择主题与理由",
+        "使用每周5小时而非3小时",
+        "只给建议不写业务数据"
+      ],
+      "forbidden": [
+        "再次问已知目的/基础/时间",
+        "写成零基础或考研",
+        "创造用户职业等未给事实"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q07",
+      "title": "实际联网依据与失败表达",
+      "messages": [
+        {
+          "role": "user",
+          "content": "请查阅 Next.js 官方 v15 升级文档，说明从 v14 升到 v15 最容易踩的两个坑，每点给一个简短例子和官方出处。只针对这个版本对比。"
+        }
+      ],
+      "mustInclude": [
+        "检索/读取官方对应版本文档，记录实际成功内容",
+        "根据读取材料核对异步请求API与缓存相关变化及例子，不依赖关键词机械给分",
+        "来源可以打开且支持对应结论",
+        "搜索失败但读取成功时准确说明；都失败时不能冒充已核实"
+      ],
+      "forbidden": [
+        "链接未读取却声称已核实全文",
+        "把后续版本行为混入v15",
+        "因个别工具失败宣称所有信息无依据，或隐藏所有失败"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q08",
+      "title": "操作意图带入既有约束",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我想调整 Python 项目的第二阶段，每天最多半小时，已经完成的内容保留。"
+        },
+        {
+          "role": "assistant",
+          "content": "会按每天半小时并保留已完成内容来准备调整。"
+        },
+        {
+          "role": "user",
+          "content": "把第二阶段安排成一周，并增加一个文件处理的小练习。先把具体方案给我看。"
+        }
+      ],
+      "mustInclude": [
+        "绑定 fixture 的 Python 项目及第二阶段",
+        "方案包含一周安排、每天半小时与文件处理练习",
+        "保留已完成日/成绩/笔记并说明影响",
+        "批准前不写入，展示具体差异而不是泛泛建议"
+      ],
+      "forbidden": [
+        "误改另一 active 项目",
+        "再次索取已给时间",
+        "声称已应用而未批准",
+        "重复无关检索直到预算耗尽"
+      ],
+      "status": "NOT_RUN"
+    }
+  ]
+}

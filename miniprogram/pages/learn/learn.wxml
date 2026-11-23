@@ -9,20 +9,44 @@
 
   <!-- 同层切换：目标 / 书架。两个都是"我在投入的东西" -->
   <view class="segmented">
-    <view class="segmented-item {{tab === 'goals' ? 'segmented-item-on' : ''}}" data-tab="goals" bindtap="setTab">
+    <view
+      class="segmented-item {{tab === 'goals' ? 'segmented-item-on' : ''}}"
+      data-tab="goals"
+      bindtap="setTab"
+      aria-role="button"
+      aria-label="{{tab === 'goals' ? '当前：目标' : '目标'}}"
+    >
       目标<text class="seg-count">{{goals.length}}</text>
     </view>
-    <view class="segmented-item {{tab === 'books' ? 'segmented-item-on' : ''}}" data-tab="books" bindtap="setTab">
+    <view
+      class="segmented-item {{tab === 'books' ? 'segmented-item-on' : ''}}"
+      data-tab="books"
+      bindtap="setTab"
+      aria-role="button"
+      aria-label="{{tab === 'books' ? '当前：书架' : '书架'}}"
+    >
       书架<text class="seg-count">{{books.length}}</text>
     </view>
   </view>
 
+  <!-- 会话探测失败（弱网/服务不可达）：明确告知并给重试，不停在 loading 白屏 -->
+  <view wx:if="{{loadError}}" class="card empty" style="margin-top: 24rpx">
+    <view class="empty-title">连接失败</view>
+    <view class="empty-sub">网络似乎不可用，暂时没能加载你的目标与书架。</view>
+    <button class="btn btn-ink btn-sm" style="margin: 32rpx auto 0; width: 60%" bindtap="retry">
+      重试
+    </button>
+  </view>
+
   <!-- ============ 目标 ============ -->
-  <block wx:if="{{tab === 'goals'}}">
+  <block wx:if="{{tab === 'goals' && !loadError}}">
     <view wx:if="{{goals.length === 0 && !loading}}" class="card empty" style="margin-top: 24rpx">
       <view class="empty-title">还没有学习目标</view>
-      <view class="empty-sub">苏格拉底引导在网页版完成，计划会同步到手机；也可以先用示例目标走一遍闭环。</view>
-      <button class="btn btn-outline btn-sm" style="margin: 32rpx auto 0; width: 60%" bindtap="seedSample">
+      <view class="empty-sub">和教练聊几句，把方向和目标定下来，计划直接在这里生成。</view>
+      <button class="btn btn-ink btn-sm" style="margin: 32rpx auto 0; width: 60%" bindtap="startCoach">
+        开始一个新目标
+      </button>
+      <button class="btn btn-outline btn-sm" style="margin: 16rpx auto 0; width: 60%" bindtap="seedSample">
         用示例目标试一试
       </button>
     </view>
@@ -34,6 +58,8 @@
         class="card card-tap goal {{item.active ? 'goal-on' : ''}}"
         data-id="{{item.id}}"
         bindtap="openGoal"
+        aria-role="button"
+        aria-label="打开目标 {{item.topic}}，{{item.statusLabel}}，已完成 {{item.done}}/{{item.total}} 天"
       >
         <view class="between">
           <view class="badge badge-{{item.tone}}">
@@ -49,10 +75,14 @@
         </view>
       </view>
     </view>
+
+    <button class="btn btn-outline btn-block" style="margin-top: 24rpx" bindtap="startCoach">
+      + 新的学习目标
+    </button>
   </block>
 
   <!-- ============ 书架 ============ -->
-  <block wx:if="{{tab === 'books'}}">
+  <block wx:if="{{tab === 'books' && !loadError}}">
     <view wx:if="{{books.length === 0 && !loading}}" class="card empty" style="margin-top: 24rpx">
       <view class="empty-title">书架空着</view>
       <view class="empty-sub">说个书名，读书伙伴会先解剖这本书的论证结构，再陪你一章一章读。</view>
@@ -62,7 +92,15 @@
     </view>
 
     <view wx:if="{{books.length}}" class="sec-sm">
-      <view wx:for="{{books}}" wx:key="id" class="card card-tap" data-id="{{item.id}}" bindtap="openBook">
+      <view
+        wx:for="{{books}}"
+        wx:key="id"
+        class="card card-tap"
+        data-id="{{item.id}}"
+        bindtap="openBook"
+        aria-role="button"
+        aria-label="打开书 《{{item.title}}》，{{item.statusLabel}}，{{item.chapters}}"
+      >
         <view class="between">
           <text class="h3 ellipsis" style="flex: 1; min-width: 0">《{{item.title}}》</text>
           <view class="badge badge-{{item.status === 'done' ? 'ok' : 'accent'}}">{{item.statusLabel}}</view>

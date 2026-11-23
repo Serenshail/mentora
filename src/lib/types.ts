@@ -205,14 +205,22 @@ export interface SocraticTurn {
 
 /** 阶段重排历史（V26.2-H5，PRD §6.4 版本留痕）：每次重排前快照该阶段旧目录 */
 export interface PlanHistoryEntry {
+  id?: string; // 版本 id（恢复定位用；旧数据缺省时按顺序推断）
   at: string; // ISO
   reason: string; // 用户的不满点/重排原因
+  /** 快照粒度：phase=单阶段目录；plan=整计划结构（增删阶段/排序等无法用单阶段表达的变更） */
+  kind?: "phase" | "plan";
   phaseId: string;
   phaseTitle: string;
+  /** 阶段元信息（R3：恢复必须能还原标题/目标/预估天数） */
+  phaseOutcome?: string;
+  phaseEstDays?: number;
   boundary: string;
   dayIds: string[];
   /** 旧目录的天的深拷贝（含当时的状态与内容；重排不删除任何旧数据） */
   days: DayPlan[];
+  /** kind=plan 时：整计划结构快照（阶段列表 + 天），用于恢复增删/排序 */
+  planSnapshot?: Plan;
 }
 
 export interface Goal {
@@ -249,6 +257,8 @@ export type KnowledgeSource = "learn" | "read" | "council" | "manual" | "obsidia
 
 export interface KnowledgeItem {
   id: string;
+  /** User-created learning pages travel with the existing note backup/sync collection. */
+  workspace?: import("./workspace").PersonalWorkspace;
   title: string; // 笔记标题（wikilink 目标）
   body: string; // Markdown 正文，可含 [[标题]] 双链
   domain: string;
@@ -389,6 +399,7 @@ export interface BookTransfer {
     answer: string;
     verdict: "independent_success" | "assisted_success" | "partial_success" | "incorrect" | "incomplete" | "ungradable";
     evidence: string;
+    feedback?: string;
     at: string;
   };
   at: string;
@@ -478,6 +489,15 @@ export interface BookLearning {
 /** 整本书的阅读状态（PRD 4.5）：未开始/阅读中/已读完/验收中/已掌握。已读完 ≠ 已掌握。 */
 export type BookReadStatus = "unread" | "reading" | "finished" | "assessing" | "mastered";
 
+/** 阅读路线历史条目（第二批 C R04）：重排路线前快照整份章节列表，可恢复 */
+export interface BookRouteHistory {
+  id?: string; // 恢复定位用
+  at: string; // ISO
+  reason: string;
+  routeType?: Book["routeType"];
+  chapters: BookChapter[]; // 深拷贝（含当时的状态与掌握标记）
+}
+
 export interface BookInsight {
   id: string;
   text: string;
@@ -497,7 +517,16 @@ export interface ChatMsg {
 export interface MsgMeta {
   plan?: { id: string; text: string; status: "pending" | "in_progress" | "completed" | "skipped" }[];
   tools?: { id: string; name: string; status: string; summary?: string; durationMs?: number }[];
-  citations?: { title: string; url: string }[];
+  citations?: { title: string; url: string; /** snippet=只有搜索摘要；full=已读取正文（PRD §5.2 不得冒充） */ kind?: "snippet" | "full" }[];
+  /* v3（会话级运行态，CX-01/UI-02）：过程摘要与终态一并落库，
+   * 刷新后「过程摘要行 → 可展开步骤 → 正文 → 来源」仍能完整重现。 */
+  status?: "completed" | "partial" | "failed" | "cancelled" | "interrupted";
+  headline?: string;
+  durationMs?: number;
+  /** 输出完整性：suspect 表示检测到未闭合围栏/强调、末尾悬空等残片。
+   *  内容按原样保留、不修补；UI 与证据据此如实标注（不伪造完整）。 */
+  integrity?: "ok" | "suspect";
+  integrityNote?: string;
 }
 
 /** 主对话框会话（v23.2 多会话）：标题=首问截断；本地记忆，不参与云同步 */
@@ -538,6 +567,8 @@ export interface Book {
   transfers?: BookTransfer[];
   /** 节点沉淀（PRD 4.6） */
   deposits?: BookDeposit[];
+  /** 阅读路线历史（第二批 C R04，PRD AG-04 对齐）：重排前快照，只增不删，最多 5 条 */
+  routeHistory?: BookRouteHistory[];
   /** 学习状态（PRD 5.3） */
   learning?: BookLearning;
   /** AI 推荐的教学策略（PRD 4.4 调度）：进入节点时更新一次；带 chapterId 防跨节点串显 */
@@ -564,6 +595,14 @@ export interface CouncilSession {
   title: string;
   messages: ChatMsg[];
   createdAt: string;
+  /** 部分失败挂起重试（批次 D C03）：失败席位/主持人纪要可跨轮重试；全部完成时清空 */
+  pendingRetry?: {
+    question: string;
+    seatQuestion?: string;
+    goodTakes: Record<string, string>;
+    failedSeatIds: string[];
+    hostFailed: boolean;
+  } | null;
 }
 
 /** 用户自定义智能体（输入名字，AI 蒸馏其思想而成） */

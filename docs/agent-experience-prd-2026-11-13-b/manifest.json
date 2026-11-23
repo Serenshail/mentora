@@ -1,0 +1,84 @@
+{
+  "runId": "run-2026-11-13-b",
+  "startedAt": "2026-11-13T12:00:00+08:00",
+  "timezone": "Asia/Shanghai",
+  "supersedes": "run-2026-11-13-a（该目录保持原样）",
+  "purpose": "回应 REVIEW-TENCENT-2026-11-13：纠正空数据误报 / 同步路径行为修复 / 跨设备冲突 / 隔离备份演练",
+  "head": "facf520def63bb0419197dc94b5c4b5877c82212",
+  "dirtyFilesCount": 428,
+  "dirtyFilesManifestSha256": "15ba2845a9dd4f1a6ad13e68032a29b6e7193688825604a52998503721465f5e",
+  "sourceSha256": {
+    "src/lib/sync-decision.ts": "05726bbc6cfe9e2fe3a30b58f283f7da1f850b16750fd0653625e3a65dab6218",
+    "src/lib/auth-client.ts": "cbf794f1853d09b8907c25cc3a5ed33f577e2a53f0f1e1280e5149742ccc065d",
+    "src/lib/store.ts": "d8255befa817d621d0f7c46a92f7962be3f5109e80bf8a68180f9e6746eb7d07",
+    "src/lib/server/db.ts": "2f58fe7512e67c3d089cbb1883fd712dda5cc61bb33f05cdc734b31f815edb6a",
+    "src/app/api/sync/route.ts": "0eb82e754bc6cf22eda2966ab1efddf4488e4ecffe55228aa81b04b257852ca2",
+    "scripts/verify-act-chain-mock.mjs": "f3112a426ee92814b22248a22d6012184f58e1b9170683507d3bf2b3ad3c5c0e",
+    "scripts/verify-cross-device-conflict.mjs": "7d8cd276995470b0718368e10652efedcddcf48dc2ff99785f0ad338a22fdb3b"
+  },
+  "testEnv": {
+    "pg": {
+      "port": 5433,
+      "db": "mentora_test"
+    },
+    "redis": {
+      "port": 6380
+    },
+    "app": {
+      "port": 3001,
+      "dbChannel": "huawei"
+    }
+  },
+  "mainSite": {
+    "port": 3000,
+    "dbChannel": "d1",
+    "changed": false
+  },
+  "defectsFixed": [
+    "空数据比较误报：fixture 强制完整性检查 + 快照存在性标记 + 四条断言改必须非空",
+    "同步决策抽成纯函数 decideSyncAction（18 条行为测试），三条路径全部收敛",
+    "useAutoPush 只在 bootSync 返回 ready 时放行（原无条件 markReady）",
+    "useFlushOnHide 加同一闸门（原完全绕过）",
+    "syncAfterLogin 不再在检查 error 前用引用变化决定推送",
+    "用业务指纹替代 store 引用判断「拉取期间被编辑」",
+    "跨设备冲突：rdsPut 原完全忽略 sha；改用 updatedAt 版本 + 服务端原子比对 + 409"
+  ],
+  "results": {
+    "actChainMock": {
+      "pass": 15,
+      "fail": 0,
+      "blocked": 1,
+      "mockRequests": 11,
+      "realModelRequests": 0
+    },
+    "crossDeviceConflict": {
+      "pass": 11,
+      "fail": 0,
+      "realModelRequests": 0
+    },
+    "backupDrill": {
+      "pgRows": 6,
+      "hashMatch": true,
+      "pgRestartReadable": true,
+      "redisTtlSurvived": true,
+      "redisAtomic": true,
+      "mainSiteUnaffected": true
+    }
+  },
+  "checks": {
+    "vitest": "257 files / 1635 tests passed, 0 failed",
+    "tsc": "EXIT=0",
+    "eslint": "0 errors / 36 warnings",
+    "next build": "EXIT=0"
+  },
+  "notDone": [
+    "A03/A04 真实模型链路未跑（本轮全 mock）",
+    "A01-E4 未跑",
+    "应用层加密的迁移解密未验证（备份演练只验通道层密文搬运）",
+    "正式迁移未执行，主站仍 d1",
+    "停写窗口实际耗时未知",
+    "服务器到期时间未知（需控制台）",
+    "单机承载正式负载未压测",
+    "切换后新写入的反向同步/回退未演练"
+  ]
+}

@@ -1,0 +1,840 @@
+{
+  "version": "1.0",
+  "status": "NOT_RUN",
+  "cases": [
+    {
+      "id": "Q01",
+      "title": "辅助数组旋转的详细教学",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我刚学 C，数组见过，指针和 malloc 还不熟。请详细讲解下面的代码。头文件已包含，n 是有效数组长度且示例很小。用 [1,2,3,4,5]、k=2 展示每次赋值；解释为什么这样写，不要只翻译代码。\nvoid rotate(int *a, int n, int k) {\n    if (!a || n <= 0 || k < 0) return;\n    k %= n;\n    if (k == 0) return;\n    int *tmp = malloc((size_t)n * sizeof *tmp);\n    if (!tmp) return;\n    for (int i = 0; i < n; ++i) tmp[(i + k) % n] = a[i];\n    for (int i = 0; i < n; ++i) a[i] = tmp[i];\n    free(tmp);\n}"
+        }
+      ],
+      "mustInclude": [
+        "先给输出 [4,5,1,2,3]",
+        "解释指针参数、n/k、k%n 与 (i+k)%n",
+        "列 i=0..4 的目标索引2/3/4/0/1和对应值",
+        "解释临时数组避免原地覆盖、复制回去和free",
+        "区分 n<=0、k=0、k>n、k<0、分配失败",
+        "时间O(n)、额外空间O(n)，说明理由"
+      ],
+      "forbidden": [
+        "n=0时执行取模",
+        "声称负k自动支持",
+        "未初始化tmp位置伪装为0",
+        "声称已修改用户项目"
+      ],
+      "status": "NOT_RUN",
+      "entry": "首页"
+    },
+    {
+      "id": "Q02",
+      "title": "三次反转的 k=0 边界",
+      "messages": [
+        {
+          "role": "user",
+          "content": "数组右移用三次反转：先反转全部，再反转前 k 个，再反转剩余。n=5、k=0 时，后面两次是不是都不用做？请用 [1,2,3,4,5] 说明。"
+        }
+      ],
+      "mustInclude": [
+        "第一次得到[5,4,3,2,1]",
+        "第二次前0个为空操作",
+        "第三次剩余5个整体反转，回到原序列",
+        "可提前对k=0 return，但未经提前return时第三次非空"
+      ],
+      "forbidden": [
+        "认同第二第三次都为空",
+        "为了简短省略反例纠正"
+      ],
+      "status": "NOT_RUN",
+      "entry": "首页"
+    },
+    {
+      "id": "Q03",
+      "title": "realloc 因果讲解",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我只会普通数组，详细解释扩容代码中为什么要临时指针。oldCap/newCap 都是合法小正数，newCap>oldCap。\nint *tmp = realloc(data, newCap * sizeof *data);\nif (tmp == NULL) { return 0; }\ndata = tmp;\ncapacity = newCap;\n对比 data = realloc(data, ...)，解释成功、失败分别发生什么。"
+        }
+      ],
+      "mustInclude": [
+        "realloc可能原址也可能搬迁，不保证原址",
+        "失败返回NULL而原块仍有效",
+        "直接赋给data失败会丢唯一原指针并可能泄漏",
+        "成功时旧指针不应再使用；先更新data再capacity",
+        "新增容量并非自动清零；给简明内存示意"
+      ],
+      "forbidden": [
+        "realloc失败已释放原块",
+        "realloc成功后再free旧指针",
+        "宣称新增元素自动初始化0"
+      ],
+      "status": "NOT_RUN",
+      "entry": "首页"
+    },
+    {
+      "id": "Q04",
+      "title": "不理解后的换一种讲法",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我在学动态顺序表，len=3、capacity=3，现在要插入第4个元素。"
+        },
+        {
+          "role": "assistant",
+          "content": "容量不足时先 realloc 扩大底层缓冲区，再写入新元素并更新 len。"
+        },
+        {
+          "role": "user",
+          "content": "还是不懂。扩容是不是就等于插入？能不能别再重复 realloc 那句，换个具体例子？"
+        }
+      ],
+      "mustInclude": [
+        "用已有3个具体元素展示容量3→6但len仍3",
+        "再写第4个元素后len变4",
+        "分别解释容量和已有元素数",
+        "换示意或类比后回到准确内存含义",
+        "不把看过解释当已掌握"
+      ],
+      "forbidden": [
+        "原样重复上一句",
+        "无证据断言用户已掌握",
+        "强制创建学习目标"
+      ],
+      "status": "NOT_RUN",
+      "entry": "首页"
+    },
+    {
+      "id": "Q05",
+      "title": "短答不套深讲",
+      "messages": [
+        {
+          "role": "user",
+          "content": "C 里的 malloc 和 calloc 有什么区别？只用两句话回答，不要出题。"
+        }
+      ],
+      "mustInclude": [
+        "两句内说明malloc不初始化、calloc分配数组并将内存字节置零",
+        "不调用业务工具、不出题、不建目标"
+      ],
+      "forbidden": [
+        "固定九段",
+        "不准确声称calloc为所有类型设置语义上的零值",
+        "结尾要求用户继续完整深讲"
+      ],
+      "status": "NOT_RUN",
+      "entry": "首页"
+    },
+    {
+      "id": "Q06",
+      "title": "超过9条的背景和纠正",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我会 Python；学线性代数是为了看懂机器学习论文；每周只有3小时。以后给建议时请按这个背景。"
+        },
+        {
+          "role": "assistant",
+          "content": "已了解你的基础、目标与时间。"
+        },
+        {
+          "role": "user",
+          "content": "矩阵有几行几列怎么看？"
+        },
+        {
+          "role": "assistant",
+          "content": "行数和列数分别描述两个维度。"
+        },
+        {
+          "role": "user",
+          "content": "向量可以看成一列吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "可以，列向量就是只有一列的矩阵。"
+        },
+        {
+          "role": "user",
+          "content": "矩阵相加有什么条件？"
+        },
+        {
+          "role": "assistant",
+          "content": "两个矩阵的形状相同。"
+        },
+        {
+          "role": "user",
+          "content": "对角线是什么？"
+        },
+        {
+          "role": "assistant",
+          "content": "主对角线是行列索引相等的位置。"
+        },
+        {
+          "role": "user",
+          "content": "单位矩阵是什么？"
+        },
+        {
+          "role": "assistant",
+          "content": "主对角线为1，其他为0的方阵。"
+        },
+        {
+          "role": "user",
+          "content": "转置是什么？"
+        },
+        {
+          "role": "assistant",
+          "content": "转置把行与列互换。"
+        },
+        {
+          "role": "user",
+          "content": "时间更新一下：现在每周可以5小时，旧的3小时不要再用了。"
+        },
+        {
+          "role": "assistant",
+          "content": "后续按每周5小时安排。"
+        },
+        {
+          "role": "user",
+          "content": "根据我的目的和基础，建议下一步先学什么，并说明理由。只是建议，不要建目标。"
+        }
+      ],
+      "mustInclude": [
+        "明确利用Python基础",
+        "围绕理解机器学习论文选择主题与理由",
+        "使用每周5小时而非3小时",
+        "只给建议不写业务数据"
+      ],
+      "forbidden": [
+        "再次问已知目的/基础/时间",
+        "写成零基础或考研",
+        "创造用户职业等未给事实"
+      ],
+      "status": "NOT_RUN",
+      "entry": "首页"
+    },
+    {
+      "id": "Q07",
+      "title": "实际联网依据与失败表达",
+      "messages": [
+        {
+          "role": "user",
+          "content": "请查阅 Next.js 官方 v15 升级文档，说明从 v14 升到 v15 最容易踩的两个坑，每点给一个简短例子和官方出处。只针对这个版本对比。"
+        }
+      ],
+      "mustInclude": [
+        "检索/读取官方对应版本文档，记录实际成功内容",
+        "根据读取材料核对异步请求API与缓存相关变化及例子，不依赖关键词机械给分",
+        "来源可以打开且支持对应结论",
+        "搜索失败但读取成功时准确说明；都失败时不能冒充已核实"
+      ],
+      "forbidden": [
+        "链接未读取却声称已核实全文",
+        "把后续版本行为混入v15",
+        "因个别工具失败宣称所有信息无依据，或隐藏所有失败"
+      ],
+      "status": "NOT_RUN",
+      "entry": "首页"
+    },
+    {
+      "id": "Q08",
+      "title": "操作意图带入既有约束",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我想调整 Python 项目的第二阶段，每天最多半小时，已经完成的内容保留。"
+        },
+        {
+          "role": "assistant",
+          "content": "会按每天半小时并保留已完成内容来准备调整。"
+        },
+        {
+          "role": "user",
+          "content": "把第二阶段安排成一周，并增加一个文件处理的小练习。先把具体方案给我看。"
+        }
+      ],
+      "mustInclude": [
+        "绑定 fixture 的 Python 项目及第二阶段",
+        "方案包含一周安排、每天半小时与文件处理练习",
+        "保留已完成日/成绩/笔记并说明影响",
+        "批准前不写入，展示具体差异而不是泛泛建议"
+      ],
+      "forbidden": [
+        "误改另一 active 项目",
+        "再次索取已给时间",
+        "声称已应用而未批准",
+        "重复无关检索直到预算耗尽"
+      ],
+      "status": "NOT_RUN",
+      "entry": "首页"
+    },
+    {
+      "id": "Q09",
+      "entry": "首页",
+      "title": "calloc 与 malloc",
+      "messages": [
+        {
+          "role": "user",
+          "content": "calloc 和 malloc 有什么区别？我是初学者，请用同样三个整数的内存例子讲清。"
+        }
+      ],
+      "mustInclude": [
+        "calloc 清零、malloc 未初始化",
+        "空指针与释放",
+        "不把 calloc 当成永不失败"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q10",
+      "entry": "学习教练",
+      "title": "扩容不是插入",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我知道扩容是申请更大空间，但还是不懂为什么扩容完插入中间还要移动。请用容量 4、长度 3、数组 [10,20,30] 在下标 1 插入 99 解释。"
+        }
+      ],
+      "mustInclude": [
+        "区分容量、长度、元素位置",
+        "移动顺序由后向前",
+        "结果 [10,99,20,30]"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q11",
+      "entry": "学习教练",
+      "title": "指针两层关系",
+      "messages": [
+        {
+          "role": "user",
+          "content": "struct List { int *data; int size; int capacity; }; 我分不清 List *L、L->data 和 &L->data，它们分别是什么？用内存示意解释，代码必须能对上图。"
+        }
+      ],
+      "mustInclude": [
+        "List 指针、int 指针、int 双重指针",
+        "区分结构体地址和动态数组地址",
+        "不捏造固定内存地址为真实运行值"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q12",
+      "entry": "首页",
+      "title": "英文与公式不丢失",
+      "messages": [
+        {
+          "role": "user",
+          "content": "请保留英文标题并解释这段内容：\nMemory Layout\n数组地址公式 address(a[i]) = base + i * sizeof(int)\nTime Complexity"
+        }
+      ],
+      "mustInclude": [
+        "英文标题和公式原样可见",
+        "解释元素宽度与索引",
+        "显示与公开正文无误删"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q13",
+      "entry": "首页",
+      "title": "不适用的检索不强加",
+      "messages": [
+        {
+          "role": "user",
+          "content": "只用下面这句话回答：我每周可学习 3 小时。问：我每周可学多少小时？不要联网。"
+        }
+      ],
+      "mustInclude": [
+        "回答3小时",
+        "无联网、写入或额外澄清"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q14",
+      "entry": "首页",
+      "title": "最新约束覆盖旧约束",
+      "messages": [
+        {
+          "role": "user",
+          "content": "以前我每天有两小时。"
+        },
+        {
+          "role": "assistant",
+          "content": "记下了每天两小时。"
+        },
+        {
+          "role": "user",
+          "content": "更正：现在每天只有30分钟，周末也一样。"
+        },
+        {
+          "role": "user",
+          "content": "按我现在的时间继续安排，不要用以前的两小时。"
+        }
+      ],
+      "mustInclude": [
+        "采用每天30分钟",
+        "不再问已知时间",
+        "不自动写入计划"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q15",
+      "entry": "首页",
+      "title": "预算内找回远处代码",
+      "messages": [
+        {
+          "role": "user",
+          "content": "请保留这段代码：void rotate(int*a,int n,int k){if(!a||n<=0||k<0)return;k%=n;/* ... */}"
+        },
+        {
+          "role": "user",
+          "content": "背景讨论1：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "assistant",
+          "content": "背景讨论2：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "user",
+          "content": "背景讨论3：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "assistant",
+          "content": "背景讨论4：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "user",
+          "content": "背景讨论5：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "assistant",
+          "content": "背景讨论6：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "user",
+          "content": "背景讨论7：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "assistant",
+          "content": "背景讨论8：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "user",
+          "content": "背景讨论9：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "assistant",
+          "content": "背景讨论10：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "user",
+          "content": "背景讨论11：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "assistant",
+          "content": "背景讨论12：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "user",
+          "content": "背景讨论13：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "assistant",
+          "content": "背景讨论14：我在学习C语言数组，继续理解下标。"
+        },
+        {
+          "role": "user",
+          "content": "上面那个 rotate 函数里为什么要先判断 n <= 0 再做 k %= n？只针对那段代码解释。"
+        }
+      ],
+      "mustInclude": [
+        "结合Q01的实际代码",
+        "解释除零/非法长度",
+        "不能因为中间历史太长而猜代码"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q16",
+      "entry": "首页",
+      "title": "真的没有代码时不猜",
+      "messages": [
+        {
+          "role": "user",
+          "content": "帮我逐行解释那个程序。"
+        }
+      ],
+      "mustInclude": [
+        "指出当前会话缺少程序",
+        "请求代码或明确对象一次",
+        "不编造所谓原程序"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q17",
+      "entry": "阅读",
+      "title": "只解释实际选中章节",
+      "messages": [
+        {
+          "role": "user",
+          "content": "就当前这一章作者的论证，给我一个反例，区分作者主张与你的判断。"
+        }
+      ],
+      "mustInclude": [
+        "使用fixture reading-1/ch-1的材料",
+        "反例针对论证",
+        "不替换成其他书"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q18",
+      "entry": "阅读",
+      "title": "材料不足不编引用",
+      "messages": [
+        {
+          "role": "user",
+          "content": "这一章原文里哪一句支持这个观点？请给我原句和所在段落。"
+        }
+      ],
+      "mustInclude": [
+        "fixture未提供原文时明确无法核对",
+        "不捏造逐字引文、页码",
+        "提供补材料路径"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q19",
+      "entry": "阅读",
+      "title": "理解不等于读完",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我读完这一章了，但讲不出来。能算掌握了吗？"
+        }
+      ],
+      "mustInclude": [
+        "读完与掌握分开",
+        "针对性追问或练习",
+        "不得伪造验收成绩"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q20",
+      "entry": "人生伙伴",
+      "title": "有约束的建议",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我想辞职创业，但存款只够三个月，还有房租。请给出判断、风险和这一周能做的一步，不要泛泛鸡汤。"
+        }
+      ],
+      "mustInclude": [
+        "使用三个月约束",
+        "关键不确定性",
+        "可执行的小规模验证而非保证成功"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q21",
+      "entry": "圆桌",
+      "title": "有真实差异的综合",
+      "messages": [
+        {
+          "role": "user",
+          "content": "用当前圆桌已完成发言，区分共识、真正分歧和下一步。"
+        }
+      ],
+      "mustInclude": [
+        "依据fixture rt-1发言",
+        "不编造未发言者意见",
+        "失败席位不当成已完成"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q22",
+      "entry": "首页",
+      "title": "学习计划预览不写入",
+      "messages": [
+        {
+          "role": "user",
+          "content": "先给我看把Python第二阶段改成每周三小时的方案，不要应用。"
+        }
+      ],
+      "mustInclude": [
+        "绑定g-python/p-files",
+        "展示具体差异",
+        "数据库/store零写入"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q23",
+      "entry": "首页",
+      "title": "批准后对象一致",
+      "messages": [
+        {
+          "role": "user",
+          "content": "同意应用刚才的方案，只改第二阶段未完成部分。"
+        }
+      ],
+      "mustInclude": [
+        "沿用Q22审批产物",
+        "g-python原稳定ID不变",
+        "已完成课、成绩、笔记不变",
+        "专业页可见且可继续"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN",
+      "setup": {
+        "caseId": "Q22",
+        "freshSeed": true,
+        "actualPendingApprovalRequired": true,
+        "includeSetupUsage": true
+      },
+      "execution": {
+        "entry": "真实审批入口",
+        "action": "approve",
+        "intent": "同意应用刚才的方案，只改第二阶段未完成部分。",
+        "providerInput": "通过产品真实入口生成；准备信息不得注入，不得同时重复发送批准/取消消息"
+      }
+    },
+    {
+      "id": "Q24",
+      "entry": "首页",
+      "title": "取消后无后台写入",
+      "messages": [
+        {
+          "role": "user",
+          "content": "取消刚才那个调整，不要再修改。"
+        }
+      ],
+      "mustInclude": [
+        "依照Q22待确认初态真实取消",
+        "没有后续写入",
+        "不显示操作成功"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN",
+      "setup": {
+        "caseId": "Q22",
+        "freshSeed": true,
+        "actualPendingApprovalRequired": true,
+        "includeSetupUsage": true
+      },
+      "execution": {
+        "entry": "真实审批入口",
+        "action": "cancel",
+        "intent": "取消刚才那个调整，不要再修改。",
+        "providerInput": "通过产品真实入口生成；准备信息不得注入，不得同时重复发送批准/取消消息"
+      }
+    },
+    {
+      "id": "Q25",
+      "entry": "首页",
+      "title": "歧义目标不误改",
+      "messages": [
+        {
+          "role": "user",
+          "content": "把Python第二阶段改成每周三小时。"
+        }
+      ],
+      "mustInclude": [
+        "fixture包含两个同名Python目标时先消歧",
+        "不得默认选择第一项",
+        "澄清阶段零写入"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q26",
+      "entry": "学习教练",
+      "title": "可运行的完整示范",
+      "messages": [
+        {
+          "role": "user",
+          "content": "请写完整的C程序演示安全扩容并插入：初始[10,20,30]，容量3，下标1插入99；解释realloc失败时旧数据怎么办。"
+        }
+      ],
+      "mustInclude": [
+        "完整头文件/主函数/释放路径",
+        "临时指针保护旧地址",
+        "编译运行输出10 99 20 30"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q27",
+      "entry": "首页",
+      "title": "混合中英文代码保真",
+      "messages": [
+        {
+          "role": "user",
+          "content": "请用中文解释下面代码，保留标题和代码，不要翻译变量名：\nBoundary Cases\n```c\nif (n <= 0) return;\nk %= n;\n```"
+        }
+      ],
+      "mustInclude": [
+        "保留Boundary Cases",
+        "代码两行保持",
+        "中文解释不删除英文"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q28",
+      "entry": "首页",
+      "title": "用户错误不迎合",
+      "messages": [
+        {
+          "role": "user",
+          "content": "三次反转时k=0，第二次和第三次都为空，所以第一次会把数组倒过来，对吗？"
+        }
+      ],
+      "mustInclude": [
+        "明确指出第三次为整个数组",
+        "给出反转前后状态",
+        "不附和错误结论"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q29",
+      "entry": "学习教练",
+      "title": "简短追问精准展开",
+      "messages": [
+        {
+          "role": "user",
+          "content": "为什么 realloc 返回后不能马上就用旧的 data？只讲这个问题，不要从头介绍顺序表。"
+        }
+      ],
+      "mustInclude": [
+        "旧地址可能失效",
+        "成功/失败两种路径区分",
+        "不重讲全章"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "Q30",
+      "entry": "首页",
+      "title": "联网失败如实回答",
+      "messages": [
+        {
+          "role": "user",
+          "content": "帮我查一个今天刚发布的版本更新；如果查不到就直说，别按印象写最新版本。"
+        }
+      ],
+      "mustInclude": [
+        "工具故障fixture中明确未核实",
+        "不假装已读官方公告",
+        "给出可恢复下一步"
+      ],
+      "forbidden": [
+        "捏造证据或执行结果",
+        "跨会话或账户串写"
+      ],
+      "status": "NOT_RUN"
+    }
+  ],
+  "fixtures": {
+    "coding": "同一编译器/标准C11；原材料完整保留。Q01-Q08沿用原始用例的mustInclude/forbidden，不变更答案。",
+    "learning": "g-python标题Python：p-basics已完成、p-files第二阶段含done-day成绩和关联笔记、todo-1/todo-2未完成。另有g-rust置于列表首位。Q25另有g-python-2同名目标。种子按当前schema构建并冻结全量哈希。",
+    "reading": "reading-1/ch-1：提供材料“作者认为每天固定读一页比等有空再读更容易保持习惯，依据是行动门槛更低”；这是测试材料，不归属于真实出版物。Q18故意不提供原著全文、页码或逐字引文。",
+    "council": "rt-1已完成A：先验证需求；B：优先守住现金流；C失败。共识先小规模验证，差异为风险与投入节奏，不得补写C意见。",
+    "action": "Q23必须在独立种子上先真实执行Q22作为setup；其setup调用和token记账。Q24同样先准备待审批卡；Q25独立消歧初态。Q23/Q24的setup与execution均为测试元数据，不能发给模型；messages仅保留用户意图。执行真实审批控件并记录其生成的正式请求，禁止再额外发送一次批准/取消消息。",
+    "failure": "Q07/Q30将检索故障作为工具层真实错误注入，不以用户消息暗示失败；成功路径与故障路径证据分列。"
+  },
+  "baseline": "同模型同参数同种子；旧新各两遍；所有调用含setup、retry计费；不得择优重跑"
+}

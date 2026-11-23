@@ -35,8 +35,18 @@
     </view>
   </block>
 
+  <!-- 会话恢复中（冷启动回访：me() 探测 + MB 级全量快照，弱网可达数秒甚至 60s 超时）：
+       主区此前完全留白，弱网用户在产品主入口盯着近空白屏。给可见的等待反馈；
+       探测失败由 session.js 的「重试/暂不」模态兜底。 -->
+  <block wx:elif="{{loading}}">
+    <view class="card empty" style="margin-top: 24rpx">
+      <view class="empty-title">会话恢复中…</view>
+      <view class="empty-sub">正在从云端拉取你的数据，弱网下可能需要一些时间。</view>
+    </view>
+  </block>
+
   <!-- 没有目标：主卡改成"开始第一个目标"的引导 -->
-  <block wx:elif="{{!loading}}">
+  <block wx:else>
     <view class="hero card-tap" bindtap="goLearn" hover-class="none">
       <view class="hero-glow"></view>
       <view class="hero-kicker">
@@ -47,7 +57,7 @@
       <view class="hero-sub">教练会先了解你的目的、基础和时间，再排计划。手机端可同步进度，引导在网页版完成。</view>
       <view class="hero-cta">
         <text class="on-ink-dim" style="font-size: 24rpx">也可以先用示例目标走一遍闭环</text>
-        <view class="hero-btn">
+        <view class="hero-btn" aria-role="button" aria-label="去看看，开始第一个目标">
           去看看
           <view class="hero-btn-chev"></view>
         </view>
@@ -81,7 +91,7 @@
               wx:for="{{col}}"
               wx:for-item="cell"
               wx:key="date"
-              class="heat-cell heat-{{cell.level}} {{cell.future ? 'heat-off' : ''}}"
+              class="heat-cell heat-{{cell.level}}"
             ></view>
           </view>
         </view>

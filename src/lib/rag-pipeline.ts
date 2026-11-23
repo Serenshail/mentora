@@ -84,13 +84,25 @@ export async function retrieveEnhanced(
 ): Promise<EnhancedRetrieval> {
   /* 增强检索最多两次模型调用（改写 + 精排），而调用方普遍不传 signal：
    * 上游挂起时整条对话会被无限期卡在「检索笔记」阶段。这里给一个总预算，
-   * 超时按"取消"处理，内部走降级（沿用基线检索），绝不把答案卡死。 */
+   * 超时只掐断增强步骤、内部照常降级（沿用基线检索），绝不把答案卡死；
+   * 调用方自己的 signal 才是真取消，那种情况必须抛出。 */
   const ctrl = new AbortController();
-  const onAbort = () => ctrl.abort();
+  /* 取消来源必须分开记账：内部总超时只是"别卡住回答"，要降级继续；
+   * 调用方主动取消才是"这轮作废"，必须原样抛出（否则调用方会拿降级结果继续用）。 */
+  const state = { callerAborted: false, deadlineHit: false };
+  const onAbort = () => {
+    state.callerAborted = true;
+    ctrl.abort();
+  };
   opts.signal?.addEventListener("abort", onAbort, { once: true });
-  const timer = setTimeout(() => ctrl.abort(), RAG_DEADLINE_MS);
+  /* 进门前就已取消：不会再有 abort 事件，必须自己记账，否则会把"已作废"当成正常请求跑完 */
+  if (opts.signal?.aborted) onAbort();
+  const timer = setTimeout(() => {
+    state.deadlineHit = true;
+    ctrl.abort();
+  }, RAG_DEADLINE_MS);
   try {
-    return await runEnhanced(query, notes, k, { ...opts, signal: ctrl.signal });
+    return await runEnhanced(query, notes, k, { ...opts, signal: ctrl.signal }, state);
   } finally {
     clearTimeout(timer);
     opts.signal?.removeEventListener("abort", onAbort);
@@ -102,7 +114,8 @@ async function runEnhanced(
   query: string,
   notes: WikiNote[],
   k = 3,
-  opts: { rewrite?: boolean; rerank?: boolean; signal?: AbortSignal; context?: string } = {}
+  opts: { rewrite?: boolean; rerank?: boolean; signal?: AbortSignal; context?: string } = {},
+  state: { callerAborted: boolean; deadlineHit: boolean } = { callerAborted: false, deadlineHit: false }
 ): Promise<EnhancedRetrieval> {
   const { rewrite = true, rerank = true, signal, context } = opts;
   const trace: EnhancedRetrieval["trace"] = {
@@ -157,8 +170,9 @@ async function runEnhanced(
         trace.usedFusion = true;
       }
     } catch (e) {
-      if (signal?.aborted) throw e;
-      trace.degraded = "改写失败，沿用基线检索";
+      /* 只有调用方主动取消才向上抛（这轮作废）；内部超时是"别卡住"，照常降级 */
+      if (state.callerAborted) throw e;
+      trace.degraded = state.deadlineHit ? "改写超时，沿用基线检索" : "改写失败，沿用基线检索";
     }
   }
   if (candidates.length === 0) {
@@ -166,8 +180,12 @@ async function runEnhanced(
   }
 
   // ④ LLM 精排：候选多于 k 才有意义；失败/越界一律回退原顺序
+  /* 预算已在改写阶段耗尽时不再发起精排：signal 已 abort，只会立刻抛一次无谓的失败。 */
   let finalHits = candidates.slice(0, k);
-  if (rerank && candidates.length > k) {
+  if (rerank && state.deadlineHit && candidates.length > k) {
+    trace.degraded = (trace.degraded ? trace.degraded + "；" : "") + "检索超预算，跳过精排";
+  }
+  if (rerank && !state.deadlineHit && candidates.length > k) {
     try {
       const pack = rerankPrompt(query, candidates, k);
       const raw = await streamChat({
@@ -184,8 +202,10 @@ async function runEnhanced(
         trace.usedRerank = true;
       }
     } catch (e) {
-      if (signal?.aborted) throw e;
-      trace.degraded = (trace.degraded ? trace.degraded + "；" : "") + "精排失败，沿用融合顺序";
+      if (state.callerAborted) throw e;
+      trace.degraded =
+        (trace.degraded ? trace.degraded + "；" : "") +
+        (state.deadlineHit ? "精排超时，沿用融合顺序" : "精排失败，沿用融合顺序");
     }
   }
 

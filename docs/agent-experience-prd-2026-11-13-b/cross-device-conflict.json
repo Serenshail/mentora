@@ -1,0 +1,76 @@
+{
+  "ranAt": "2026-11-13T04:29:32.636Z",
+  "base": "http://127.0.0.1:3101",
+  "realModelRequests": 0,
+  "pass": 11,
+  "failed": 0,
+  "total": 11,
+  "results": [
+    {
+      "id": "SEED",
+      "name": "基线数据写入成功",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "id": "①-a",
+      "name": "B 的修改写入成功（有服务端版本）",
+      "ok": true,
+      "detail": "status=200 updatedAt=2026-11-13T04:29:06.746Z"
+    },
+    {
+      "id": "①-b",
+      "name": "A 基于旧版本提交被服务端拒绝（不静默覆盖 B）",
+      "ok": true,
+      "detail": "status=409 body={\"error\":\"云端数据已被其他设备或会话修改，请刷新后再提交\",\"conflict\":true,\"currentVersion\":\"2026-11-13T04:29:06.746Z\"}"
+    },
+    {
+      "id": "①-c",
+      "name": "冲突响应带 conflict 标记与当前版本",
+      "ok": true,
+      "detail": "conflict=true currentVersion=2026-11-13T04:29:06.746Z"
+    },
+    {
+      "id": "①-d",
+      "name": "服务端最终保留 B 的修改（A 未覆盖）",
+      "ok": true,
+      "detail": "实际=\"第二阶段 B 的修改\""
+    },
+    {
+      "id": "②-a",
+      "name": "A 重新读取后提交成功（冲突可恢复）",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "id": "②-b",
+      "name": "服务端最终是 A 的新修改",
+      "ok": true,
+      "detail": "实际=\"第二阶段 A 重新预览后的修改\""
+    },
+    {
+      "id": "③-a",
+      "name": "不带 baseSha 的旧路径仍可写（兼容）",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "id": "④-a",
+      "name": "服务端有历史版本存档（覆盖前先归档）",
+      "ok": true,
+      "detail": "sync 可读=true；versions 端点=200"
+    },
+    {
+      "id": "⑤-A",
+      "name": "设备 A 刷新后读到的服务端状态是最新版",
+      "ok": true,
+      "detail": "实际=\"第二阶段 兼容路径\" 页面已渲染=true"
+    },
+    {
+      "id": "⑤-B",
+      "name": "设备 B 刷新后读到的服务端状态是最新版",
+      "ok": true,
+      "detail": "实际=\"第二阶段 兼容路径\" 页面已渲染=true"
+    }
+  ]
+}

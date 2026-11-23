@@ -3,6 +3,7 @@
     "pages/overview/overview",
     "pages/login/login",
     "pages/learn/learn",
+    "pages/coach/coach",
     "pages/goal/goal",
     "pages/day/day",
     "pages/brain/brain",

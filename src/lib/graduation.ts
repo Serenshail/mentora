@@ -30,6 +30,14 @@ function buildGraduationCtx(goal: Goal) {
    * 可有上万条，提示词能到几十万 token：小上下文模型直接 400，而 graduatedAt 只在
    * 成功后写入，用户每次重试都完整重放一遍巨型提示词（BYOK 真金白银 / 服务端占配额）。 */
   const points = pointsAll.slice(-200);
+  /* 掌握分布是写进笔记正文的结论，必须按全量知识点统计（与目标页 learn/[id]/page.tsx
+   * GraduationPanel 的同名统计同口径）；截断只限制模型看到的样本，不能改变结论口径。
+   * 两者不一致时在笔记里标注样本量，读者才知道这份分布覆盖了多少条。 */
+  const masteryCounts = new Map<MasteryStatus, number>();
+  for (const p of pointsAll) {
+    const m = p.historicalHighest as MasteryStatus;
+    masteryCounts.set(m, (masteryCounts.get(m) ?? 0) + 1);
+  }
   const failures = (goal.quizLog || [])
     .filter((q) => !q.passed)
     .slice(0, 8)
@@ -48,6 +56,8 @@ function buildGraduationCtx(goal: Goal) {
     totalDays: days.length,
     completedDays: done.length,
     knowledgePoints: points,
+    masteryCounts: Object.fromEntries(masteryCounts) as Partial<Record<MasteryStatus, number>>,
+    knowledgePointsTotal: pointsAll.length,
     failures,
   };
 }
@@ -82,10 +92,11 @@ export async function runGraduation(goalId: string): Promise<{
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 
-  /* 掌握分布展示顺序 = MASTERY_ORDER 倒序（最强在前），不再手抄一份等级表 */
+  /* 掌握分布展示顺序 = MASTERY_ORDER 倒序（最强在前），不再手抄一份等级表。
+   * 计数取自全量 masteryCounts（不是截断后的 ctx.knowledgePoints），与目标页统计一致。 */
   const masterLine = `- 掌握分布：${[...MASTERY_ORDER].reverse()
     .map((m) => {
-      const n = ctx.knowledgePoints.filter((k) => k.historicalHighest === m).length;
+      const n = ctx.masteryCounts[m] ?? 0;
       return n ? `${MASTERY_LABELS[m]} ${n}` : "";
     })
     .filter(Boolean)
@@ -98,6 +109,7 @@ export async function runGraduation(goalId: string): Promise<{
     "",
     `- 目标：${goal.topic}${goal.direction ? `（${goal.direction}）` : ""}`,
     `- 完成度：${ctx.completedDays}/${ctx.totalDays} 天`,
+    `- 知识点：${ctx.knowledgePointsTotal} 条`,
     masterLine,
     "",
     "## 下一步（只是建议，不会自动创建）",

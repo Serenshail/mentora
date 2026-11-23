@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { readPreviousInAppRoute } from "@/components/page-back-bar";
 import {
   Badge, Button, Card, Modal, Skeleton, Textarea } from "@/components/ui";
 import { GraphView } from "@/components/brain/graph-view";
@@ -10,6 +10,7 @@ import { ObsidianImport } from "@/components/brain/obsidian-import";
 import { NoteWorkspace } from "@/components/brain/note-workspace";
 import { Markdown } from "@/components/markdown";
 import { useAppStore, useDueReviews } from "@/lib/store";
+import { withResolvedWikiLinks } from "@/lib/wiki-links";
 import { useHydrated } from "@/lib/use-chat";
 import { extractJson, normalizeReviewGrade, reviewGradeSchema } from "@/lib/ai/client";
 import { cn } from "@/lib/utils";
@@ -40,6 +41,9 @@ function BrainUrlSync({
         setOpenId(note);
       } else if (tabParam === "graph") {
         setTab("graph");
+      } else {
+        setTab("notes");
+        setOpenId(null);
       }
     });
     return () => cancelAnimationFrame(raf);
@@ -48,13 +52,25 @@ function BrainUrlSync({
 }
 
 export default function BrainPage() {
+  const router = useRouter();
   const hydrated = useHydrated();
   const knowledge = useAppStore((s) => s.knowledge);
+  const linkedKnowledge = useMemo(()=>withResolvedWikiLinks(knowledge),[knowledge]);
 
   const due = useDueReviews();
   const [tab, setTab] = useState<Tab>("notes");
   const [openId, setOpenId] = useState<string | null>(null);
   const [wsMode, setWsMode] = useState<"preview" | "edit">("preview");
+  const openNoteRoute = useCallback((id: string | null) => {
+    setOpenId(id);
+    setTab("notes");
+    setWsMode("preview");
+    const params = new URLSearchParams(window.location.search);
+    params.delete("tab");
+    if (id) params.set("note",id); else params.delete("note");
+    const next = `/brain${params.size ? `?${params}` : ""}`;
+    if (next !== window.location.pathname + window.location.search) window.history.pushState(null, "", next);
+  }, []);
 
   /* URL 直达（⌘K 命令面板的跳转契约）：/brain?note=<id> 直接打开该笔记；?tab=graph 进图谱 */
   // 复习会话
@@ -68,11 +84,28 @@ export default function BrainPage() {
   const [phase, setPhase] = useState<"ask" | "answer" | "graded">("ask");
   const [verdict, setVerdict] = useState<{ verdict: string; feedback: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  /* 出题失败的就地重试态：旧实现出题失败（异常/空回复）要么直接 setReviewQueue([])
+   * 关窗丢掉本轮队列与已答进度（与判卷失败「答案不丢、就地重试」的语义相反），
+   * 要么对模型空回复静默进入答题态。统一为：失败留在弹窗内给「重试出题」。 */
+  const [askFailed, setAskFailed] = useState(false);
   /* 复习会话的代际与中止手柄：关窗重开后旧请求必须停，旧结果也不能再写新会话——
    * 旧实现既无 signal 也无代际：两条流交错写 question，旧判卷完成时还会 recordReview，
    * 把一次没做完的复习记进 FSRS 影响后续间隔。 */
   const reviewGenRef = useRef(0);
   const reviewAbortRef = useRef<AbortController | null>(null);
+  /* 卸载兜底（对齐 use-chat.ts 的设计——卸载即 abort，防 token 白烧）：出题/判卷在途时
+   * 直接点侧栏导航会卸载本组件，弹窗 onClose 的失效/中止覆盖不到这条路，流会继续
+   * 跑到完成才被丢弃。cleanup 里 gen++ + abort 双管齐下：abort 掐断在途连接；gen 失效
+   * 拦住「流恰好在卸载瞬间已正常跑完」的竞态——此时 abort 不再抛错，只有代际失效能
+   * 挡住随后的 setVerdict/recordReview，避免一次没答完的复习被写进 FSRS。
+   * 流自身的 stale 守卫让 abort 抛出的异常静默早退（不弹 toast、不写会话状态）。 */
+  useEffect(
+    () => () => {
+      reviewGenRef.current++;
+      reviewAbortRef.current?.abort();
+    },
+    []
+  );
 
 
   /* ---- 复习流程 ---- */
@@ -127,13 +160,14 @@ export default function BrainPage() {
     setAnswer("");
     setVerdict(null);
     setBusy(true);
+    setAskFailed(false);
     const gen = ++reviewGenRef.current;
     reviewAbortRef.current?.abort();
     const ctrl = new AbortController();
     reviewAbortRef.current = ctrl;
     try {
       const { streamChat } = await import("@/lib/ai/client");
-      await streamChat({
+      const full = await streamChat({
         task: "review-ask",
         args: {
           items: JSON.stringify(
@@ -149,11 +183,21 @@ export default function BrainPage() {
         },
       });
       if (gen !== reviewGenRef.current) return;
+      /* 模型 200 但正文为空（BYOK 自定义端点的现实场景）：streamChat 按约定返回 ""，
+       * use-chat.ts:105-107 明确「必须显式报错」。旧实现无条件 setPhase("answer")，
+       * 出现空问题卡，用户还能对着空题提交并把这次复习记进 FSRS。 */
+      if (!full.trim()) {
+        setAskFailed(true);
+        toast.error("模型返回了空回复，请重试");
+        return;
+      }
       setPhase("answer");
     } catch {
       if (gen !== reviewGenRef.current) return; // 已关窗/换轮：不打扰新会话
+      /* 出题失败与判卷失败同语义：就地保留本轮队列与已答进度，给重试入口。
+       * 旧实现 setReviewQueue([]) 令 Modal 关窗，correctCount 全部丢弃。 */
+      setAskFailed(true);
       toast.error("复习出题失败，稍后再试");
-      setReviewQueue([]);
     } finally {
       if (gen === reviewGenRef.current) setBusy(false);
     }
@@ -215,6 +259,12 @@ export default function BrainPage() {
     void askNext(rest);
   };
 
+  /* 出题失败后的就地重试：队列没动过，reviewQueue[0] 仍是这道没出出来的题 */
+  const retryAsk = () => {
+    setAskFailed(false);
+    void askNext(reviewQueue);
+  };
+
   if (!hydrated) return <Skeleton className="h-40 rounded-2xl bg-surface/60" />;
 
   return (
@@ -223,41 +273,59 @@ export default function BrainPage() {
         <BrainUrlSync setTab={setTab} setOpenId={setOpenId} />
       </Suspense>
       {/* 紧凑顶栏：标题 + 统计 + 复习 + Tab */}
-      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+      <div className="sticky top-[calc(var(--mobile-topbar-h)+var(--safe-top))] z-20 mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-bg py-2 md:top-0">
         <h1 className="flex items-center gap-2 text-[17px] font-bold tracking-[-0.01em] text-ink">
-          <Link href="/learn" className="flex items-center gap-1.5 text-ink-dim transition hover:text-ink">
-            <ArrowLeft className="size-4" />
-          </Link>
+          <button
+            type="button"
+            onClick={() => {
+              let origin = "/learn";
+              try { origin = sessionStorage.getItem("mentora:notes-return") || origin; } catch { /* Use the learning page. */ }
+              if (!(origin === "/learn" || origin.startsWith("/learn?") || origin.startsWith("/learn/") || origin.startsWith("/read/"))) origin = "/learn";
+              if (readPreviousInAppRoute("") === origin) router.back();
+              else router.push(origin);
+            }}
+            aria-label="返回学习页"
+            className="flex min-h-11 min-w-11 items-center justify-center text-ink-dim transition hover:text-ink"
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+          </button>
           <Brain className="size-4.5 text-accent" /> 笔记库
         </h1>
         <span className="text-xs text-ink-dim">
-          {knowledge.length} 篇 · 连接 {knowledge.reduce((a, k) => a + k.links.length, 0)}
+          {knowledge.length} 篇 · 连接 {linkedKnowledge.reduce((a, k) => a + k.links.length, 0)}
           {due.length > 0 ? (
             <>
               {" "}· 待复习{" "}
-              <button onClick={startReview} className="font-semibold text-accent hover:underline cursor-pointer">
+              <button
+                onClick={startReview}
+                aria-label={`开始复习 ${due.length} 个知识点`}
+                className="font-semibold text-accent hover:underline cursor-pointer"
+              >
                 {due.length}
               </button>
             </>
           ) : (
-            <> · 待复习 0（验收通过的知识点自动进；导入/手写笔记可在笔记里手动加入）</>
+            <> · 待复习 0</>
           )}
         </span>
-        <div className="ml-auto flex gap-1.5">
+        {/* 页内一级 tab 与学习页同款分段控件：learn/brain 是相邻页，激活态样式必须一致
+            （旧实现是独立描边按钮，同一会话里切页要重新识别激活态） */}
+        <div className="ml-auto flex items-center gap-1.5 rounded-xl border border-border bg-surface-2/50 p-1">
           {(
             [
               ["notes", "笔记"],
-              ["graph", "图谱"],
+              ["graph", "关系图谱"],
             ] as [Tab, string][]
           ).map(([t, label]) => (
             <button
               key={t}
+              aria-pressed={tab === t}
               onClick={() => setTab(t)}
               className={cn(
-                "rounded-lg border px-3 py-1.5 text-[12.5px] font-medium transition cursor-pointer",
+                "cursor-pointer rounded-lg px-3 py-1.5 text-[13px] font-medium transition",
                 tab === t
-                  ? "border-accent/30 bg-accent/[0.08] font-semibold text-accent"
-                  : "border-border bg-white text-ink-dim hover:text-ink"
+                  ? "bg-white text-ink shadow-sm"
+                  : "text-ink-dim hover:text-ink"
               )}
             >
               {label}
@@ -269,10 +337,7 @@ export default function BrainPage() {
       {tab === "notes" && (
         <NoteWorkspace
           openId={openId}
-          onOpenNote={(id) => {
-            setOpenId(id);
-            setWsMode("preview");
-          }}
+          onOpenNote={openNoteRoute}
           mode={wsMode}
           onModeChange={setWsMode}
           onGraph={() => setTab("graph")}
@@ -285,12 +350,9 @@ export default function BrainPage() {
       {tab === "graph" && (
         <Card className="p-3">
           <GraphView
-            notes={knowledge}
+            notes={linkedKnowledge}
             focusId={openId}
-            onOpen={(id) => {
-              setOpenId(id);
-              setWsMode("preview");
-            }}
+            onOpen={openNoteRoute}
           />
           <p className="mt-3 text-center text-xs text-ink-dim">
             拖动节点整理布局 · 点击节点打开笔记 · 连线随内容增长而生长
@@ -306,6 +368,7 @@ export default function BrainPage() {
           reviewGenRef.current++;
           reviewAbortRef.current?.abort();
           setBusy(false);
+          setAskFailed(false);
           setReviewQueue([]);
           setSummary(null);
         }}
@@ -352,13 +415,23 @@ export default function BrainPage() {
               </Button>
             </div>
           )}
-          {phase === "ask" && (
+          {/* 总结出现后只渲染总结卡：旧实现 phase/question 渲染不受 summary 约束，
+              判完最后一题点「下一个」时旧题目卡/判卷卡与总结同屏叠加 */}
+          {!summary && phase === "ask" && !askFailed && (
             <div className="py-8 text-center text-sm text-ink-dim">
               <RefreshCcw className="mx-auto mb-3 size-6 animate-spin text-accent" />
               正在出题…
             </div>
           )}
-          {(phase === "answer" || phase === "graded") && (
+          {!summary && askFailed && (
+            <Card className="py-6 text-center">
+              <p className="text-sm text-ink-dim">出题没有成功——本轮队列和已答进度都还在。</p>
+              <Button className="mt-3" onClick={retryAsk} loading={busy}>
+                重试出题
+              </Button>
+            </Card>
+          )}
+          {!summary && (phase === "answer" || phase === "graded") && (
             <>
               <Card className="border-accent/25">
                 <Markdown text={question} />

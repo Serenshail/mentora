@@ -24,6 +24,7 @@ Page({
   },
 
   onLoad: function () {
+    this._unloaded = false;
     var queue = store.dueReviews().map(function (k) {
       return k.id;
     });
@@ -107,12 +108,18 @@ Page({
       })
       .then(function () {
         that._askCancel = null;
+        /* 已离开：flush 自身会 setData，一并跳过，只丢弃挂起的刷新 */
+        if (that._unloaded) {
+          renderer.cancel();
+          return;
+        }
         renderer.flush();
         that.setData({ phase: "answer", questionBusy: false });
       })
       .catch(function () {
         that._askCancel = null;
         renderer.cancel();
+        if (that._unloaded) return; // 取消发生在离开之后：toast 不弹在用户已离开的界面里
         util.toast("复习出题失败，稍后再试");
         that.setData({ phase: "idle", questionBusy: false });
       });
@@ -122,11 +129,16 @@ Page({
     this.setData({ answer: e.detail.value });
   },
 
-  /* 离开页面（返回/切走销毁）中止在途出题流 */
+  /* 离开页面（返回/切走销毁）中止在途流 */
   onUnload: function () {
+    this._unloaded = true;
     if (this._askCancel) {
       this._askCancel();
       this._askCancel = null;
+    }
+    if (this._gradeCancel) {
+      this._gradeCancel();
+      this._gradeCancel = null;
     }
   },
 
@@ -154,9 +166,18 @@ Page({
         },
         messages: [{ role: "user", content: answer }],
         temperature: 0.2,
+        /* 中途退出页面就中止判卷流：与出题流同纪律。否则流跑到完成或 180s 超时，
+         * 失败 toast 会弹在用户已经离开的界面里 */
+        register: function (cancel) {
+          that._gradeCancel = cancel;
+        },
         onDelta: function () {}
       })
       .then(function (full) {
+        that._gradeCancel = null;
+        /* 已离开页面：这次判卷作废——不写界面，更不能 recordReview
+         * （否则一次没答完的复习被记进排期，后续间隔全被带偏；与 Web 同纪律） */
+        if (that._unloaded) return;
         var g = grade.normalizeReviewGrade(chat.extractJson(full));
         that.setData({ verdict: g, phase: "graded" });
         if (g.verdict === "pass") {
@@ -165,9 +186,12 @@ Page({
         store.recordReview(id, g.verdict === "pass");
       })
       .catch(function () {
+        that._gradeCancel = null;
+        if (that._unloaded) return; // 取消/失败发生在离开之后：不打扰已卸载的页面
         util.toast("评分服务暂不可用，你的回答没有丢——稍等再点一次提交");
       })
       .then(function () {
+        if (that._unloaded) return;
         that.setData({ gradeBusy: false });
       });
   },

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { assertSafePublicUrl } from "@/lib/server/url-guard";
+import { readJsonBody } from "@/lib/server/body-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -214,14 +215,24 @@ async function checkOne(raw: string): Promise<CheckResult> {
       if (res.status >= 400 || res.status === 404 || res.status === 410) {
         return { ...base, dead: true, reason: `HTTP ${res.status} 已失效` };
       }
+      if (res.status === 204 || res.status === 205 || res.headers.get("content-length") === "0") {
+        return { ...base, dead: true, reason: "页面没有可学习的内容" };
+      }
       const ct = res.headers.get("content-type") ?? "";
       if (!ct.includes("text/html")) {
         // 非网页(文件/接口)不算广告,视为可访问
         return { ...base, ok: true, reason: "可访问" };
       }
-      const html = await readHead(res, 200_000).catch(() => "");
+      const html = await readHead(res, 200_000);
+      if (!html.trim()) return { ...base, dead: true, reason: "页面没有可学习的内容" };
       const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-      base.title = (m?.[1] ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+      base.title = (m?.[1] ?? "")
+        .replace(/&#(x[0-9a-f]+|\d+);/gi, (entity, value: string) => {
+          const code = value.toLowerCase().startsWith("x") ? Number.parseInt(value.slice(1), 16) : Number(value);
+          return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+        })
+        .replace(/&amp;/g, "&").replace(/&nbsp;/g, " ")
+        .replace(/\s+/g, " ").trim().slice(0, 80);
       // 重定向后的终页也要复核（如 /free 跳到登录页）：URL 形态 + 页面标题双查
       let finalUrlObj: URL;
       try {
@@ -230,6 +241,9 @@ async function checkOne(raw: string): Promise<CheckResult> {
           return { ...base, dead: true, reason: "重定向到入口/登录/营销页" };
         }
       } catch { /* finalUrl 解析失败不做二次判定 */ }
+      if (/^(?:404\b|page not found\b|页面不存在|找不到页面|内容已删除)/i.test(base.title)) {
+        return { ...base, dead: true, reason: "页面已不存在" };
+      }
       const uselessByTitle = USELESS_TITLE.test(base.title);
       const adByTitle = AD_TITLE.test(base.title);
       const adByDomain = AD_DOMAIN.test(new URL(base.finalUrl).hostname);
@@ -257,7 +271,16 @@ export async function POST(req: NextRequest) {
   if (!(await rateLimitPersistent(`linkcheck:${clientIp(req)}`, { capacity: 20, refillPerSec: 20 / 60 }))) {
     return Response.json({ error: "检测太频繁" }, { status: 429 });
   }
-  const body = await req.json().catch(() => ({}));
+  /* 体积闸（与 auth 全系、chat、sync 同一纪律）：本端点匿名可调（每 IP 20/min 持久桶），
+   * 裸 req.json() 会把整个请求体一次性缓冲进内存——自托管（Caddy 默认不限 body）下
+   * 攻击者用限流额度内的 chunked GB 级包打此端点，JSON.parse 的内存尖峰足以 OOM 杀掉
+   * 单进程 Node（body-limit.ts 头注释的威胁模型）。512KB 声明闸 + 流式终闸，超标回 413。
+   * 之前 urls 元素未校验为字符串不会崩（非字符串经 new URL→checkUrlShape→assertSafePublicUrl
+   * 判死），这里不再重复校验元素类型。 */
+  const body = await readJsonBody(req);
+  if (body === null) {
+    return Response.json({ error: "请求体过大" }, { status: 413 });
+  }
   const urls: string[] = Array.isArray(body.urls) ? body.urls.slice(0, 10) : [];
   const results = await Promise.all(urls.map(checkOne));
   return Response.json({ results }, { headers: { "Cache-Control": "no-store" } });

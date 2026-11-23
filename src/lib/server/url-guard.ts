@@ -22,13 +22,16 @@ const DNS_TIMEOUT_MS = 3_000;
 function isPrivateV4(ip: string): boolean {
   const p = ip.split(".").map(Number);
   if (p.length !== 4 || p.some((n) => Number.isNaN(n))) return true; // 畸形视为不安全
-  const [a, b] = p;
+  const [a, b, c] = p;
   if (a === 0 || a === 10 || a === 127) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
   if (a === 169 && b === 254) return true;
   if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
   if (a === 192 && b === 0) return true; // TEST-NET 等保留段
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 基准测试段（VPN/TUN fake-IP 常落此段）
+  if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2 198.51.100.0/24
+  if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3 203.0.113.0/24
   if (a >= 224) return true; // 组播/保留
   return false;
 }
@@ -80,7 +83,26 @@ function isPrivateV6(ip: string): boolean {
     const b = parseInt(groups[7], 16);
     return isPrivateV4(`${(a >> 8) & 255}.${a & 255}.${(b >> 8) & 255}.${b & 255}`);
   }
+  /* 内嵌 IPv4 的 IPv6 形态：6to4/NAT64 把 v4 藏进中段或尾段，字符串层看不出私网，
+   * 必须解出内嵌 v4 再按 v4 规则裁决（否则 [2002:7f00:1::] 这类直通形态层） */
+  if (groups[0] === "2002") {
+    // 6to4 2002::/16：v4 = 第 2、3 组
+    const a = parseInt(groups[1], 16);
+    const b = parseInt(groups[2], 16);
+    return isPrivateV4(`${(a >> 8) & 255}.${a & 255}.${(b >> 8) & 255}.${b & 255}`);
+  }
+  if (groups[0] === "0064" && groups[1] === "ff9b") {
+    if (groups[2] !== "0000") return true; // 64:ff9b:1::/48 本地专用 NAT64，无对应公网语义
+    if (groups.slice(2, 6).every((g) => g === "0000")) {
+      // 64:ff9b::/96 知名前缀：v4 = 末两组
+      const a = parseInt(groups[6], 16);
+      const b = parseInt(groups[7], 16);
+      return isPrivateV4(`${(a >> 8) & 255}.${a & 255}.${(b >> 8) & 255}.${b & 255}`);
+    }
+    return true; // 前缀内非 /96 的非常规形态，按不安全处理
+  }
   const g0 = parseInt(groups[0], 16);
+  if (g0 === 0x2001 && groups[1] === "0000") return true; // Teredo 2001:0::/32（内嵌 v4 为取反编码，整体拒绝）
   if (g0 >= 0xfc00 && g0 <= 0xfdff) return true; // ULA fc00::/7
   if (g0 >= 0xfe80 && g0 <= 0xfebf) return true; // link-local fe80::/10
   if ((g0 & 0xff00) === 0xff00) return true; // 组播 ff00::/8

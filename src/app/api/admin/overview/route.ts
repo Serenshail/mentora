@@ -58,19 +58,31 @@ export async function GET(req: NextRequest) {
 
   let skippedUsers = 0; // 档案读取/解密失败 → 该用户从列表整体消失，必须让管理端知道
   let statsPartial = 0; // 云快照读取失败被折叠成全 0，与「从未上云」同形，排查丢数据时会误导
+  let pagination: { page: number; totalPages: number; totalUsers: number } | undefined;
 
   try {
-    const files = await dbList("users");
+    let files = await dbList("users");
     /* 串行 N+1：每用户 2 次远端加密读（每次 decrypt 还要走一遍解密 + KV 往返），
      * N≈200 时保守估计就超 maxDuration=60 → 后台直接不可用。分块并发，
      * 块内并行、块间串行，既压满往返又不至于一次打爆远端。 */
     const CHUNK = 8;
+    const requestedPage = req.nextUrl?.searchParams.get("page");
+    if (requestedPage != null) {
+      const totalUsers = files.length;
+      const totalPages = Math.max(1, Math.ceil(totalUsers / CHUNK));
+      const page = Math.min(totalPages, Math.max(1, Number.parseInt(requestedPage, 10) || 1));
+      pagination = { page, totalPages, totalUsers };
+      files = files.sort((a, b) => a.name.localeCompare(b.name)).slice((page - 1) * CHUNK, page * CHUNK);
+    }
     for (let i = 0; i < files.length; i += CHUNK) {
       const part = await Promise.all(
         files.slice(i, i + CHUNK).map(async (f) => {
           try {
             const rec = await dbGet<UserRecord>(`users/${f.name}`, { encrypted: true });
-            if (!rec?.userId) return null;
+            /* dbGet 成功但记录缺 userId（畸形/半写入档案）≠ 合法缺席：直接 return null
+             * 会绕过 skippedUsers 计数，管理端出现「totalUsers - skippedUsers > 列表人数」
+             * 且无从解释的差异。同 failed 口径计数，维持 files.length = 列表 + skipped 不变量 */
+            if (!rec?.userId) return { user: null, failed: true, partial: false };
             let lastSyncAt: string | null = null;
             let stats = { goals: 0, knowledge: 0, books: 0, sessions: 0, personas: 0 };
             let partial = false;
@@ -136,6 +148,10 @@ export async function GET(req: NextRequest) {
   /* 拉取失败必须显式返回：旧实现一律静默折叠成空列表，坏 token 会让后台长期显示
    * 「0 条反馈」而运营完全无感。 */
   let feedbackError: string | null = null;
+  /* 本片所有出站 fetch 都带 AbortSignal.timeout（linkcheck 6s / search 8s / mail 10s），这里是最后一处裸 fetch：
+   * GitHub API 偶发挂起时整个 overview 被拖到 maxDuration=60 平台强杀 → 客户端 spinner 转满 60s
+   * 后解析平台 500 HTML 失败，显示误导性的「网络错误」。10s 兜底与 mail.ts 同量级，超时走下方 catch
+   * 进 feedbackError，overview 其余数据照常返回。 */
   if (token) {
     try {
       const res = await fetch(
@@ -147,6 +163,7 @@ export async function GET(req: NextRequest) {
             "User-Agent": "mentora-admin",
           },
           cache: "no-store",
+          signal: AbortSignal.timeout(10_000),
         }
       );
       if (res.ok) {
@@ -175,7 +192,15 @@ export async function GET(req: NextRequest) {
       }
       else feedbackError = `GitHub 返回 ${res.status}`;
     } catch (e) {
-      feedbackError = e instanceof Error ? e.message : "反馈拉取失败";
+      /* AbortSignal.timeout 触发时 Node 抛 DOMException 风格的 TimeoutError（instanceof Error 为 true，
+       * 实测见 __tests__/admin-overview-feedback-timeout.test.ts），显式定性，别把
+       * "The operation was aborted due to timeout" 原样顶给运营。 */
+      feedbackError =
+        (e as { name?: string }).name === "TimeoutError"
+          ? "GitHub 反馈拉取超时（10s），请稍后重试"
+          : e instanceof Error
+            ? e.message
+            : "反馈拉取失败";
     }
   }
 
@@ -187,5 +212,6 @@ export async function GET(req: NextRequest) {
     feedbackError,
     skippedUsers,
     statsPartial,
+    pagination,
   });
 }

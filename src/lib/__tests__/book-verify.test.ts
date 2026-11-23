@@ -42,11 +42,11 @@ describe("judgeBookEvidence（V26.2-H2 书籍真实性判定）", () => {
     expect(r.status).toBe("verified");
   });
 
-  it("书名前 8 字截断匹配：长书名只需前缀命中", () => {
+  it("不能凭前八字相同核实另一本长书名", () => {
     const r = judgeBookEvidence("高性能MySQL第三版完整指南", "", [
       hit("高性能MySQL第三版（图书音像）", "https://item.jd.com/1.html"),
     ]);
-    expect(r.status).toBe("verified");
+    expect(r.status).toBe("insufficient");
   });
 
   it("可信来源标题不含书名 → insufficient（防止同名无关页面放行）", () => {
@@ -62,4 +62,26 @@ describe("judgeBookEvidence（V26.2-H2 书籍真实性判定）", () => {
     ]);
     expect(r.status).toBe("verified");
   });
+});
+
+/* 2026-11-11 搜索链路排查后新增：查询必须是书名单 token（多词查询触发 Bing 反爬降级） */
+import { buildVerifyQuery } from "../book-verify";
+
+describe("buildVerifyQuery（EVAL-01 §8：Bing 多词降级规避）", () => {
+  it("中文书名单 token", () => {
+    expect(buildVerifyQuery("影响力")).toBe("影响力");
+  });
+  it("去掉书名号与空白", () => {
+    expect(buildVerifyQuery("《思考，快与慢》")).toBe("思考，快与慢");
+    expect(buildVerifyQuery("Thinking Fast and Slow")).toBe("ThinkingFastandSlow");
+  });
+  it("不再拼接作者与「书 书籍」后缀（那是多词降级根因）", () => {
+    expect(buildVerifyQuery("影响力")).not.toContain("西奥迪尼");
+    expect(buildVerifyQuery("影响力")).not.toContain("书");
+  });
+});
+
+describe("拒绝把笑声和搜索页当图书", () => {
+  it("百科笑声不是同名图书", () => expect(judgeBookEvidence("哈哈", "", [hit("哈哈", "https://baike.baidu.com/item/哈哈", "表示笑声")]).status).toBe("insufficient"));
+  it("豆瓣搜索结果不是书目条目", () => expect(judgeBookEvidence("哈哈", "", [hit("哈哈", "https://www.douban.com/search?q=哈哈")]).status).toBe("insufficient"));
 });

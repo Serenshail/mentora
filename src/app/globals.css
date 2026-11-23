@@ -1,5 +1,23 @@
 @import "tailwindcss";
 
+.note-tab-strip { display: flex; gap: 4px; overflow-x: auto; padding: 6px 0 10px; }
+.note-tab { display: flex; align-items: center; flex: 0 0 170px; min-width: 0; gap: 4px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface-2); padding: 4px 8px 4px 12px; font-size: 13px; color: var(--color-ink-dim); }
+.note-tab > button:first-child { min-height: 32px; cursor: pointer; }
+.note-tab-active { background: var(--color-surface); border-color: var(--color-accent); color: var(--color-ink); }
+.prose-mentora.note-document { max-width: 72ch; margin-inline: auto; font-size: 16px; line-height: 1.85; }
+.note-document :is(h1,h2,h3,h4,h5,h6) { scroll-margin-top: 24px; }
+.note-reading-area { padding-block: 24px; }
+.note-wikilink { display: inline; cursor: pointer; color: var(--color-accent); font: inherit; line-height: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.note-wikilink:hover { text-decoration-color: var(--color-accent); }
+.note-wikilink-missing { text-decoration-style: dashed; opacity: .8; }
+
+.growth-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (min-width: 1280px) {
+  .growth-layout { grid-template-columns: minmax(0, 1fr) 320px; }
+}
+.growth-event-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.growth-event-detail { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* 品牌字标：Great Vibes 手写体（本地自托管，OFL 许可） */
 @font-face {
   font-family: "Great Vibes";
@@ -171,7 +189,7 @@ h1, h2, h3 {
 }
 
 ::selection {
-  background: rgba(91, 84, 230, 0.14);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
 
 /* 滚动条：浅灰发丝 */
@@ -192,10 +210,29 @@ h1, h2, h3 {
 
 /* ---- markdown 内容排版（白底阅读优化） ---- */
 .prose-mentora {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   line-height: 1.8;
-  font-size: 0.92rem;
+  /* 正文基准 15.2px（E2 统一排版：用户要求主回答/学习正文 15–16px；辅助信息才用 12–13px） */
+  font-size: 0.95rem;
   word-break: break-word;
-  color: #3f3f46;
+  color: var(--color-ink-dim);
+}
+/* 长篇讲解（首页主回答、学习讲义、阅读讨论）用 16px：读得进去的最小值。
+ * 与 .prose-mentora 同源，只放大字号与行高，不另立一套排版规则。 */
+.prose-reading {
+  font-size: 1rem;
+  line-height: 1.85;
+}
+/* 表格在窄屏允许局部横向滚动（页面本身不得整体横溢） */
+.prose-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.prose-table-scroll > table {
+  min-width: 32rem;
 }
 .prose-mentora h1 {
   font-size: 1.15rem;
@@ -237,23 +274,30 @@ h1, h2, h3 {
   margin: 0.35em 0;
 }
 .prose-mentora li::marker {
-  color: #a1a1aa;
+  color: var(--color-ink-3);
 }
 .prose-mentora strong {
   color: var(--color-ink);
   font-weight: 600;
 }
 .prose-mentora code {
-  background: rgba(91, 84, 230, 0.07);
-  color: #4c43c4;
-  border: 1px solid rgba(91, 84, 230, 0.12);
+  background: color-mix(in srgb, var(--color-accent) 7%, transparent);
+  color: var(--color-accent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 12%, transparent);
   border-radius: 5px;
   padding: 0.12em 0.4em;
   font-size: 0.85em;
   font-family: var(--font-mono);
 }
-/* 代码块保持深底——白界面上的墨块是专业文档的惯例（Vercel/Stripe） */
-.prose-mentora pre {
+/* 代码块保持深底——白界面上的墨块是专业文档的惯例（Vercel/Stripe）。
+ * 配方同时挂在 .prose-mentora pre（讲义 Markdown 里的代码块）与 .code-block-dark
+ * （页面内联示例代码块，learn/[id] 项目例子）两个选择器上：hex 只此一份，
+ * 两处代码块配色调整才会同步，不会出现同屏两种深底。 */
+.prose-mentora pre,
+.code-block-dark {
+  max-width: 100%;
+  overflow-wrap: normal;
+  word-break: normal;
   background: #18181b;
   border: 1px solid #26262b;
   border-radius: 12px;
@@ -262,25 +306,27 @@ h1, h2, h3 {
   margin: 1em 0;
   line-height: 1.65;
 }
-.prose-mentora pre code {
+.prose-mentora pre code,
+.code-block-dark code {
   background: none;
   border: none;
   padding: 0;
   color: #d4d4d8;
-  font-size: 0.8rem;
+  /* 代码 14px：比正文略小但仍可读；块本身 overflow-x:auto 局部滚动 */
+  font-size: 0.875rem;
 }
 .prose-mentora blockquote {
   border-left: 2px solid var(--color-accent);
   padding: 0.2em 0 0.2em 14px;
   color: var(--color-ink-dim);
   margin: 0.9em 0;
-  background: rgba(91, 84, 230, 0.035);
+  background: color-mix(in srgb, var(--color-accent) 3.5%, transparent);
   border-radius: 0 8px 8px 0;
 }
 .prose-mentora a {
   color: var(--color-accent);
   text-decoration: none;
-  border-bottom: 1px solid rgba(91, 84, 230, 0.3);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
   transition: border-color 0.15s;
 }
 .prose-mentora a:hover {
@@ -299,14 +345,28 @@ h1, h2, h3 {
 .prose-mentora th,
 .prose-mentora td {
   border: 1px solid var(--color-border);
-  padding: 7px 11px;
-  font-size: 0.83rem;
+  padding: 8px 12px;
+  /* 相对父级：正文放大时表格同步（不再钉死 0.83rem 造成正文与表格两套字号） */
+  font-size: 0.9em;
   text-align: left;
 }
 .prose-mentora hr {
   border: none;
   border-top: 1px solid var(--color-border);
   margin: 1.4em 0;
+}
+
+.prose-mentora > :first-child { margin-top: 0; }
+.prose-mentora > :last-child { margin-bottom: 0; }
+.prose-mentora img { max-width: 100%; height: auto; border-radius: 12px; }
+
+/* Let the message list shrink on short screens, keeping the composer reachable. */
+.agent-workspace {
+  height: calc(100dvh - var(--mobile-topbar-h) - var(--safe-top) - var(--mobile-content-bottom) - 24px);
+  min-height: 18rem;
+}
+@media (min-width: 768px) {
+  .agent-workspace { height: calc(100dvh - 64px); min-height: 24rem; }
 }
 
 @keyframes rise {
@@ -411,7 +471,7 @@ h1, h2, h3 {
 }
 
 :focus-visible {
-  outline: 2px solid rgba(91, 84, 230, 0.55);
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
   outline-offset: 2px;
   border-radius: 6px;
 }
@@ -490,6 +550,13 @@ html[data-period="night"] { --color-bg: #f1f1f5; --color-accent: #6d28d9; }
 .reserve-mobile-nav {
   padding-bottom: var(--mobile-content-bottom);
 }
+
+/* Dialogs use the visible viewport when a software keyboard pans/resizes it. */
+.viewport-overlay {
+  top: var(--visual-viewport-top, 0px);
+  bottom: auto;
+  height: var(--visual-viewport-height, 100dvh);
+}
 @media (min-width: 768px) {
   .reserve-mobile-nav {
     padding-bottom: 2rem;
@@ -500,4 +567,15 @@ html[data-period="night"] { --color-bg: #f1f1f5; --color-accent: #6d28d9; }
 .tap-target {
   min-width: 44px;
   min-height: 44px;
+}
+
+/* Conversations use a narrower measure and smaller paragraph spacing than lessons. */
+.prose-reading.council-prose {
+  font-size: 0.9375rem;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.prose-reading.council-prose p {
+  margin-block: 0.55em;
 }

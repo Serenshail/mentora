@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { dbPut } from "@/lib/server/db";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { logEvent } from "@/lib/server/config";
+import { readJsonBody } from "@/lib/server/body-limit";
 
 export const runtime = "nodejs";
 
@@ -24,7 +25,15 @@ export async function POST(req: NextRequest) {
   if (!(await rateLimitPersistent(`trial:${clientIp(req)}`, { capacity: 3, refillPerSec: 3 / 60 }))) {
     return Response.json({ error: "提交太频繁，请稍后再试" }, { status: 429 });
   }
-  const body = await req.json().catch(() => ({}));
+  /* 体积闸（与 auth 全系、feedback/reminders/linkcheck 同一纪律）：本端点未登录即可调，
+   * 旧的 req.json() 先把整个请求体缓冲并解析后才截断 email/contact/note——自托管
+   * （Caddy 默认不限 body）下限流额度内的 GB 级 JSON 足以 OOM 杀掉单进程 Node
+   * （body-limit.ts 头注释的威胁模型）。512KB 声明闸 + 流式终闸，超标回 413；
+   * 解析失败/空体回 {}，与旧 json().catch(() => ({})) 行为逐字对齐。 */
+  const body = await readJsonBody(req);
+  if (body === null) {
+    return Response.json({ error: "提交内容太大，请精简后重试" }, { status: 413 });
+  }
   const email = String(body.email ?? "").trim().toLowerCase().slice(0, 120);
   const contact = String(body.contact ?? "").trim().slice(0, 80);
   const note = String(body.note ?? "").trim().slice(0, 300);

@@ -1,0 +1,141 @@
+{
+  "date": "2026-11-11",
+  "timezone": "Asia/Shanghai",
+  "referenceCommit": "f1d13c31c5b30154b8f6c6fab6f5d18993a89e6b",
+  "mentoraHead": "facf520def63bb0419197dc94b5c4b5877c82212",
+  "warning": "Mentora dirty working tree; head alone does not identify runtime. Hash inventory is not a claim of full-file reading; see REFERENCE-ANALYSIS scope.",
+  "mentora": [
+    {
+      "path": "src/components/agent-home.tsx",
+      "sha256": "7133316c1b8694f9d5fe4332c0945ebd087963a46f3c25592b176ab20c6e1010",
+      "bytes": 44501
+    },
+    {
+      "path": "src/components/agent-trace.tsx",
+      "sha256": "3df572d75a900e4e1beea0852696598cdb7eeb1aa6f6bdc2e8964d8088714ee4",
+      "bytes": 4832
+    },
+    {
+      "path": "src/components/app-shell.tsx",
+      "sha256": "c6037a9f598a17682ce409a24c5fcc510410e23aa29730308b84b2d00128085e",
+      "bytes": 34378
+    },
+    {
+      "path": "src/lib/agent/runner.ts",
+      "sha256": "7d5ff1c83ff704a42a86218ea318fad7f4faf91e523eed35a39fa26b1f94a385",
+      "bytes": 28713
+    },
+    {
+      "path": "src/lib/agent/protocol.ts",
+      "sha256": "23e77f0a054b5cddee539bd234b647ea127678e6dc8c33e57ac5e0169a7b5c5a",
+      "bytes": 29386
+    },
+    {
+      "path": "src/lib/agent/tool-executors.ts",
+      "sha256": "54002a4a9cb26fc39630ca0468e1f6484b9369d25ad3cc0f941d91fda17e80fd",
+      "bytes": 129257
+    },
+    {
+      "path": "src/lib/ai/prompts.ts",
+      "sha256": "b1a265c271f713ee726a5c684dcad0f439dfdfc7528b33c927975997425ae4c1",
+      "bytes": 138017
+    },
+    {
+      "path": "src/lib/ai/prompts-lite.ts",
+      "sha256": "fdad639f0e52f84bd77b0c55e58739be7b50216be947d33a0bad3706609fa2e8",
+      "bytes": 562
+    },
+    {
+      "path": "src/app/api/chat/route.ts",
+      "sha256": "bd82c2cfc8acd788c0f598d1b8c9c46c4647ba718ecbe022b7194fa6b3fabfed",
+      "bytes": 41900
+    },
+    {
+      "path": "src/lib/store.ts",
+      "sha256": "a90415f9d19c567ab78165dbb6a4a5e54cf7646d886bb23ed88539aafd3cd1bf",
+      "bytes": 107762
+    },
+    {
+      "path": "src/lib/types.ts",
+      "sha256": "d111b3ab0310c507c1410a15df1b5eb1e177c91db69eae6099316c87dfc5dc13",
+      "bytes": 25952
+    },
+    {
+      "path": "docs/web-polish-2026-11-09/TEACHING-REFERENCE.md",
+      "sha256": "bb28800df887968b4e6527e35d548fc3f7e638bce133b0255af9e1bcb04774a9",
+      "bytes": 5252
+    }
+  ],
+  "reference": [
+    {
+      "path": "LICENSE",
+      "sha256": "56838aff8923a70d9925b2b7874294b97e867c0128cd9c3369ac0335c6d62a44",
+      "bytes": 1090
+    },
+    {
+      "path": "system_prompt_gui.md",
+      "sha256": "be5277814c06d4c56922fc792c71fe9e2e8693c317c79cb804780c2655621213",
+      "bytes": 22659
+    },
+    {
+      "path": "frontend/src/stores/sessionRuntime.ts",
+      "sha256": "c06263ad828fcf524ceefb731e08d5cc6a11d031de7c7dae240c8ad24eaf5d44",
+      "bytes": 3678
+    },
+    {
+      "path": "frontend/src/stores/appStore.ts",
+      "sha256": "f6131b3e8f9e8bfe59dd875deb5f0ef4ea9220f5ec5e04e7fded3c07172b18a8",
+      "bytes": 393218
+    },
+    {
+      "path": "frontend/src/components/MessageBubble.vue",
+      "sha256": "2055855b3744ed8358fc8e5fbf0eac8b16fc95d07829194cf8f9419c556255b2",
+      "bytes": 60749
+    },
+    {
+      "path": "frontend/src/components/InputArea.vue",
+      "sha256": "b692eaf8a9ec195d4688fd99b3c9def5e24e3c8cae1d0d0f2bedc50ef3a3f2a2",
+      "bytes": 32630
+    },
+    {
+      "path": "frontend/src/composables/useChatScroll.ts",
+      "sha256": "68c48f61e20eb35ea5b20f8153ee09d8c1878c8117474b1345cb89c9a98a96bf",
+      "bytes": 6771
+    },
+    {
+      "path": "core/context_builder.py",
+      "sha256": "baf2378518d1f2c1916c62cdb7f842cbd56a933dd71d9aa5dc3bd8bda530c179",
+      "bytes": 9685
+    },
+    {
+      "path": "core/harness/tool_pipeline.py",
+      "sha256": "77b1bbd582f45afa58adf4ae4615be979d6f0296180b8fa23b1ef6ab38ce7522",
+      "bytes": 64660
+    },
+    {
+      "path": "core/harness/progress_guard.py",
+      "sha256": "0c0ce9edd26a034c4220ebe219252c55fd16514a9e03e3eea006d0eea5dcd9d9",
+      "bytes": 3643
+    },
+    {
+      "path": "core/harness/turn_limits.py",
+      "sha256": "379f97d9459a364b39f25396aa3d3c3526272341bd8300ed70802e50263d0fa5",
+      "bytes": 1305
+    },
+    {
+      "path": "core/harness/resume_policy.py",
+      "sha256": "4d22add9626c43f197a5f00a9ef4d96bb8c3dea5979db6eaf6896dd301a5749e",
+      "bytes": 4996
+    },
+    {
+      "path": "core/tool_cache.py",
+      "sha256": "dc87e97961115db00a9918f5508e27d088c22cfbc64bdb55cb7bc0983bb265ef",
+      "bytes": 13542
+    },
+    {
+      "path": "core/memory_compressor.py",
+      "sha256": "442aa5ce091371a4059ecc54e79d10805ced446ca1600c6f0ea3ed605fcb7182",
+      "bytes": 54343
+    }
+  ]
+}

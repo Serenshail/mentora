@@ -1,6 +1,6 @@
-var api = require("../../utils/api.js");
 var store = require("../../utils/store.js");
 var util = require("../../utils/util.js");
+var sessionGuard = require("../../utils/session.js");
 
 /* 今天页：产品的"每日入口"。
  * 设计约束 —— 一屏只回答一个问题：「现在该做什么」。
@@ -50,17 +50,18 @@ Page({
 
   onShow: function () {
     var that = this;
-    var app = getApp();
-    if (!api.hasSession() && !app.globalData.user) {
-      that.probe();
-      return;
-    }
     that.setData({ greet: periodGreet() });
-    that.render();
-    store.pullIfSafe(false).then(function (r) {
+    /* 首页是冷启动的第一屏：旧实现看到 hasSession() 为真就直接 render，
+     * 此时 store 还是空的（me→onLogin→adoptCloud 还在途）→ loading:false、goal:null
+     * → wxml 立刻呈现「还没有进行中的目标」误导性空态，回访用户要切 tab 才看到数据。
+     * 统一走 session.ensure：没有 cookie 才探测，有 cookie 先恢复会话再渲染。 */
+    sessionGuard.ensure(function () {
       that.render();
-      /* 拉取失败要可见：旧实现把返回值扔掉，与成功不可区分 */
-      if (r === "error") util.toast("云端对齐失败，请检查网络");
+      store.pullIfSafe(false).then(function (r) {
+        that.render();
+        /* 拉取失败要可见：旧实现把返回值扔掉，与成功不可区分 */
+        if (r === "error") util.toast("云端对齐失败，请检查网络");
+      });
     });
   },
 
@@ -73,37 +74,21 @@ Page({
     });
   },
 
-  probe: function () {
-    var that = this;
-    api
-      .me()
-      .then(function (j) {
-        if (j && j.user) {
-          getApp().globalData.user = j.user;
-          return store.onLogin(j.user.userId).then(function () {
-            that.render();
-          });
-        }
-        wx.reLaunch({ url: "/pages/login/login" });
-      })
-      .catch(function () {
-        /* 网络失败 ≠ 未登录：旧实现一律踢到登录页，无网冷启动被当未登录。
-         * 模态给重试入口（不依赖页面模板），取消则留在本页。 */
-        wx.showModal({
-          title: "连接失败",
-          content: "网络似乎不可用，请检查后重试。",
-          confirmText: "重试",
-          cancelText: "暂不",
-          success: function (res) {
-            if (res.confirm) that.probe();
-          }
-        });
-      });
-  },
+  /* 会话探测已收敛到 utils/session.js（五个 tab 页同一语义）：
+   * 这里不再保留第二套 probe——两套并存时守卫条件一旦分叉，又会出现
+   * 「有 cookie 但探测失败被踢去登录页」/「有 cookie 却永不探测」的分裂。 */
 
   syncLabel: function (s) {
     var text =
-      s === "saving" ? "同步中…" : s === "saved" ? "已同步" : s === "error" ? "同步失败，稍后自动重试" : "";
+      s === "saving"
+        ? "同步中…"
+        : s === "saved"
+          ? "已同步"
+          : s === "error"
+            ? "同步失败，稍后自动重试"
+            : s === "conflict"
+              ? "两端数据有分叉，待手动处理"
+              : "";
     this.setData({ sync: text });
   },
 
@@ -121,8 +106,13 @@ Page({
         var ph = goal.plan.phases[i];
         if (ph.status !== "active") continue;
         activePhase = ph;
-        for (var j = 0; j < ph.dayIds.length; j++) {
-          var d = goal.plan.days[ph.dayIds[j]];
+        /* 「阶段有哪些学习日」走 util.phaseDayIds 的唯一判定（catalog 优先、老目标
+         * 回落 dayIds）：直接读 ph.dayIds 是第 4 份手写口径，一旦 catalog 与 dayIds
+         * 分叉（如某端只改 catalog）就会渲染与目录不一致——goal.js 渲染、
+         * store.setDayDetail 已共用 util，这里是最后一份改齐的副本。 */
+        var ids = util.phaseDayIds(ph);
+        for (var j = 0; j < ids.length; j++) {
+          var d = goal.plan.days[ids[j]];
           if (d && d.status === "active") {
             activeDay = d;
             break;
@@ -130,12 +120,19 @@ Page({
         }
         if (activeDay) break;
       }
+      /* 进度分母只统计 phase 目录引用到的天（与 goal.js render / Web 学习页同口径）：
+       * Web 端阶段重排的纪律是「旧天对象绝不删除」，重排后未沿用的孤儿天仍留在
+       * plan.days 里——按 Object.keys(plan.days) 全量统计会虚增分母，首页进度
+       * 与目标详情页对不上。 */
       var total = 0;
       var passed = 0;
-      Object.keys(goal.plan.days).forEach(function (k) {
-        var d = goal.plan.days[k];
-        total += 1;
-        if (d.status === "passed" || d.status === "skipped") passed += 1;
+      goal.plan.phases.forEach(function (ph) {
+        util.phaseDayIds(ph).forEach(function (id) {
+          var d = goal.plan.days[id];
+          if (!d) return;
+          total += 1;
+          if (d.status === "passed" || d.status === "skipped") passed += 1;
+        });
       });
       var gated = Boolean(activeDay && activeDay.pendingUnlock);
       goalView = {

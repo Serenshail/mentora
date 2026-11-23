@@ -1,0 +1,51 @@
+{
+  "version": "1.0",
+  "status": "Specification baseline, no product acceptance executed",
+  "files": [
+    {
+      "path": "ACCEPTANCE.csv",
+      "sha256": "7c626c297e7f029bc31132ae5af8062b62c143cbf24f17347e0c90d3fe543a42",
+      "bytes": 10009
+    },
+    {
+      "path": "EVIDENCE-CONTRACT.md",
+      "sha256": "34dcf048697cfe347d3d767fbe0f789b1bced887523341a769806ea43a68c7bd",
+      "bytes": 5017
+    },
+    {
+      "path": "EXECUTION-PLAN.md",
+      "sha256": "67e26acf7d212ffacf88a560d9550367fc0acdef1be6083ec54156d9c349c75e",
+      "bytes": 5095
+    },
+    {
+      "path": "PRD.md",
+      "sha256": "29db369f1d285447c00ba201b5c7b71475248d1b76b8b30effbc89bc8537ecf2",
+      "bytes": 25844
+    },
+    {
+      "path": "QUALITY-CASES.json",
+      "sha256": "85fadba6844887558c78af1944cf96a88130bcfa4350d927ffff6f3596da1dbf",
+      "bytes": 10624
+    },
+    {
+      "path": "QUALITY-SCORECARD.csv",
+      "sha256": "2851add49a3bf64ee92dab2776cc944f0fa7ceade34c996676e811f9b24213f5",
+      "bytes": 539
+    },
+    {
+      "path": "README.md",
+      "sha256": "cf619e96caa927adb769d981e1f8674da9fb1b50dc81d1b86871aab84a8ff408",
+      "bytes": 1825
+    },
+    {
+      "path": "REFERENCE-ANALYSIS.md",
+      "sha256": "2156782fd32d7c45f3ff8e7d1405af776b5411ef315150ba4458bb03369ba642",
+      "bytes": 7600
+    },
+    {
+      "path": "source-manifest.json",
+      "sha256": "f2b6d45e29ea5e1996a49d8162849a445711e0bf78061672aef14224b1f25f2a",
+      "bytes": 4771
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { dbGet, dbList, dbPut, emailHash } from "@/lib/server/db";
+import { dbGet, dbList, dbPut } from "@/lib/server/db";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { logEvent } from "@/lib/server/config";
 import type { Goal, KnowledgeItem } from "@/lib/types";
@@ -82,21 +82,31 @@ export async function GET(req: NextRequest) {
    * 也兼容直接填用户 UUID（data/ 键）——先按 users/<id>.json 找档案，找不到再按邮箱扫索引。
    * 此前键空间错位（users/<uuid> 无 .json）导致绑定档案永远查不到（2026-10-24 修复） */
   let userId = process.env.MENTORA_OPEN_USER_ID || "";
+  /* 绑定是否真的解析到人：env 的 USER_ID 在 users/ 命中档案、或邮箱反查命中，才算 bound。
+   * 没 bound 但 userId 仍有值（env 填了无效键且未配 EMAIL / 反查也没命中）时，
+   * 不能静默落到 200 空数据——快照读不到就显式 404（见下方绑定校验）。 */
+  let bound = false;
   /* EMAIL 不再默认绑作者个人邮箱：其他部署者没配 EMAIL 时会静默绑到第三方邮箱（查不到 404），
    * 与「TOKEN 缺失显式 503」的语义对齐——下面缺配置直接 503。 */
   let email = process.env.MENTORA_OPEN_EMAIL || "";
   let name = "";
   /* EMAIL 反查索引：此前每次请求都全量扫描+解密所有用户档案（插件 30/min 轮询 × N 个加密读烧 KV 配额）。
    * 扫描结果缓存到 open-bind/<sha256(email)> 键（24h），命中后只做 1 次档案校验读；
-   * 档案消失/缓存失效自动回落全量重扫并重写缓存。 */
+   * 档案消失/缓存失效自动回落全量重扫并重写缓存。
+   * 未命中同样缓存（负缓存，短 TTL）：MENTORA_OPEN_EMAIL 拼错/用户未注册时，
+   * 插件按限流上限轮询会持续以 O(N) 全量解密扫描打满 KV/GitHub 配额。 */
   const CACHE_TTL_MS = 24 * 3600_000;
+  /* 负缓存 TTL 远短于命中缓存：部署者改 env / 用户注册后 10 分钟内自愈 */
+  const MISS_TTL_MS = 10 * 60_000;
   const bindCachePath = (mail: string) =>
     `open-bind/${createHash("sha256").update(mail.toLowerCase()).digest("hex")}.json`;
   const scanByEmail = async (): Promise<boolean> => {
     if (!email) return false; // 没配邮箱就没有可扫的键
     try {
-      const cached = await dbGet<{ file: string; at: number }>(bindCachePath(email), { encrypted: true });
-      if (cached?.file && Date.now() - (cached.at || 0) < CACHE_TTL_MS) {
+      const cached = await dbGet<{ file?: string; miss?: boolean; at: number }>(bindCachePath(email), { encrypted: true });
+      const age = Date.now() - (cached?.at || 0);
+      if (cached?.miss && age < MISS_TTL_MS) return false; // 负缓存命中：跳过全量扫描
+      if (cached?.file && age < CACHE_TTL_MS) {
         const hit = await dbGet<UserRec>(`users/${cached.file}`, { encrypted: true });
         if (hit) {
           userId = hit.userId;
@@ -106,20 +116,35 @@ export async function GET(req: NextRequest) {
       }
     } catch { /* 缓存读失败 → 走全量扫描 */ }
     const files = await dbList("users");
+    /* 读成功计数：全部档案都读失败（KV 故障/密钥轮换）时「查不到」不可信，
+     * 不能写成负缓存把故障固化成 10 分钟的 404 */
+    let readOk = 0;
     for (const f of files) {
       let rec: UserRec | null;
       try {
         rec = await dbGet<UserRec>(`users/${f.name}`, { encrypted: true });
+        readOk += 1;
       } catch {
         continue; // 单个档案读失败不拖垮整体扫描
       }
       if (rec && String(rec.email || "").toLowerCase() === email.toLowerCase()) {
         userId = rec.userId;
         name = rec.name || "";
-        // 缓存的是 users/ 目录文件名（f.name 含 .json），不是 UUID——users/ 键空间是邮箱哈希
-        await dbPut(bindCachePath(email), { file: f.name, at: Date.now() }, { encrypted: true }).catch(() => {});
+        /* 缓存的是 users/ 目录文件名（f.name 含 .json），不是 UUID——users/ 键空间是邮箱哈希。
+         * overwriteOnConflict：该键上可能已有一条负缓存，GitHub 通道裸 PUT 会 422。 */
+        await dbPut(bindCachePath(email), { file: f.name, at: Date.now() }, { encrypted: true, overwriteOnConflict: true }).catch(() => {});
         return true;
       }
+    }
+    /* 未命中写负缓存（不是「什么都没找到」就不缓存）：否则每次轮询都要重扫全部档案。
+     * overwriteOnConflict：GitHub 通道对已存在的键裸 PUT 返回 422，不覆盖的话
+     * 负缓存 at 永远停在首次写入、TTL 一过就永久失效（等于没修）。写失败不影响本次判定。
+     * 仅 readOk > 0 才写：目录为空/全读失败是通道或密钥问题，不是「该邮箱没注册」，
+     * 固化成 404 会误导排查。 */
+    if (readOk > 0) {
+      await dbPut(bindCachePath(email), { miss: true, at: Date.now() }, { encrypted: true, overwriteOnConflict: true }).catch(() => {});
+      /* 只在真正扫完一遍时记一次（负缓存把频率压到 10 分钟一次），让配置错误在日志里可见 */
+      logEvent({ ev: "open", msg: "bind-miss", scanned: files.length });
     }
     return false;
   };
@@ -127,13 +152,14 @@ export async function GET(req: NextRequest) {
     if (userId) {
       const rec = await dbGet<{ userId: string; email: string; name?: string }>(`users/${userId}.json`, { encrypted: true });
       if (rec) {
+        bound = true;
         email = rec.email || email;
         name = rec.name || "";
       } else {
-        await scanByEmail(); // env 填的是 UUID 或失效键 → 回落邮箱扫描
+        bound = await scanByEmail(); // env 填的是 UUID 或失效键 → 回落邮箱扫描
       }
     } else {
-      await scanByEmail();
+      bound = await scanByEmail();
     }
   } catch (e) {
     /* 绑定阶段读失败是基础设施故障，不能折叠成 404 误诊为「配置错误」（对齐快照读失败的 503 口径） */
@@ -153,14 +179,26 @@ export async function GET(req: NextRequest) {
   let goals: Goal[] = [];
   let knowledge: KnowledgeItem[] = [];
   let updatedAt: string | null = null;
+  let rec: DataRecord | null = null;
   try {
-    const rec = await dbGet<DataRecord>(`data/${userId}.json`, { encrypted: true });
+    rec = await dbGet<DataRecord>(`data/${userId}.json`, { encrypted: true });
     goals = rec?.data?.goals ?? [];
     knowledge = rec?.data?.knowledge ?? [];
     updatedAt = rec?.updatedAt ?? null;
   } catch (e) {
     logEvent({ ev: "open", msg: "data-failed", err: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: "云端数据读取失败" }, { status: 503 });
+  }
+  if (!bound && !rec) {
+    /* env 的 USER_ID 有值但解析不到用户（users/ 档案没命中、邮箱反查没命中或未配 EMAIL），
+     * 快照也读不到 → 显式 404。上面 `if (!userId)` 只挡「没值」，挡不住「有值但无效」：
+     * 原实现会继续走 data/<无效值>.json 得 null → 200 空任务列表，插件呈现「今日无事可做」，
+     * 部署者无从发现配置坏了（env 手误/换库后旧 userId 失效）——与本文件自己的原则
+     * （「配置缺失要显式失败」）相悖。注意：bound=false 但快照命中（直接填用户 UUID 兼容
+     * data/ 键的旧部署）仍照常放行；档案真实存在（bound=true）但还没同步过快照的新用户
+     * 也照常返回空态。 */
+    logEvent({ ev: "open", msg: "bind-unresolved", userId });
+    return Response.json({ error: "找不到绑定的用户（检查 MENTORA_OPEN_USER_ID / EMAIL）" }, { status: 404 });
   }
 
   const today = ymd(new Date(), OPEN_TZ);
@@ -170,13 +208,16 @@ export async function GET(req: NextRequest) {
   for (const g of goals) {
     if (!g || g.status !== "active" || !g.plan?.days) continue;
     const days = Object.values(g.plan.days);
+    /* d 元素脏数据防护（与下方 counts 的 !g、phases 的 ?. 同口径）：plan.days 的值可能为
+     * null/非对象（脏/旧快照经 sync 的 sanitize 直通），裸访问 d.status 抛 TypeError →
+     * 整个 GET 裸 500，插件「今日该做什么」整体不可用。 */
     const day =
-      days.find((d) => d.status === "active") ??
-      days.find((d) => d.status === "passed" && d.pendingUnlock);
+      days.find((d) => d?.status === "active") ??
+      days.find((d) => d?.status === "passed" && d.pendingUnlock);
     if (!day) continue;
     /* phases 缺失的旧快照此前会让整个 GET 500（days 有 ?.,phases 没有防护，口径不一） */
     const phase = g.plan.phases?.find((p) => p.id === day.phaseId);
-    const remainingDays = days.filter((d) => d.status === "active" || d.status === "locked").length;
+    const remainingDays = days.filter((d) => d?.status === "active" || d?.status === "locked").length;
     const deadlineLeft = g.deadline
       ? Math.round((new Date(g.deadline + "T00:00:00").getTime() - new Date(today + "T00:00:00").getTime()) / 86400000)
       : null;
@@ -187,7 +228,13 @@ export async function GET(req: NextRequest) {
       phase: phase?.title,
       dayId: day.id,
       title: day.title,
-      points: (day.knowledgePoints || []).slice(0, 4).map((k) => k.text),
+      /* k 元素脏数据防护（与 !g / counts 同口径）：knowledgePoints 元素可为 null/非对象
+       * （sync 的 sanitize 对 FIELDS 数组不做深层校验，任意 JSON 元素可经同步进入快照），
+       * 裸 k.text 抛 TypeError → 整个 GET 500。只收 text 为字符串的元素。 */
+      points: (day.knowledgePoints || [])
+        .slice(0, 4)
+        .filter((k) => k != null && typeof k.text === "string")
+        .map((k) => k.text),
       remainingDays,
       deadlineLeft,
       url: `/learn/${g.id}`,
@@ -214,8 +261,10 @@ export async function GET(req: NextRequest) {
     tasks: tasks.length,
     days: tasks.filter((t) => t.kind !== "review").length,
     reviewsDue: dueReviews.length,
-    activeGoals: goals.filter((g) => g.status === "active").length,
-    doneGoals: goals.filter((g) => g.status === "done").length,
+    /* 与上方任务循环的 !g 防护同口径：脏快照混入 null 元素时统计阶段抛 TypeError
+     * 会变裸 500（try 只包住读库段），插件「今日该做什么」整体不可用 */
+    activeGoals: goals.filter((g) => g && g.status === "active").length,
+    doneGoals: goals.filter((g) => g && g.status === "done").length,
   };
 
   return Response.json(

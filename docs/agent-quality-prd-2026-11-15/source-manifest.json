@@ -1,0 +1,76 @@
+{
+  "generatedAt": "2026-11-16T04:14:22.725Z",
+  "referenceCommit": "e827a976caf04aee9ba6d8d03486b7ee1c0524fd",
+  "referenceRoot": "D:/zcode/agent/output/xingyao-reference-2026-11-15",
+  "referenceFiles": [
+    {
+      "path": "frontend/src/components/MessageBubble.vue",
+      "sha256": "2055855b3744ed8358fc8e5fbf0eac8b16fc95d07829194cf8f9419c556255b2"
+    },
+    {
+      "path": "frontend/src/composables/useChatScroll.ts",
+      "sha256": "68c48f61e20eb35ea5b20f8153ee09d8c1878c8117474b1345cb89c9a98a96bf"
+    },
+    {
+      "path": "frontend/src/composables/useChatScroll.test.ts",
+      "sha256": "b45438f16f98d7ebbfe4f09b65097c54c7679c104938a50f437046313ae4f39c"
+    },
+    {
+      "path": "core/context_builder.py",
+      "sha256": "09bd14c40a50a4dac99b637fb9f07a5f776a2d9b2e30f45ee0358ea86d235032"
+    },
+    {
+      "path": "core/thinking_stream.py",
+      "sha256": "57adf5dbe2d728dedd69d88aa7f33cd5859b5ad44296daf6a617b639c288f02a"
+    },
+    {
+      "path": "core/reasoning_stream.py",
+      "sha256": "42bd6a1027dd00972ea2c576ff6c16e637b707cda507ed2d56012d2d8c68ee59"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "56838aff8923a70d9925b2b7874294b97e867c0128cd9c3369ac0335c6d62a44"
+    }
+  ],
+  "localRoot": "D:\\zcode\\agent\\mentora",
+  "localFiles": [
+    {
+      "path": "src/components/agent-home.tsx",
+      "sha256": "d3c0a125dde5867e29c656e18eba7882fc15f51dfedb0ca89e85d5386df42f2f"
+    },
+    {
+      "path": "src/components/agent-trace.tsx",
+      "sha256": "3df572d75a900e4e1beea0852696598cdb7eeb1aa6f6bdc2e8964d8088714ee4"
+    },
+    {
+      "path": "src/lib/agent/runner.ts",
+      "sha256": "2b0e246607f8bca9a6dfdd9b359d32cf520933f77e2197f19ecaf697951a62f3"
+    },
+    {
+      "path": "src/lib/agent/session-runtime.ts",
+      "sha256": "94360ee5be6d16c25a46d05ea231472e389948242e6f8f1388b459981510905d"
+    },
+    {
+      "path": "src/lib/ai/client.ts",
+      "sha256": "65b036d1f5403157d60d609e8ce66596bc1d34b00b68c0cb1652aef2f5e91abc"
+    },
+    {
+      "path": "src/lib/ai/prompts.ts",
+      "sha256": "ed85018fd6669134a4566a04620398a71711e75efcce0e04e22b966c71bf1c62"
+    },
+    {
+      "path": "src/lib/ai/prompts-lite.ts",
+      "sha256": "cdd95a37225ced54c4b58cc8638d4f985eed8b3abd8b707de0859a094df83467"
+    },
+    {
+      "path": "src/app/api/chat/route.ts",
+      "sha256": "fa4325ac82a1a47140d7565e676c43bd55506e4ebfd932d47b403b0e5cc11ccb"
+    },
+    {
+      "path": "src/lib/types.ts",
+      "sha256": "6138f8783a0a3de9cb58803ad4e7479d398db8c07d8ef392ded7ce67ee6a6735"
+    }
+  ],
+  "caseCount": 30,
+  "acceptanceCount": 35
+}

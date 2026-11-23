@@ -4,43 +4,13 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge, Button, Card, Input, Skeleton } from "@/components/ui";
 import { useAuth } from "@/lib/auth-client";
+import { adminOverviewSchema, type AdminOverview } from "@/lib/admin-overview-schema";
+import { pwHeaders, rememberPw, forgetPw } from "@/lib/admin-pw";
 import { ReadingExperiment } from "@/components/admin/reading-experiment";
 import { cn } from "@/lib/utils";
 import {
   AlertCircle, CheckCircle2, CircleDot, ExternalLink, Inbox, Lock, MessageSquare, RefreshCw, Users,
 } from "lucide-react";
-
-interface AdminUser {
-  userId: string;
-  email: string;
-  name: string;
-  avatar?: string;
-  createdAt: string;
-  lastSyncAt: string | null;
-  stats: { goals: number; knowledge: number; books: number; sessions: number; personas: number };
-}
-
-interface AdminFeedback {
-  number: number;
-  type: string;
-  content: string;
-  contact: string;
-  state: string;
-  createdAt: string;
-  url: string;
-}
-
-interface Overview {
-  you: { email: string; name: string };
-  users: AdminUser[];
-  feedback: AdminFeedback[];
-  feedbackConfigured: boolean;
-  /* 失败态必须能看见：旧实现把「GitHub 拉取失败」「单条读取失败」都折叠成空，
-   * 后台看起来一切正常（0 条反馈 / 用户凭空消失），运营完全无感。 */
-  feedbackError?: string | null;
-  skippedUsers?: number;
-  statsPartial?: number;
-}
 
 function fmtDate(iso: string | null): string {
   if (!iso || iso === "未知") return "—";
@@ -50,35 +20,21 @@ function fmtDate(iso: string | null): string {
   return d.toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" });
 }
 
-/* 后台密码记 sessionStorage：刷新/一键处理的请求统一带头，
- * 密码进入的非 admin 会话不再一刷新就 401 退回密码门、反馈操作永远失败 */
-const PW_KEY = "mentora-admin-pw";
-function pwHeaders(): Record<string, string> {
-  try {
-    const p = sessionStorage.getItem(PW_KEY);
-    return p ? { "x-admin-password": p } : {};
-  } catch {
-    return {};
-  }
-}
-function rememberPw(pw: string) {
-  try {
-    sessionStorage.setItem(PW_KEY, pw);
-  } catch { /* ignore */ }
-}
-function forgetPw() {
-  try {
-    sessionStorage.removeItem(PW_KEY);
-  } catch { /* ignore */ }
-}
+/* 后台密码只存内存（lib/admin-pw）：刷新/一键处理的请求统一带头，
+ * 密码进入的非 admin 会话在本页生命周期内不再反复 401 退回密码门。
+ * 不落 sessionStorage——它对同源任意脚本可读，明文主密码被 XSS 读走可在
+ * 任意设备永久重放；刷新重输一次是有意付出的成本。 */
 
 export default function AdminPage() {
   const { user, checking } = useAuth();
-  const [data, setData] = useState<Overview | null>(null);
+  const [data, setData] = useState<AdminOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<"users" | "feedback" | "reading">("users");
   const [processingId, setProcessingId] = useState<number | null>(null);
+  /* 一键处理失败要在反馈卡片就地可见：列表在长页底部，只落顶部错误卡时
+   * 视口内只有按钮文字弹回、状态徽标未变，容易被读成操作成功 */
+  const [feedbackErr, setFeedbackErr] = useState<{ number: number; message: string } | null>(null);
   /* 独立后台密码：不需要登录账号，输对密码直接看数据（也绕开一切登录跳转问题） */
   const [needPw, setNeedPw] = useState(false);
   const [pw, setPw] = useState("");
@@ -86,13 +42,17 @@ export default function AdminPage() {
   /* 一键处理/重开反馈（关/开 GitHub issue），改完本地同步状态 */
   const setFeedbackState = async (number: number, state: "open" | "closed") => {
     setProcessingId(number);
+    setFeedbackErr(null);
     try {
       const res = await fetch("/api/admin/feedback-state", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...pwHeaders() },
         body: JSON.stringify({ number, state }),
+        // 30s 硬超时同 load()：连接悬置时按钮不能永久停在 disabled「处理中…」
+        signal: AbortSignal.timeout(30_000),
       });
-      const j = await res.json();
+      // 网关 502 返回 HTML 时 res.json() 抛 SyntaxError，原始 message 不可读——与 login-form 同款防御
+      const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.error || "操作失败");
       setData((d) =>
         d
@@ -100,20 +60,28 @@ export default function AdminPage() {
           : d
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "操作失败");
+      const msg =
+        e instanceof Error && e.name === "TimeoutError"
+          ? "操作超时，请重试"
+          : e instanceof Error
+            ? e.message
+            : "操作失败";
+      setError(msg);
+      setFeedbackErr({ number, message: msg });
     } finally {
       setProcessingId(null);
     }
   };
 
   /* 会话管理员免密进入；否则落到底部密码门。401 一律不跳转，就地出密码框 */
-  const load = async (password?: string) => {
+  const load = async (password?: string, page = 1) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/admin/overview", {
+      const res = await fetch(`/api/admin/overview?page=${page}`, {
         cache: "no-store",
         headers: { ...pwHeaders(), ...(password ? { "x-admin-password": password } : {}) },
+        signal: AbortSignal.timeout(30_000),
       });
       const j = await res.json();
       if (!res.ok) {
@@ -124,15 +92,23 @@ export default function AdminPage() {
           setError(password ? "后台密码不对，再试一次" : null);
         } else {
           setError(j.error || "加载失败");
-          setData(null);
         }
       } else {
-        if (password) rememberPw(password);
-        setNeedPw(false);
-        setData(j as Overview);
+        /* 双端部署前后端版本可能不同步：成功 2xx 的形状也不设防的话，
+         * users/feedback 缺失/改名会在渲染处 TypeError（本路由无 error.tsx，整页白屏）。
+         * parse 失败就地降级为「加载失败」，页面可刷新重试，绝不炸掉。 */
+        const parsed = adminOverviewSchema.safeParse(j);
+        if (!parsed.success) {
+          setError("数据格式异常，请稍后重试");
+          setData(null);
+        } else {
+          if (password) rememberPw(password);
+          setNeedPw(false);
+          setData(parsed.data);
+        }
       }
-    } catch {
-      setError("网络错误");
+    } catch (error) {
+      setError(error instanceof Error && error.name === "TimeoutError" ? "读取超时，请重试" : "网络错误，请重试");
     } finally {
       setLoading(false);
     }
@@ -195,6 +171,8 @@ export default function AdminPage() {
 
   const openCount = data?.feedback.filter((f) => f.state === "open").length ?? 0;
   const syncedCount = data?.users.filter((u) => u.lastSyncAt).length ?? 0;
+  const pagination = data?.pagination;
+  const totalUsers = pagination?.totalUsers ?? data?.users.length;
 
   return (
     <div className="min-h-screen bg-bg">
@@ -217,7 +195,7 @@ export default function AdminPage() {
               {data?.you.email ?? user?.email ?? "管理后台"} · 用户数据与反馈总览，不用再去 GitHub 翻
             </p>
           </div>
-          <Button variant="outline" onClick={() => load()} loading={loading}>
+          <Button variant="outline" onClick={() => load(undefined, pagination?.page)} loading={loading}>
             {!loading && <RefreshCw className="size-4" />} 刷新
           </Button>
         </div>
@@ -232,8 +210,8 @@ export default function AdminPage() {
         {/* 统计卡 */}
         <div className="mt-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[
-            { label: "注册用户", value: data?.users.length ?? "—", icon: Users },
-            { label: "有云端数据", value: data ? syncedCount : "—", icon: RefreshCw },
+            { label: "注册用户", value: totalUsers ?? "—", icon: Users },
+            { label: pagination ? "本页有云端数据" : "有云端数据", value: data ? syncedCount : "—", icon: RefreshCw },
             { label: "反馈总数", value: data?.feedback.length ?? "—", icon: MessageSquare },
             { label: "待处理反馈", value: data ? openCount : "—", icon: Inbox },
           ].map((s) => (
@@ -251,7 +229,7 @@ export default function AdminPage() {
         <div className="mt-8 flex gap-1 border-b border-border">
           {(
             [
-              { id: "users", label: `用户（${data?.users.length ?? 0}）` },
+              { id: "users", label: `用户（${totalUsers ?? 0}）` },
               { id: "feedback", label: `反馈（${data?.feedback.length ?? 0}）` },
               { id: "reading", label: "阅读实验" },
             ] as const
@@ -272,7 +250,7 @@ export default function AdminPage() {
         </div>
 
         {/* 用户表 */}
-        {tab === "users" && !data && (
+        {tab === "users" && !data && loading && (
           <div className="mt-6 space-y-3">
             {/* 加载中必须是骨架而不是空表：空表会被读成「还没有注册用户」 */}
             <Skeleton className="h-16 rounded-2xl" />
@@ -331,12 +309,19 @@ export default function AdminPage() {
                   ))}
                   {data && data.users.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-4 py-12 text-center text-ink-dim">还没有注册用户</td>
+                      <td colSpan={5} className="px-4 py-12 text-center text-ink-dim">{totalUsers ? "本页没有可显示的用户" : "还没有注册用户"}</td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
+            {pagination && pagination.totalPages > 1 && (
+              <nav aria-label="用户列表分页" className="flex items-center justify-end gap-3 border-t border-border px-4 py-3 text-xs">
+                <Button variant="outline" size="sm" disabled={loading || pagination.page <= 1} onClick={() => void load(undefined, pagination.page - 1)}>上一页</Button>
+                <span className="text-ink-dim">{pagination.page} / {pagination.totalPages}</span>
+                <Button variant="outline" size="sm" disabled={loading || pagination.page >= pagination.totalPages} onClick={() => void load(undefined, pagination.page + 1)}>下一页</Button>
+              </nav>
+            )}
             <p className="border-t border-border bg-black/[0.02] px-4 py-2.5 text-[11px] leading-relaxed text-ink-dim/70">
               密码说明：所有密码经 scrypt 单向哈希存储，连数据库原文都不存在——这是行业标准（Google/Apple 也一样），任何人、任何后台都无法查看用户密码原文。
             </p>
@@ -345,9 +330,17 @@ export default function AdminPage() {
 
         {/* 反馈列表 */}
         {tab === "reading" && <ReadingExperiment />}
-        {tab === "feedback" && (
+        {tab === "feedback" && !data && (
           <div className="mt-6 space-y-3">
-            {data && !data.feedbackConfigured && (
+            {/* 与用户表同规范：加载中必须是骨架而不是空白，「没有反馈」要有明确文案兜底 */}
+            <Skeleton className="h-24 rounded-2xl" />
+            <Skeleton className="h-24 rounded-2xl" />
+            <Skeleton className="h-24 rounded-2xl" />
+          </div>
+        )}
+        {tab === "feedback" && data && (
+          <div className="mt-6 space-y-3">
+            {!data.feedbackConfigured && (
               <Card className="border-warn/25 bg-warn/[0.04] text-xs text-warn">
                 服务端未配置 GITHUB_TOKEN，反馈通道离线（用户提交会失败并本地排队）。
               </Card>
@@ -399,6 +392,9 @@ export default function AdminPage() {
                         : "重新打开"}
                   </button>
                 </div>
+                {feedbackErr?.number === f.number && (
+                  <p className="mt-2 text-xs text-bad">操作失败：{feedbackErr.message}（上方状态徽标未变，即未生效）</p>
+                )}
                 <p className="mt-2.5 whitespace-pre-wrap text-sm leading-relaxed text-ink">{f.content}</p>
                 {f.contact && (
                   <p className="mt-2 text-xs text-ink-dim">联系方式：{f.contact}</p>

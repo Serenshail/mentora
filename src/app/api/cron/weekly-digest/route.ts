@@ -2,11 +2,22 @@ import { NextRequest } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { dbList, dbGet } from "@/lib/server/db";
 import { sendEmail, hasSmtp } from "@/lib/server/mail";
+import { escapeHtml } from "@/lib/server/mail-html";
 import { logEvent } from "@/lib/server/config";
 import type { Goal, KnowledgeItem } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+/* 时间预算（与 cron/tick、cron/expiry-reminder 的 BUDGET_MS 纪律同源）：
+ * 两阶段循环若不做 deadline 检查，sendEmail 自带 10s 超时 + 5 路并发，最坏 wall time
+ * ≈ ceil(mails/5)×10s + 第一阶段全量读——opt-in 用户偏多或 SMTP 偏慢时整轮超过
+ * maxDuration=60 被平台强杀：本轮响应（含 ok/failed 统计）不会发出，尾部用户本周静默漏发
+ * 且运维面零痕迹（周级任务错一周）。预算耗尽就停下并 503/truncated 如实上报，
+ * 已发的不重发、未发的留待下周（宁可有痕迹的部分失败，不可无声的被强杀）。
+ * 取 30s：耗尽后剩余工作最多再烧一块的最坏时长（db 读块 ≈22s / 发信块 10s），
+ * 30s + 22s 仍留 8s+ 给响应，远低于 60s（expiry-reminder 用 20s 是因为单块起算更早）。 */
+const BUDGET_MS = 30_000;
 
 /* ============================================================
  * 每周复习召回邮件（Vercel Cron：周一 UTC 01:00 = 北京周一 09:00）
@@ -49,7 +60,14 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "forbidden" }, { status: 403 });
   }
   if (!hasSmtp()) {
-    return Response.json({ ok: false, error: "未配置发信服务（RESEND_API_KEY）", sent: 0 });
+    /* 必须带 503：这个分支的后果与下方「用户列表读取失败」完全相同（所有 digestWeekly
+     * 用户整周收不到邮件、连续多周），却以 200 成功态返回——Vercel Cron / 运维告警
+     * 只看状态码时该故障永久不可见（部署者已有人开周报但漏配 RESEND_API_KEY 的典型场景）。
+     * 与姊妹路由 cron/tick 的 degraded 503、下方 :500 同一口径。 */
+    return Response.json(
+      { ok: false, error: "未配置发信服务（RESEND_API_KEY）", sent: 0 },
+      { status: 503 }
+    );
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -59,6 +77,12 @@ export async function GET(req: NextRequest) {
   let sent = 0;
   let skipped = 0;
   let failed = 0;
+  const deadline = Date.now() + BUDGET_MS;
+  /* 预算截断如实上报：truncated=true 时必有用户没扫到/没发到（unscanned/unsent 给出规模），
+   * 结尾统一 503 告警——被平台强杀则连这份报告都不会有。 */
+  let truncated = false;
+  let unscanned = 0;
+  let unsent = 0;
 
   /* 用户列表读取失败不能吞成空库：那会让全员静默漏发且响应与「空库」同形，
    * 周级任务失败要沉默一整周。logEvent 留痕 + ok:false 如实上报。 */
@@ -84,6 +108,13 @@ export async function GET(req: NextRequest) {
   const mails: DigestMail[] = [];
   const CHUNK = 8;
   for (let i = 0; i < users.length; i += CHUNK) {
+    /* 第一阶段预算检查：耗尽就停，剩余用户数如实上报（isDue 式当天补发在这里不存在，
+     * 周级任务被静默截断 = 错一周，必须让调度方/监控看见）。 */
+    if (Date.now() > deadline) {
+      truncated = true;
+      unscanned = users.length - i;
+      break;
+    }
     await Promise.all(
       users.slice(i, i + CHUNK).map(async (f) => {
         try {
@@ -164,6 +195,13 @@ export async function GET(req: NextRequest) {
    * 单个中继挂起会拖死整轮——sendEmail 自带 10s 超时，这里 5 路并发兜住总量） */
   const SEND_CONCURRENCY = 5;
   for (let i = 0; i < mails.length; i += SEND_CONCURRENCY) {
+    /* 第二阶段预算检查：耗尽就停，已组装未发送的邮件数如实上报（绝不悄悄停——
+     * 那与「全部发完」在 ok:true 响应里不可区分，尾部用户静默漏发一整周）。 */
+    if (Date.now() > deadline) {
+      truncated = true;
+      unsent = mails.length - i;
+      break;
+    }
     await Promise.all(
       mails.slice(i, i + SEND_CONCURRENCY).map(async (m) => {
         try {
@@ -178,13 +216,22 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  if (truncated) {
+    logEvent({ route: "cron-digest", ev: "truncated", total: users.length, sent, skipped, failed, unscanned, unsent });
+    return Response.json(
+      {
+        ok: false,
+        truncated: true,
+        error: "时间预算耗尽，本周部分用户未处理（unscanned=未组装，unsent=已组装未发送）",
+        total: users.length,
+        sent,
+        skipped,
+        failed,
+        unscanned,
+        unsent,
+      },
+      { status: 503 }
+    );
+  }
   return Response.json({ ok: true, total: users.length, sent, skipped, failed });
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }

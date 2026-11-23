@@ -56,9 +56,26 @@ export function isBlocked(e: Entitlement): boolean {
  * 30 秒足够防止"刚续费还在报过期"，也不会让过期状态延迟太久。 */
 const MEMO_TTL_MS = 30_000;
 const memo = new Map<string, { at: number; value: Entitlement }>();
+/* 上限与 rate-limit.ts 的进程内桶同一套约束：自托管长驻进程下，每个历史用户
+ * 都会永久留一条，不设界就是标准内存泄漏。到上限先扫已过 TTL 的，仍超则按插入
+ * 顺序淘汰最旧的（memoSet 先 delete 再 set，活跃条目会移到队尾，近似 LRU）。 */
+const MAX_MEMO_ENTRIES = 20_000;
 
 function memoSet(email: string, value: Entitlement) {
-  memo.set(emailHash(email), { at: Date.now(), value });
+  const key = emailHash(email);
+  memo.delete(key);
+  memo.set(key, { at: Date.now(), value });
+  if (memo.size <= MAX_MEMO_ENTRIES) return;
+  const cutoff = Date.now() - MEMO_TTL_MS;
+  for (const [k, v] of memo) {
+    if (memo.size <= MAX_MEMO_ENTRIES) return;
+    if (v.at < cutoff) memo.delete(k);
+  }
+  // 突发涌入的全新用户可能都还在 TTL 内：按插入顺序继续淘汰，绝不让 Map 无界增长
+  for (const k of memo.keys()) {
+    if (memo.size <= MAX_MEMO_ENTRIES) return;
+    memo.delete(k);
+  }
 }
 
 export function clearEntitlementCache(email: string) {
@@ -89,25 +106,35 @@ const LOCK_STALE_MS = 30_000;
 const lockPath = (email: string) => `lock/sub/${emailHash(email)}.json`;
 
 /** 跨进程短锁：同一账号并发兑换时串行化读-改-写。
- *  抢不到锁且持锁方已超时 → 视为崩溃遗留，强制接管。 */
-async function withUserLock<T>(email: string, fn: () => Promise<T>): Promise<T> {
+ *  最多退避重试 3 次（250/500/750ms）；仍拿不到锁就抛错，绝不无锁裸跑——
+ *  裸跑的读-改-写经 dbPut(overwriteOnConflict) 后写覆盖先写，同账号并发兑换会
+ *  静默丢掉一方天数（资损）。调用方均已兜底：redeem 释放激活码转 503（同码
+ *  可重试）、referral/login best-effort 不阻断主流程、admin 转 503。
+ *  接管仅限「读到了锁、且其时间戳证明持锁方已超时」的崩溃遗留（读得到但没有
+ *  at 视为损坏残留，一并接管）；PutIfAbsent 返回 false 说明键还在，此刻
+ *  dbGet 读失败（prev=null）绝不能当成 stale 去删掉别人的活锁。
+ *  导出给 change-password 等其他整档读-改-写路径共用：档案写入互不串行时，
+ *  后写者会拿旧快照把先写者的字段整档覆盖回去（KV 通道 last-write-wins）。 */
+export async function withUserLock<T>(email: string, fn: () => Promise<T>): Promise<T> {
   const key = lockPath(email);
   let held = false;
   for (let attempt = 0; attempt < 3 && !held; attempt++) {
     held = await dbPutIfAbsent(key, { at: Date.now() }, { encrypted: true }).catch(() => false);
     if (!held) {
       const prev = await dbGet<{ at?: number }>(key, { encrypted: true }).catch(() => null);
-      if (!prev?.at || Date.now() - prev.at > LOCK_STALE_MS) {
+      const takeover = prev != null && (!prev.at || Date.now() - prev.at > LOCK_STALE_MS);
+      if (takeover) {
         await dbDelete(key, null).catch(() => {});
       } else {
         await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
       }
     }
   }
+  if (!held) throw new Error("会员档案锁占用中，请稍后重试");
   try {
     return await fn();
   } finally {
-    if (held) await dbDelete(key, null).catch(() => {});
+    await dbDelete(key, null).catch(() => {});
   }
 }
 
@@ -119,36 +146,41 @@ export interface GrantInput {
   licenseId: string;
 }
 
+/** 在**已持有** withUserLock 的前提下执行授予。供需要把「判定 + 授予」收进同一个
+ *  临界区的调用方复用（referral 的月度上限判定必须与实际授予原子化，否则并发注册潮
+ *  能整体击穿上限）。自己再取一次锁会嵌套死锁，故单独导出无锁版本。 */
+export async function grantDaysLocked(input: GrantInput): Promise<Entitlement> {
+  const path = `users/${emailHash(input.email)}.json`;
+  const rec = await dbGet<UserPlanRecord & { _sha?: string }>(path, { encrypted: true });
+  if (!rec) throw new Error("账号不存在");
+  const { _sha, ...clean } = rec;
+
+  const now = Date.now();
+  // 老用户（从没设过到期时间）= 永久有效：续费不把他降级成限时账号
+  const isLegacy = rec.planExpiresAt === undefined;
+  const current = rec.planExpiresAt ? Date.parse(rec.planExpiresAt) : NaN;
+  const base = Number.isNaN(current) ? now : Math.max(now, current);
+  const expiresAt = isLegacy ? null : new Date(base + input.days * 86_400_000).toISOString();
+
+  const next = {
+    ...clean,
+    ...(expiresAt ? { plan: input.plan, planExpiresAt: expiresAt } : {}),
+    planHistory: [
+      ...(rec.planHistory ?? []),
+      { licenseId: input.licenseId, days: input.days, at: new Date().toISOString() },
+    ].slice(-50),
+  };
+  await dbPut(path, next, { encrypted: true, sha: _sha ?? null, overwriteOnConflict: true });
+
+  const ent = computeEntitlement(next);
+  memoSet(input.email, ent);
+  return ent;
+}
+
 /** 在"当前到期时间"上累加天数；老用户（无到期时间）保持无限期，不降级。
  *  返回最新权益；写失败抛错，由调用方转成 503。 */
 export async function grantDays(input: GrantInput): Promise<Entitlement> {
-  return withUserLock(input.email, async () => {
-    const path = `users/${emailHash(input.email)}.json`;
-    const rec = await dbGet<UserPlanRecord & { _sha?: string }>(path, { encrypted: true });
-    if (!rec) throw new Error("账号不存在");
-    const { _sha, ...clean } = rec;
-
-    const now = Date.now();
-    // 老用户（从没设过到期时间）= 永久有效：续费不把他降级成限时账号
-    const isLegacy = rec.planExpiresAt === undefined;
-    const current = rec.planExpiresAt ? Date.parse(rec.planExpiresAt) : NaN;
-    const base = Number.isNaN(current) ? now : Math.max(now, current);
-    const expiresAt = isLegacy ? null : new Date(base + input.days * 86_400_000).toISOString();
-
-    const next = {
-      ...clean,
-      ...(expiresAt ? { plan: input.plan, planExpiresAt: expiresAt } : {}),
-      planHistory: [
-        ...(rec.planHistory ?? []),
-        { licenseId: input.licenseId, days: input.days, at: new Date().toISOString() },
-      ].slice(-50),
-    };
-    await dbPut(path, next, { encrypted: true, sha: _sha ?? null, overwriteOnConflict: true });
-
-    const ent = computeEntitlement(next);
-    memoSet(input.email, ent);
-    return ent;
-  });
+  return withUserLock(input.email, () => grantDaysLocked(input));
 }
 
 /** 后台设置到期时间（null = 改回永久有效） */

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
 import { verifySession } from "@/lib/server/auth";
 import { isAdminEmail } from "@/lib/admin-emails";
-import { clientIp, rateLimit } from "./rate-limit";
+import { clientIp, rateLimitPersistent } from "./rate-limit";
 
 /* 管理员双鉴权(与 overview 同源逻辑,供 feedback-state 等复用):
  *  1) 白名单账号会话; 2) 独立后台密码 x-admin-password 头(timing-safe 比对 ADMIN_PASSWORD)。
@@ -27,10 +27,13 @@ export async function authorizeAdminDetailed(req: NextRequest): Promise<AdminAut
   if (expected && given && timingSafeEq(given, expected)) {
     return { ok: true, email: "admin-password", name: "后台密码" };
   }
-  /* 密码通道失败尝试限流（只计失败，正常管理员零影响）：users/feedback-state 等
-   * 端点没有路由级限流，x-admin-password 裸爆破即数据丢失；进程内桶封顶单实例速率 */
+  /* 密码通道失败尝试限流（只计失败，正常管理员零影响）：x-admin-password 裸爆破即
+   * 数据访问权限丢失。必须用持久桶——进程内桶在 Vercel 多实例下每实例独立计数，
+   * 攻击者轮换源 IP / 命中不同实例即线性放大猜测速率；reading-metrics 等路由没有
+   * 路由级限流，这里是它们唯一的爆破防线。无远端 KV 时 rateLimitPersistent 自动
+   * 回退进程内桶（不阻断真实管理员）。 */
   if (expected && given) {
-    const allowed = rateLimit(`admin-pwfail/${clientIp(req)}`, {
+    const allowed = await rateLimitPersistent(`admin-pwfail/${clientIp(req)}`, {
       capacity: 15,
       refillPerSec: 0.25,
     });

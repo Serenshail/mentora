@@ -101,8 +101,38 @@ export async function POST(req: NextRequest) {
       if (!OK_TYPES.some((t) => type === t || (t === "text/plain" && type.startsWith("text/")))) {
         return Response.json({ error: `不支持的页面类型：${type || "未知"}` }, { status: 415 });
       }
-      const buf = await res.arrayBuffer();
-      const sliced = new Uint8Array(buf.slice(0, MAX_BYTES));
+      /* 流式读取、到 200KB 即断流：不能用 arrayBuffer() 整包缓冲后再截断——
+       * 超时只封读取时长、封不住流量，快速 CDN 的大文件能在 8s 窗口内灌入
+       * 数百 MB 打爆内存（自托管单进程 OOM / Vercel 函数超限被杀）。
+       * 截断语义不变：仍取前 MAX_BYTES 字节、非致命 UTF-8 解码。 */
+      const reader = res.body?.getReader();
+      const parts: Uint8Array[] = [];
+      let total = 0;
+      if (reader) {
+        try {
+          while (total < MAX_BYTES) {
+            const { done, value } = await reader.read();
+            if (done || !value || value.length === 0) break;
+            const room = MAX_BYTES - total;
+            if (value.length > room) {
+              parts.push(value.subarray(0, room));
+              total = MAX_BYTES;
+            } else {
+              parts.push(value);
+              total += value.length;
+            }
+          }
+        } finally {
+          /* 到限/读完/中途出错都断开底层连接：后续到达的字节不进内存 */
+          reader.cancel().catch(() => {});
+        }
+      }
+      const sliced = new Uint8Array(total);
+      let offset = 0;
+      for (const p of parts) {
+        sliced.set(p, offset);
+        offset += p.length;
+      }
       const html = new TextDecoder("utf-8", { fatal: false }).decode(sliced);
       const { title, text } = extractText(html);
       if (!text) return Response.json({ error: "页面没有可读正文" }, { status: 422 });

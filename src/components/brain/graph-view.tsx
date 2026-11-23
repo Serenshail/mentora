@@ -104,6 +104,9 @@ export function GraphView({
   const edgesRef = useRef<{ a: string; b: string }[]>([]);
   const camRef = useRef({ x: 0, y: 0, zoom: 1 }); // 相机：世界坐标偏移 + 缩放
   const hoverRef = useRef<string | null>(null);
+  /* 键盘焦点选中的节点：方向键按空间方向移动（虚线环标识），Enter 打开，Esc 取消。
+   * 此前图谱交互全是指针路径，「点击节点打开笔记」对键盘/运动障碍用户不可达。 */
+  const kbdSelRef = useRef<string | null>(null);
   const dragNodeRef = useRef<string | null>(null);
   const panRef = useRef<{ sx: number; sy: number; cx: number; cy: number } | null>(null);
   const downPtRef = useRef<{ x: number; y: number } | null>(null);
@@ -112,6 +115,19 @@ export function GraphView({
   const dirtyRef = useRef(true);
   const sizeRef = useRef({ w: 920, h: 560 });
   const countsRef = useRef({ nodes: 0, edges: 0 });
+  /* 画布底色跟随时段主题：全站底色由 <html data-period> 上的 --color-bg 决定
+   * （globals.css:454-458，app-shell.tsx 每 10 分钟 applyPeriodTheme），写死
+   * #fcfcfd 会让近 100vh 的图谱块在早读/晚间与周围页面出现可见色差。
+   * 按 data-period 值缓存，避免 render 每帧 getComputedStyle 触发样式重算。 */
+  const themeBgRef = useRef<{ key: string; color: string }>({ key: "\u0000", color: "#fcfcfd" });
+  const themeBg = () => {
+    const key = document.documentElement.getAttribute("data-period") ?? "";
+    if (themeBgRef.current.key !== key) {
+      const v = getComputedStyle(document.documentElement).getPropertyValue("--color-bg").trim();
+      themeBgRef.current = { key, color: v || "#fcfcfd" };
+    }
+    return themeBgRef.current.color;
+  };
   /* v17：HUD 展示值（节点/边计数、缩放百分比）从"渲染期读 ref"迁到 state。
    * React Compiler 禁止渲染读 ref——此前 zoom% 标签读 camRef，滚轮缩放时不会重渲染，
    * 显示是坏的（forceRender 黑客只覆盖数据变化，覆盖不到相机变化）。
@@ -155,6 +171,10 @@ export function GraphView({
       };
     });
     countsRef.current = { nodes: nodesRef.current.length, edges: edgeList.length };
+    /* 节点集合变化后，键盘选中可能已不在图里（删除/过滤）：及时清掉防幽灵环 */
+    if (kbdSelRef.current && !nodesRef.current.some((n) => n.id === kbdSelRef.current)) {
+      kbdSelRef.current = null;
+    }
     /* 仅当节点集合真的变了才整体重启布局；纯过滤（集合相同）只温和唤醒重绘，
      * 避免连续输入时把 CPU 全耗在无意义的重排上 */
     const setChanged =
@@ -180,8 +200,12 @@ export function GraphView({
     const physics = () => {
       const nodes = nodesRef.current;
       const edges = edgesRef.current;
-      if (nodes.length === 0) return;
       const alpha = alphaRef.current;
+      /* alpha 冷却必须在空图早退之前——否则 0 节点（新用户空库 /
+       * 搜索过滤零命中）时 needsPhysics = alpha > 0.02 永真，
+       * rAF 主循环 60fps 永不停歇，与文件头第 5 点「稳定后停止重绘」矛盾 */
+      alphaRef.current = alpha * 0.99;
+      if (nodes.length === 0) return;
 
       /* 斥力：网格分桶，只和邻近格子里的节点相互作用 */
       const CELL = 130;
@@ -240,19 +264,26 @@ export function GraphView({
         n.x += Math.max(-9, Math.min(9, n.vx));
         n.y += Math.max(-9, Math.min(9, n.vy));
       }
-      alphaRef.current = alpha * 0.99;
     };
 
     const render = () => {
       const { w, h } = sizeRef.current;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-        canvas.width = w * dpr;
-        canvas.height = h * dpr;
+      /* canvas.width/height 是 unsigned long：赋值小数会被截断存整。
+       * 若直接拿未取整的 w * dpr 做守卫（getBoundingClientRect 与
+       * calc(100vh - 170px) 都可能带小数，分数 DPR 更会放大），
+       * 下一帧比较「截断后的整数 !== 未取整的小数」恒为真，
+       * 动画/平移/滚轮期间每帧都重设 width/height（清空位图 + 可能重分配后备缓冲）。
+       * 目标尺寸先取整，守卫与赋值共用同一个整数即稳定。 */
+      const bw = Math.round(w * dpr);
+      const bh = Math.round(h * dpr);
+      if (canvas.width !== bw || canvas.height !== bh) {
+        canvas.width = bw;
+        canvas.height = bh;
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "#fcfcfd";
+      ctx.fillStyle = themeBg();
       ctx.fillRect(0, 0, w, h);
 
       const cam = camRef.current;
@@ -263,12 +294,16 @@ export function GraphView({
       ];
 
       const hover = hoverRef.current;
+      const kbdSel = kbdSelRef.current;
+      /* 指针 hover 与键盘选中共用一套「聚焦态」（邻居高亮/标签常显）；
+       * 指针优先，键盘选中在其无指针 hover 时生效 */
+      const focus = hover ?? kbdSel;
       let neighborSet: Set<string> | null = null;
-      if (hover) {
-        neighborSet = new Set([hover]);
+      if (focus) {
+        neighborSet = new Set([focus]);
         for (const e of edgesRef.current) {
-          if (e.a === hover) neighborSet.add(e.b);
-          if (e.b === hover) neighborSet.add(e.a);
+          if (e.a === focus) neighborSet.add(e.b);
+          if (e.b === focus) neighborSet.add(e.a);
         }
       }
 
@@ -281,7 +316,7 @@ export function GraphView({
         ctx.beginPath();
         ctx.moveTo(...toScreen(a.x, a.y));
         ctx.lineTo(...toScreen(b.x, b.y));
-        ctx.strokeStyle = active ? (hover ? "#8a8a92" : "#c9c9cf") : "#e4e4e9";
+        ctx.strokeStyle = active ? (focus ? "#8a8a92" : "#c9c9cf") : "#e4e4e9";
         ctx.lineWidth = (active ? 1.3 : 0.8) * Math.max(0.5, zoom);
         ctx.stroke();
       }
@@ -303,6 +338,14 @@ export function GraphView({
           ctx.lineWidth = 1.2 * Math.max(0.5, zoom);
           ctx.stroke();
           ctx.setLineDash([]);
+          if (hover === n.id || kbdSel === n.id) {
+            /* 未解析节点被 hover/键盘选中：外圈实线强调（本体是虚线虚影） */
+            ctx.beginPath();
+            ctx.arc(x, y, r + 3, 0, Math.PI * 2);
+            ctx.strokeStyle = "#1d1d1f";
+            ctx.lineWidth = 1.2;
+            ctx.stroke();
+          }
         } else {
           /* Obsidian 单色系：连接越多越黑，无彩色 */
           ctx.beginPath();
@@ -314,6 +357,13 @@ export function GraphView({
             ctx.strokeStyle = "#1d1d1f";
             ctx.lineWidth = 1.6;
             ctx.stroke();
+          } else if (kbdSel === n.id) {
+            /* 键盘选中环（虚线）：与指针 hover 实线环区分 */
+            ctx.strokeStyle = "#1d1d1f";
+            ctx.setLineDash([3, 2]);
+            ctx.lineWidth = 1.6;
+            ctx.stroke();
+            ctx.setLineDash([]);
           }
         }
         /* 标签：缩放足够大，或 hover/邻居时 */
@@ -321,7 +371,7 @@ export function GraphView({
           const label = n.title.length > 14 ? n.title.slice(0, 14) + "…" : n.title;
           ctx.font = `${11 * Math.max(0.85, zoom)}px ui-sans-serif, system-ui, sans-serif`;
           ctx.textAlign = "center";
-          ctx.fillStyle = hover === n.id ? "#1d1d1f" : active ? "#77777d" : "#c4c4ca";
+          ctx.fillStyle = focus === n.id ? "#1d1d1f" : active ? "#77777d" : "#c4c4ca";
           ctx.fillText(label, x, y + r + 12 * Math.max(0.85, zoom));
         }
         ctx.globalAlpha = 1;
@@ -458,7 +508,10 @@ export function GraphView({
       return;
     }
     const node = pickNode(sx, sy);
-    if (node?.id !== hoverRef.current) {
+    /* 判空要按 null 比较：pickNode 未命中返回 null，node?.id 是 undefined，
+     * `undefined !== null` 恒真会让鼠标划过空白处每次 mousemove 都置 dirty
+     * 并触发下一帧全量重绘（大图下 CPU 无法归零，违背文件头第 5 点）。 */
+    if ((node?.id ?? null) !== hoverRef.current) {
       hoverRef.current = node?.id ?? null;
       e.currentTarget.style.cursor = node ? "grab" : "default";
       dirtyRef.current = true;
@@ -523,6 +576,66 @@ export function GraphView({
     if (node) onOpen(node.id);
   };
 
+  /* 键盘替代路径：方向键按空间方向在可见节点间移动选中（无选中时从视野中心起走），
+   * Enter/Space 打开选中节点（与指针「点击节点打开笔记」同一 onOpen 入口），Esc 取消。
+   * 选中节点若在视口外，把相机居中过去，避免虚线环画在看不见的地方。 */
+  const onCanvasKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const nodes = nodesRef.current;
+    if (nodes.length === 0) return;
+    if (e.key === "Escape") {
+      if (kbdSelRef.current) {
+        kbdSelRef.current = null;
+        dirtyRef.current = true;
+      }
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      if (kbdSelRef.current) {
+        e.preventDefault();
+        onOpen(kbdSelRef.current);
+      }
+      return;
+    }
+    const dirs: Record<string, [number, number]> = {
+      ArrowRight: [1, 0],
+      ArrowLeft: [-1, 0],
+      ArrowDown: [0, 1],
+      ArrowUp: [0, -1],
+    };
+    const dir = dirs[e.key];
+    if (!dir) return;
+    e.preventDefault(); // 方向键默认滚动页面
+    const cam = camRef.current;
+    const cur = kbdSelRef.current ? nodes.find((n) => n.id === kbdSelRef.current) : null;
+    const origin = cur ? { x: cur.x, y: cur.y } : { x: cam.x, y: cam.y };
+    let best: SimNode | null = null;
+    let bestScore = Infinity;
+    for (const n of nodes) {
+      if (cur && n.id === cur.id) continue;
+      const dx = n.x - origin.x, dy = n.y - origin.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 1) continue;
+      const align = (dx * dir[0] + dy * dir[1]) / d; // 与按键方向的夹角余弦
+      if (align < 0.3) continue; // 只考虑大致同方向
+      const score = d / Math.max(0.3, align);
+      if (score < bestScore) {
+        bestScore = score;
+        best = n;
+      }
+    }
+    if (!best) return;
+    kbdSelRef.current = best.id;
+    const { w, h } = sizeRef.current;
+    const sx = (best.x - cam.x) * cam.zoom + w / 2;
+    const sy = (best.y - cam.y) * cam.zoom + h / 2;
+    if (sx < 0 || sy < 0 || sx > w || sy > h) {
+      cam.x = best.x;
+      cam.y = best.y;
+      syncStats();
+    }
+    dirtyRef.current = true;
+  };
+
   const rebuild = async () => {
     if (rebuilding) return;
     if (!confirm("扫描全部笔记正文，重建 [[双链]] 关系？\n\n解析不到目标标题的链接会建成「未解析链接」占位笔记（Obsidian 同款行为）；已有人工/AI 建立的链接保留。")) return;
@@ -561,7 +674,9 @@ export function GraphView({
         {panelOpen ? (
           <div className="space-y-2">
             <input
-              className="w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-[12px] outline-none focus:border-accent/50"
+              /* 触屏端保持 ≥16px：iOS Safari 聚焦 <16px 输入框会自动放大页面。
+               * sm 起桌面恢复面板原有的紧凑 12px（与 ui.tsx Input 的 16px→sm:text-sm 同口径）。 */
+              className="w-full rounded-lg border border-border bg-white px-2.5 py-1.5 text-[16px] sm:text-[12px] outline-none focus:border-accent/50"
               placeholder="搜索笔记标题/正文…"
               value={gQuery}
               onChange={(e) => setGQuery(e.target.value)}
@@ -632,8 +747,10 @@ export function GraphView({
       <canvas
         ref={canvasRef}
         role="img"
-        aria-label="知识图谱"
-        className="block w-full cursor-default touch-none rounded-2xl border border-border bg-[#fcfcfd]"
+        aria-label="知识图谱（方向键选择节点，回车打开笔记，Esc 取消选中）"
+        tabIndex={0}
+        onKeyDown={onCanvasKeyDown}
+        className="block w-full cursor-default touch-none rounded-2xl border border-border bg-[var(--color-bg)] focus:outline-none focus-visible:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/40"
         style={{ height: "calc(100vh - 170px)", minHeight: 480 }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

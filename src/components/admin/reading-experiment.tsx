@@ -1,11 +1,12 @@
 "use client";
 
 /* v26.1 G5：阅读实验面板（/admin 第三个 tab）。
- * 数据源 = /api/admin/reading-metrics（管理员鉴权同款 x-admin-password sessionStorage key）。
+ * 数据源 = /api/admin/reading-metrics（管理员鉴权同款 x-admin-password，经 lib/admin-pw 内存暂存）。
  * 展示：核心漏斗（按用户去重）/ 迁移六分类 / 留存与第二问题 / 流失原因 / 单用户行为路径。 */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Skeleton } from "@/components/ui";
+import { pwHeaders } from "@/lib/admin-pw";
 import { RefreshCw } from "lucide-react";
 
 interface Metrics {
@@ -46,40 +47,46 @@ const OUTCOME_LABELS: Record<string, { label: string; tone: "ok" | "warn" | "bad
   ungradable: { label: "无法判定", tone: "default" },
 };
 
-function pwHeaders(): Record<string, string> {
-  try {
-    const p = sessionStorage.getItem("mentora-admin-pw");
-    return p ? { "x-admin-password": p } : {};
-  } catch {
-    return {};
-  }
-}
-
 export function ReadingExperiment() {
   const [data, setData] = useState<Metrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openUser, setOpenUser] = useState<string | null>(null);
+  /* 卸载中止句柄：面板切走后立刻掐掉挂起的响应 */
+  const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    /* 本代码库客户端 fetch 的既有惯例：全部带硬超时（admin 面板家族 30s，
+     * feedback-widget 15s）。指标接口要聚合多用户留存查询，取 30s——否则自托管端
+     * 进程卡死/移动代理不 RST 时 loading 永不回落，面板只能整页刷新。
+     * AbortSignal.any 不存在的旧浏览器退回纯超时，不因此失效。 */
+    const timeout = AbortSignal.timeout(30_000);
+    const signal = typeof AbortSignal.any === "function" ? AbortSignal.any([ac.signal, timeout]) : timeout;
     try {
-      const res = await fetch("/api/admin/reading-metrics?days=30", { headers: pwHeaders() });
+      const res = await fetch("/api/admin/reading-metrics?days=30", { headers: pwHeaders(), signal });
       const json = (await res.json()) as Metrics & { error?: string };
       if (!res.ok || !json.ok) throw new Error(json.error || `${res.status}`);
-      setData(json);
+      if (!ac.signal.aborted) setData(json);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载失败");
+      if (ac.signal.aborted) return; // 卸载中止：不再写任何状态
+      setError(e instanceof Error ? (e.name === "TimeoutError" ? "加载超时，请重试" : e.message) : "加载失败");
     } finally {
-      setLoading(false);
+      if (abortRef.current === ac) abortRef.current = null;
+      if (!ac.signal.aborted) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     // 挪一拍：effect 同步 setState 是级联渲染红线（lint，login-form 先例）
     const t = setTimeout(() => void load(), 0);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      abortRef.current?.abort();
+    };
   }, [load]);
 
   if (loading && !data) return <Skeleton className="h-64 rounded-2xl bg-surface/60" />;
@@ -192,10 +199,12 @@ export function ReadingExperiment() {
       <Card className="p-4">
         <p className="text-xs font-semibold uppercase tracking-wider text-ink-dim">用户行为路径（匿名，近 30 事件）</p>
         <div className="mt-2 divide-y divide-border">
-          {data.users.map((u) => (
+          {data.users.map((u, idx) => (
             <div key={u.account}>
               <button
                 onClick={() => setOpenUser(openUser === u.account ? null : u.account)}
+                aria-expanded={openUser === u.account}
+                aria-controls={`reading-timeline-${idx}`}
                 className="flex w-full cursor-pointer items-center gap-2 py-2.5 text-left"
               >
                 <span className="tabular font-mono text-[11px] text-ink-dim">{u.account.slice(0, 12)}…</span>
@@ -204,7 +213,7 @@ export function ReadingExperiment() {
                 <span className="tabular ml-auto text-[11px] text-ink-dim/70">{u.timeline.length} 事件</span>
               </button>
               {openUser === u.account && (
-                <div className="space-y-1 pb-3">
+                <div id={`reading-timeline-${idx}`} className="space-y-1 pb-3">
                   {u.timeline.map((e, i) => (
                     <p key={i} className="text-[11px] text-ink-dim">
                       <span className="tabular text-ink-dim/60">{e.at.slice(5, 16)}</span> · {FUNNEL_LABELS[e.n] ?? e.n}

@@ -52,9 +52,13 @@ Page({
         getApp().globalData.user = user;
         return store.onLogin(user.userId).then(function (r) {
           /* 首次云端拉取失败要显式提示：旧实现照样报「登录成功」跳转，
-           * 新手机上落地只见空态，与账号为空不可区分。 */
+           * 新手机上落地只见空态，与账号为空不可区分。
+           * conflict（本机遗留改动 vs 他端已更新的云端）同样不能报「登录成功」了事：
+           * 两端都没被改动，用户必须知道去哪里手动选。 */
           if (r === "error") {
             util.toast("登录成功，但云端拉取失败，稍后可在「我的」里手动同步");
+          } else if (r === "conflict") {
+            util.toast("登录成功：云端已有他端更新，本机也有未推送改动，请在「我的 → 数据」里选择");
           } else {
             util.toast("登录成功", "success");
           }

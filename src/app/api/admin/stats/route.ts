@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { dbEventStats } from "@/lib/server/db";
+import { dbEventStats, eventStatsChannelReady } from "@/lib/server/db";
 import { authorizeAdmin } from "@/lib/server/admin-auth";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { logEvent } from "@/lib/server/config";
@@ -23,7 +23,15 @@ export async function GET(req: NextRequest) {
 
   const stats = await dbEventStats();
   if (!stats) {
-    return Response.json({ error: "事件库不可用（未配置任何事件存储通道）" }, { status: 503 });
+    /* dbEventStats 的 null 有两种来源（db.ts）：通道未配置（!hasRds/!hasD1）与
+     * 远端库故障（catch，已留 event-stats-failed 日志）。混成一句「未配置」会把
+     * 管理员引去检查 env，实际可能是远端库抖动——按 eventStatsChannelReady 分流，
+     * 故障分支同时落 logEvent，与上方成功/401 路径同口径留痕。 */
+    if (!eventStatsChannelReady()) {
+      return Response.json({ error: "事件库不可用（未配置任何事件存储通道）" }, { status: 503 });
+    }
+    logEvent({ ev: "admin", msg: "stats-events-fault", by: you.email });
+    return Response.json({ error: "事件库暂时不可用（事件存储通道故障），稍后再试" }, { status: 503 });
   }
   return Response.json(stats, { headers: { "Cache-Control": "no-store" } });
 }

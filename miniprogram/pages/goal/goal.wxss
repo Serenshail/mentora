@@ -45,3 +45,11 @@
   line-height: 1.5;
   color: var(--ink);
 }
+
+/* 天目录生成入口：目录是学习的前提，空阶段给一键生成 */
+.gen-catalog {
+  margin-top: 20rpx;
+  padding: 20rpx 22rpx;
+  border-radius: 16rpx;
+  background: var(--surface-2);
+}

@@ -1,6 +1,7 @@
 var store = require("../../utils/store.js");
-var api = require("../../utils/api.js");
 var md = require("../../utils/md.js");
+var util = require("../../utils/util.js");
+var sessionGuard = require("../../utils/session.js");
 
 Page({
   data: {
@@ -16,21 +17,27 @@ Page({
 
   onShow: function () {
     var that = this;
-    if (!store.state.userId && !api.hasSession()) {
-      wx.reLaunch({ url: "/pages/login/login" });
-      return;
-    }
-    that.render();
-    store.pullIfSafe(false).then(function () {
+    /* 旧守卫只判「有没有 cookie」：冷启动时 userId 仍为 null 就直接 render，
+     * 把「未加载」渲染成「第二大脑还是空的」；而 pullIfSafe 在 userId 为空时恒 skip，
+     * 数据永远不会自己到。统一走 session.ensure：有 cookie 先探测（me→onLogin），
+     * 恢复成功后再渲染，空态只在真的没有笔记时出现。 */
+    sessionGuard.ensure(function () {
       that.render();
+      store.pullIfSafe(false).then(function (r) {
+        that.render();
+        /* 拉取失败要可见：旧实现丢弃返回值，过期快照继续展示且无提示，
+         * 用户会在旧数据上继续编辑并回推，覆盖他端改动。 */
+        if (r === "error") util.toast("云端对齐失败，请检查网络");
+      });
     });
   },
 
   onPullDownRefresh: function () {
     var that = this;
-    store.pullIfSafe(true).then(function () {
+    store.pullIfSafe(true).then(function (r) {
       that.render();
       wx.stopPullDownRefresh();
+      if (r === "error") util.toast("同步失败，请检查网络后重试");
     });
   },
 

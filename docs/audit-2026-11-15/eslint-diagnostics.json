@@ -1,0 +1,695 @@
+[
+  {
+    "file": "docs/agent-experience-prd-2026-11-11/evidence/run-2026-11-11-a/l2b-script.mjs",
+    "line": 326,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'txt' is assigned a value but never used."
+  },
+  {
+    "file": "docs/agent-experience-prd-2026-11-11/evidence/run-2026-11-12-a/l2b-script.mjs",
+    "line": 50,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'releaseAllHolds' is defined but never used."
+  },
+  {
+    "file": "docs/agent-experience-prd-2026-11-11/evidence/run-2026-11-12-a/l2b-script.mjs",
+    "line": 365,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'txt' is assigned a value but never used."
+  },
+  {
+    "file": "docs/agent-experience-prd-2026-11-11/evidence/run-2026-11-12-b/l3-script.mjs",
+    "line": 125,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'log' is assigned a value but never used."
+  },
+  {
+    "file": "docs/agent-experience-prd-2026-11-11/evidence/run-2026-11-12-c/verify-agent-experience-l3.mjs",
+    "line": 125,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'log' is assigned a value but never used."
+  },
+  {
+    "file": "miniprogram/components/nav-bar/nav-bar.js",
+    "line": 19,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/components/nav-bar/nav-bar.js",
+    "line": 65,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/components/nav-bar/nav-bar.js",
+    "line": 78,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/config.js",
+    "line": 24,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/config.js",
+    "line": 40,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/config.js",
+    "line": 52,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/pages/profile/profile.js",
+    "line": 140,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'that' is assigned a value but never used."
+  },
+  {
+    "file": "miniprogram/utils/api.js",
+    "line": 16,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/api.js",
+    "line": 25,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/chat.js",
+    "line": 66,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/chat.js",
+    "line": 98,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/chat.js",
+    "line": 130,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/chat.js",
+    "line": 167,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/chat.js",
+    "line": 196,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/schema.js",
+    "line": 69,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/session.js",
+    "line": 57,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/session.js",
+    "line": 67,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/session.js",
+    "line": 76,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/session.js",
+    "line": 119,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/store.js",
+    "line": 55,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/store.js",
+    "line": 91,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/store.js",
+    "line": 99,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/store.js",
+    "line": 134,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/store.js",
+    "line": 153,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/store.js",
+    "line": 170,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/store.js",
+    "line": 534,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "miniprogram/utils/utf8.js",
+    "line": 14,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "public/poptext/pop-text.js",
+    "line": 35,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "public/poptext/pop-text.js",
+    "line": 204,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "scripts/check-f-vercel.mjs",
+    "line": 29,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'today' is defined but never used."
+  },
+  {
+    "file": "scripts/check-mp-wxml.cjs",
+    "line": 6,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'app' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/check-mp-wxml.cjs",
+    "line": 8,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'VOID' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/check-mp-wxml.cjs",
+    "line": 26,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'lines' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/check-mp-wxml.cjs",
+    "line": 30,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'consumed' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/check-mp-wxml.cjs",
+    "line": 32,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'raw' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/cross-page-continuity.mjs",
+    "line": 134,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'acct' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/cross-page-continuity.mjs",
+    "line": 169,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'edited' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/cross-page-continuity.mjs",
+    "line": 260,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'p1' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/eval-intent-ui.mjs",
+    "line": 28,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'TOOL_LABELS' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/eval-intent-ui.mjs",
+    "line": 96,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'approver' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/gen-mp-icons.mjs",
+    "line": 92,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'ring' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/mp-preview.cjs",
+    "line": 95,
+    "severity": 1,
+    "rule": null,
+    "message": "Unused eslint-disable directive (no problems were reported from 'no-new-func')."
+  },
+  {
+    "file": "scripts/mp-preview.cjs",
+    "line": 99,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "scripts/mp-preview.cjs",
+    "line": 116,
+    "severity": 1,
+    "rule": null,
+    "message": "Unused eslint-disable directive (no problems were reported from 'no-new-func')."
+  },
+  {
+    "file": "scripts/mp-preview.cjs",
+    "line": 119,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "scripts/mp-preview.cjs",
+    "line": 282,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'e' is defined but never used."
+  },
+  {
+    "file": "scripts/restore-users-from-github.mjs",
+    "line": 36,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'GH_HEADERS' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/smoke-mp-core.cjs",
+    "line": 59,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'streamChat' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/smoke-mp-core.cjs",
+    "line": 179,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'catGoalId' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/ui-e1-walkthrough.mjs",
+    "line": 141,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'acct' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/ui-e3-walkthrough.mjs",
+    "line": 96,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'t' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/ui-visual-check.mjs",
+    "line": 84,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'opened' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/ui-visual-check.mjs",
+    "line": 84,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'id' is defined but never used."
+  },
+  {
+    "file": "scripts/ui-visual-check.mjs",
+    "line": 97,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'email' is defined but never used."
+  },
+  {
+    "file": "scripts/verify-act-a03-a04.mjs",
+    "line": 527,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'approved' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/verify-agent-experience-l2b.mjs",
+    "line": 50,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'releaseAllHolds' is defined but never used."
+  },
+  {
+    "file": "scripts/verify-agent-experience-l2b.mjs",
+    "line": 365,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'txt' is assigned a value but never used."
+  },
+  {
+    "file": "scripts/verify-agent-experience-l3.mjs",
+    "line": 125,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'log' is assigned a value but never used."
+  },
+  {
+    "file": "src/app/api/admin/users/route.ts",
+    "line": 119,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_sha' is assigned a value but never used."
+  },
+  {
+    "file": "src/app/api/debug/provider-count/route.ts",
+    "line": 8,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_req' is defined but never used."
+  },
+  {
+    "file": "src/app/api/open/plan/route.ts",
+    "line": 3,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'emailHash' is defined but never used."
+  },
+  {
+    "file": "src/app/settings/page.tsx",
+    "line": 96,
+    "severity": 1,
+    "rule": "@next/next/no-location-assign-relative-destination",
+    "message": "Do not use `window.location.href` to navigate to internal Next.js pages. Use `redirect()` in the render phase, or `useRouter().push()` in Client Components' event handlers instead. See: https://nextjs.org/docs/messages/no-location-assign-relative-destination"
+  },
+  {
+    "file": "src/app/settings/page.tsx",
+    "line": 335,
+    "severity": 1,
+    "rule": "@next/next/no-location-assign-relative-destination",
+    "message": "Do not use `window.location.href` to navigate to internal Next.js pages. Use `redirect()` in the render phase, or `useRouter().push()` in Client Components' event handlers instead. See: https://nextjs.org/docs/messages/no-location-assign-relative-destination"
+  },
+  {
+    "file": "src/app/settings/page.tsx",
+    "line": 466,
+    "severity": 1,
+    "rule": "@next/next/no-location-assign-relative-destination",
+    "message": "Do not use `window.location.href` to navigate to internal Next.js pages. Use `redirect()` in the render phase, or `useRouter().push()` in Client Components' event handlers instead. See: https://nextjs.org/docs/messages/no-location-assign-relative-destination"
+  },
+  {
+    "file": "src/app/settings/page.tsx",
+    "line": 469,
+    "severity": 1,
+    "rule": "@next/next/no-location-assign-relative-destination",
+    "message": "Do not use `window.location.href` to navigate to internal Next.js pages. Use `redirect()` in the render phase, or `useRouter().push()` in Client Components' event handlers instead. See: https://nextjs.org/docs/messages/no-location-assign-relative-destination"
+  },
+  {
+    "file": "src/app/settings/page.tsx",
+    "line": 492,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'fileRef' is assigned a value but never used."
+  },
+  {
+    "file": "src/app/settings/page.tsx",
+    "line": 966,
+    "severity": 1,
+    "rule": "@next/next/no-location-assign-relative-destination",
+    "message": "Do not use `window.location.href` to navigate to internal Next.js pages. Use `redirect()` in the render phase, or `useRouter().push()` in Client Components' event handlers instead. See: https://nextjs.org/docs/messages/no-location-assign-relative-destination"
+  },
+  {
+    "file": "src/components/admin/reading-experiment.tsx",
+    "line": 99,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'independent' is assigned a value but never used."
+  },
+  {
+    "file": "src/components/app-shell.tsx",
+    "line": 25,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'OnboardingModal' is defined but never used."
+  },
+  {
+    "file": "src/components/app-shell.tsx",
+    "line": 29,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'PERIOD_LABEL' is defined but never used."
+  },
+  {
+    "file": "src/components/app-shell.tsx",
+    "line": 244,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'period' is assigned a value but never used."
+  },
+  {
+    "file": "src/components/brain/graph-view.tsx",
+    "line": 416,
+    "severity": 1,
+    "rule": "react-hooks/exhaustive-deps",
+    "message": "React Hook useEffect has a missing dependency: 'syncStats'. Either include it or remove the dependency array."
+  },
+  {
+    "file": "src/components/brain/note-workspace.tsx",
+    "line": 578,
+    "severity": 1,
+    "rule": "react-hooks/exhaustive-deps",
+    "message": "React Hook useCallback has a missing dependency: 'onModeChange'. Either include it or remove the dependency array. If 'onModeChange' changes too often, find the parent component that defines it and wrap that definition in useCallback."
+  },
+  {
+    "file": "src/components/error-boundary.tsx",
+    "line": 13,
+    "severity": 1,
+    "rule": null,
+    "message": "Unused eslint-disable directive (no problems were reported from 'react-hooks/set-state-in-effect')."
+  },
+  {
+    "file": "src/components/error-boundary.tsx",
+    "line": 43,
+    "severity": 1,
+    "rule": "@next/next/no-location-assign-relative-destination",
+    "message": "Do not use `window.location.assign()` to navigate to internal Next.js pages. Use `redirect()` in the render phase, or `useRouter().push()` in Client Components' event handlers instead. See: https://nextjs.org/docs/messages/no-location-assign-relative-destination"
+  },
+  {
+    "file": "src/components/onboarding-modal.tsx",
+    "line": 9,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'BookOpen' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/admin-licenses-expire-format.test.ts",
+    "line": 26,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_args' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/agent-review-2026-11-12-r1r3.test.ts",
+    "line": 68,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'ndjsonResponse' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/agent-user-facts.test.ts",
+    "line": 8,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'UserFact' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/app-shell-nav-partition.test.ts",
+    "line": 46,
+    "severity": 1,
+    "rule": null,
+    "message": "Unused eslint-disable directive (no problems were reported from 'no-eval')."
+  },
+  {
+    "file": "src/lib/__tests__/cross-page-continuity.test.ts",
+    "line": 1,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'vi' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/cross-page-continuity.test.ts",
+    "line": 1,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'beforeEach' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/entitlement-memo-bound.test.ts",
+    "line": 8,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_path' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/expiry-reminder-days.test.ts",
+    "line": 51,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'DAY' is assigned a value but never used."
+  },
+  {
+    "file": "src/lib/__tests__/expiry-reminder-days.test.ts",
+    "line": 109,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'subject' is assigned a value but never used."
+  },
+  {
+    "file": "src/lib/__tests__/mp-learn-create-abort.test.ts",
+    "line": 27,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'streamShouldReject' is assigned a value but never used."
+  },
+  {
+    "file": "src/lib/__tests__/mp-store-local-cache-failure.test.ts",
+    "line": 1,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'vi' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/mp-store-pull-inflight-dedupe.test.ts",
+    "line": 1,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'vi' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/tasks-taskid-guard.test.ts",
+    "line": 4,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'crypto' is defined but never used."
+  },
+  {
+    "file": "src/lib/__tests__/transfer-recheck.test.ts",
+    "line": 24,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'BookTransfer' is defined but never used."
+  },
+  {
+    "file": "src/lib/agent/tool-executors.ts",
+    "line": 13,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'classifyResource' is defined but never used."
+  },
+  {
+    "file": "src/lib/agent/tool-executors.ts",
+    "line": 1081,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'days' is assigned a value but never used."
+  },
+  {
+    "file": "src/lib/agent/tool-executors.ts",
+    "line": 2250,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'phaseId' is assigned a value but never used."
+  },
+  {
+    "file": "src/lib/auth-client.ts",
+    "line": 500,
+    "severity": 1,
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'cloudHasData' is defined but never used."
+  }
+]

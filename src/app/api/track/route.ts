@@ -3,6 +3,7 @@ import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { getSessionUser } from "@/lib/server/auth";
 import { dbEventSave, emailHash } from "@/lib/server/db";
 import { logEvent } from "@/lib/server/config";
+import { readTextBodyWithLimit } from "@/lib/server/body-limit";
 
 export const runtime = "nodejs";
 
@@ -21,8 +22,14 @@ export async function POST(req: NextRequest) {
   if (!(await rateLimitPersistent(`track:${clientIp(req)}`, { capacity: 60, refillPerSec: 1 }))) {
     return new Response(null, { status: 429 });
   }
-  const raw = await req.text().catch(() => "");
-  if (!raw || raw.length > 8_192) return new Response(null, { status: 400 });
+  /* 体积闸前置（与 chat/feedback 同款纪律）：track 匿名可达且是本组公开端点里限流最松的
+   * （60 突发/秒回填），旧的 req.text() 必然先把整个请求体缓冲进内存才量得出大小——
+   * 自托管（Caddy 默认不限 body）下 GB 级 chunked 包足以 OOM 杀掉单进程 Node
+   * （body-limit.ts 头注释的威胁模型）。readTextBodyWithLimit：声明闸 + 流式终闸，
+   * 超限即断流回 null → 413；空体/流中断回 "" → 400（与旧 catch(() => "") 语义一致）。 */
+  const raw = await readTextBodyWithLimit(req, 8_192);
+  if (raw === null) return new Response(null, { status: 413 });
+  if (!raw) return new Response(null, { status: 400 });
 
   let body: TrackBody;
   try {

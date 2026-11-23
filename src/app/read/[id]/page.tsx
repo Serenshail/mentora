@@ -1,4 +1,5 @@
 "use client";
+import { BookEvidenceGate } from "@/components/book-evidence-gate";
 
 /* RAG trace 目前仅控制台诊断（见 doSend 内 [rag-trace]）；入库等 /api/track 白名单扩容后接 track() */
 
@@ -11,9 +12,10 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Card, Input, Modal, PageHeader, Skeleton, Textarea } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
+import { PageBackBar } from "@/components/page-back-bar";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
-import { useChat, useHydrated } from "@/lib/use-chat";
+import { useChat, useHydrated, capChatHistoryByBytes } from "@/lib/use-chat";
 import { extractJson, insightsSchema, readingAddNodeSchema, readingAssessGenSchema, readingAssessGradeSchema, readingGoalSchema, readingGraduationSchema, readingPlanSchema, readingStrategySchema, readingTransferGenSchema, readingTransferGradeSchema, readingTransferRecheckGradeSchema, readingTransferRecheckSchema } from "@/lib/ai/client";
 import { READING_MODES, defaultReadingMode, type ReadingMode } from "@/lib/ai/reading-modes";
 import {
@@ -25,17 +27,20 @@ import {
   type AssessKind,
   type BookChapter,
   type BookReadStatus,
+  type BookTransfer,
   type DepositType,
   type ReadingGoal,
   type ReadingGoalType,
 } from "@/lib/types";
 import { ragContext, wikiRetrieve } from "@/lib/rag";
+import { alignAssessResults } from "@/lib/reading-assess";
 import { retrieveEnhanced } from "@/lib/rag-pipeline";
 import { trackReading } from "@/lib/track";
+import { useSyncStatus, retryCloudSync } from "@/lib/auth-client";
 import { cn, uid } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  ArrowLeft, Bot, BookMarked, BrainCircuit, Check, ChevronDown, CircleHelp, GraduationCap,
+  Bot, BookMarked, BrainCircuit, Check, ChevronDown, CircleHelp, GraduationCap,
   Layers, Lightbulb, MessagesSquare, PanelLeftClose, PanelLeftOpen, Plus, Route, ShieldCheck,
   Sparkles, Target, Trash2, X,
 } from "lucide-react";
@@ -59,13 +64,39 @@ const NODE_DOT: Record<BookChapter["status"], string> = {
   skipped: "border-border bg-black/[0.04] text-ink-dim/50",
 };
 
+/* 验收四级判定的统一展示口径（升级 PRD 3.5）：ungradable = 无法判定（问题歧义/答非所问，
+ * 责任在出题方、必须换题重考），不得压回「未过」把它与答错同等标红——
+ * 结果卡、最近验收摘要共用这两份映射，避免再出现两处口径漂移。 */
+type AssessLevel = "mastered" | "partial" | "not" | "ungradable";
+const ASSESS_LEVEL_LABELS: Record<AssessLevel, string> = {
+  mastered: "通过",
+  partial: "部分",
+  not: "未过",
+  ungradable: "无法判定",
+};
+const ASSESS_LEVEL_STYLES: Record<AssessLevel, string> = {
+  mastered: "border-ok/30 bg-ok/[0.05]",
+  partial: "border-warn/30 bg-warn/[0.05]",
+  /* 无法判定用 warn 色（题目歧义，非用户之过）；not 才是红色未过 */
+  ungradable: "border-warn/30 bg-warn/[0.05]",
+  not: "border-bad/25 bg-bad/[0.04]",
+};
+
 /* chatMode 在 store 里是 string：用守卫收敛，不用 as 断言掩盖脏值 */
 const isReadingMode = (v: string | undefined): v is ReadingMode =>
   READING_MODES.some((m) => m.id === v);
 
 export default function BookPage() {
-  const hydrated = useHydrated();
   const { id } = useParams<{ id: string }>();
+  const owner = useAppStore((s) => s._storeUserId);
+  return <BookDetail key={`${owner ?? "local"}:${id}`} id={id} owner={owner} />;
+}
+
+type TransferDraft = { task: string; why?: string; answer: string };
+type RecheckDraft = { transferId: string; task: string; answer: string };
+
+function BookDetail({ id, owner }: { id: string; owner: string | null }) {
+  const hydrated = useHydrated();
   const router = useRouter();
   const book = useAppStore((s) => s.books.find((b) => b.id === id));
   const updateBook = useAppStore((s) => s.updateBook);
@@ -85,11 +116,12 @@ export default function BookPage() {
   const updateBookLearning = useAppStore((s) => s.updateBookLearning);
   const setBookReadStatus = useAppStore((s) => s.setBookReadStatus);
 
-  const { messages, setMessages, pending, streaming, error, send, stop } = useChat();
+  const { messages, setMessages, pending, streaming, error, send, stop, isBusy } = useChat();
   const [input, setInput] = useState("");
   const [phases, setPhases] = useState<TracePhase[]>([]);
   const [currentChapterId, setCurrentChapter] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  /* undefined = 用户尚未做展开/收起选择（跟当前节点）；null = 显式收起；string = 显式展开 */
+  const [expandedId, setExpandedId] = useState<string | null | undefined>(undefined);
   const [extracting, setExtracting] = useState(false);
   /* 阅读路线（PRD 3.3）：手机默认收起，桌面默认展开 */
   const [planOpen, setPlanOpen] = useState(() =>
@@ -99,16 +131,40 @@ export default function BookPage() {
   const [panelOpen, setPanelOpen] = useState(() =>
     typeof window === "undefined" ? true : window.innerWidth >= 1280
   );
-  /* 认知地图（顶部）默认展开 */
-  const [mapOpen, setMapOpen] = useState(() =>
-    typeof window === "undefined" ? true : window.innerWidth >= 1024
-  );
+  /* 认知地图（顶部）：默认收起（PRD READ-01——地图按需展开，不挤占主要阅读区） */
+  const [mapOpen, setMapOpen] = useState(false);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  /* 云端快照尚未拉回时，「书不存在」是误导：新设备/新浏览器经书签或历史直达本页，
+   * 本地仓还没有这本书，而 bootSync（认证探测后才异步发起）的云端拉取慢于探测，
+   * 几秒后快照落地组件本会自愈——用户在这个窗口看到的却是终态错误，可能点「返回书架」离开。
+   * 已登录且首轮同步未落定时先呈现「同步中」，失败（error/conflict）则给出重试入口。
+   * bootSync 自带幂等去重（bootSyncRuns），与 useAutoPush 的并发调用互不冲突。 */
+  const [cloudSyncing, setCloudSyncing] = useState(false);
+  const syncStatus = useSyncStatus((s) => s.status);
+  useEffect(() => {
+    if (!hydrated || book) return;
+    let alive = true;
+    void (async () => {
+      const { useAuthStore, bootSync } = await import("@/lib/auth-client");
+      if (!alive || useAppStore.getState().books.some((b) => b.id === id)) return;
+      if (!useAuthStore.getState().user) return; // 未登录：本地仓就是全部真相，书不存在是真
+      setCloudSyncing(true);
+      try { await bootSync(); } catch { /* 失败态由 useSyncStatus 呈现 */ }
+      if (alive) setCloudSyncing(false);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, book?.id]);
   /* RAG 检索链路的中止器：useChat 的卸载 abort 管不到 send 之前的检索，
    * 卸载时不掐掉就是两次孤儿模型调用（改写+精排）。 */
   const ragAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => ragAbortRef.current?.abort(), []);
+  /* 检索在飞标记：streaming 只覆盖 send 之后的模型流，send 之前的 RAG 检索
+   * （预算可长达 20s，rag-pipeline）期间输入框未禁——旧实现此时再发一轮会把
+   * 上一轮检索 abort 掉，上一条提问在 aborted 检查处静默退出：既不落库也不上屏，
+   * 用户输入就此消失。检索期间不接收新一轮（发送按钮同步禁用给出可见反馈）。 */
+  const [retrieving, setRetrieving] = useState(false);
 
   /* ---- 目标（PRD 4.1）---- */
   const [goalEditing, setGoalEditing] = useState(false);
@@ -117,13 +173,18 @@ export default function BookPage() {
   const [goalIntent, setGoalIntent] = useState("");
   const [goalBackground, setGoalBackground] = useState("");
   const [goalAiBusy, setGoalAiBusy] = useState(false);
+  /* 编辑器里的目标是否来自 AI 推断的默认值（goal_confirmed 埋点的 inferred 语义）。
+   * ref 而非 state：不参与渲染。打开编辑器时继承 book.goal.inferred（旧目标仍是推断值），
+   * AI 推荐成功置 true，用户手动改任何字段置 false——「确认的是否为推断默认值」以
+   * 提交那一刻编辑器的来源为准，避免埋点常量 false 让漏斗分析误读。 */
+  const goalFromAiRef = useRef(false);
 
   /* ---- 三重验收（PRD 4.5）：按目标生成三题 → 作答 → 证据化判分 ---- */
   const [assess, setAssess] = useState<{ chapterId: string; questions: { kind: AssessKind; question: string }[]; answers: string[] } | null>(null);
   const [assessBusy, setAssessBusy] = useState(false);
   const [assessResult, setAssessResult] = useState<{ results: { kind: AssessKind; level: "mastered" | "partial" | "not" | "ungradable"; evidence: string; feedback: string }[]; suggestion?: string; chapterId: string } | null>(null);
   /* 升级 PRD 2.5 知识迁移：任务 → 独立作答 → 判定（区分会用/只会说） */
-  const [transfer, setTransfer] = useState<{ task: string; why?: string; answer: string } | null>(null);
+  const [transfer, setTransfer] = useState<TransferDraft | null>(null);
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferResult, setTransferResult] = useState<{ verdict: "used_correct" | "used_wrong" | "naming_only"; evidence: string; feedback: string; nextStep?: string } | null>(null);
   const [lastTransferId, setLastTransferId] = useState<string | null>(null);
@@ -133,8 +194,47 @@ export default function BookPage() {
   /* v26.1：学习会话 id（埋点关联）+ 迁移过程态（提示/复检）+ 流失问卷轻条 */
   const [sid] = useState(() => uid("rs"));
   const [hintShown, setHintShown] = useState(false);
-  const [recheck, setRecheck] = useState<{ transferId: string; task: string; answer: string } | null>(null);
+  const [recheck, setRecheck] = useState<RecheckDraft | null>(null);
   const [recheckBusy, setRecheckBusy] = useState(false);
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const practiceRef = useRef<HTMLDivElement>(null);
+  const practiceKey = `mentora-reading-practice:${owner ?? "local"}:${id}`;
+  useEffect(() => {
+    if (!hydrated) return;
+    const frame = requestAnimationFrame(() => {
+      try {
+        const draft = JSON.parse(localStorage.getItem(practiceKey) ?? "null") as {
+          transfer?: TransferDraft; recheck?: RecheckDraft; hintShown?: boolean;
+          assess?: { chapterId: string; questions: { kind: AssessKind; question: string }[]; answers: string[] };
+        } | null;
+        if (draft?.transfer) setTransfer(draft.transfer);
+        if (draft?.recheck) {
+          setRecheck(draft.recheck);
+          setLastTransferId(draft.recheck.transferId);
+        }
+        setHintShown(draft?.hintShown === true);
+        /* 三重验收作答同样持久化：三段 Textarea 写完误触返回/刷新即丢、只能对照可复用的
+         * 题目重写——与 transfer/recheck 同等待遇。指向已不存在章节（路线重排换 id）的
+         * 僵尸草稿不恢复，避免占位且无法提交。 */
+        if (draft?.assess) {
+          const chapterExists = useAppStore.getState().books
+            .find((b) => b.id === id)?.chapters.some((c) => c.id === draft.assess!.chapterId);
+          if (chapterExists) setAssess(draft.assess);
+        }
+      } catch { /* A missing or unavailable draft leaves the practice panel empty. */ }
+      setDraftLoaded(true);
+    });
+    return () => cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, practiceKey]);
+  useEffect(() => {
+    if (!draftLoaded) return;
+    try {
+      if (transfer || recheck || assess) localStorage.setItem(practiceKey, JSON.stringify({ transfer, recheck, hintShown, assess }));
+      else localStorage.removeItem(practiceKey);
+    } catch { /* The in-page draft remains available. */ }
+  }, [draftLoaded, practiceKey, transfer, recheck, hintShown, assess]);
+  const scrollToPractice = () => requestAnimationFrame(() => practiceRef.current?.scrollIntoView({ block: "start" }));
   const [exitSurvey, setExitSurvey] = useState(false);
   const [exitReason, setExitReason] = useState<string>("");
   useEffect(() => {
@@ -154,6 +254,19 @@ export default function BookPage() {
   /* ---- 路线重生成 / 加节点 ---- */
   const [regenBusy, setRegenBusy] = useState(false);
   const [routeMenuOpen, setRouteMenuOpen] = useState(false);
+  /* 两个弹出菜单（路线选项/对话模式）的 Esc 关闭：与设计系统为对话框确立的基线一致
+   * （ui.tsx Modal 无障碍补齐含 Esc）。两个菜单共用一个监听，挂载期才生效。 */
+  useEffect(() => {
+    if (!routeMenuOpen && !modeMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setRouteMenuOpen(false);
+        setModeMenuOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [routeMenuOpen, modeMenuOpen]);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
   const [addNodeInterest, setAddNodeInterest] = useState("");
   const [addNodeBusy, setAddNodeBusy] = useState(false);
@@ -162,18 +275,34 @@ export default function BookPage() {
   /* AI 策略推荐：每节点只调一次 */
   const strategyTried = useRef<Set<string>>(new Set());
 
+  /* 自动滚到底：只在新增消息时做平滑滚动（流式期间 pending 每 token 变一次，
+   * 若把它放进依赖会每 token 触发一次 smooth scrollIntoView，反复重启动画并叠加
+   * Markdown 重排，低端机明显卡顿）。流式增量用 rAF 合并成每帧一次即时滚动跟随。 */
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, pending]);
-
-  // 恢复该书的历史对话（每本书一次；依赖带 book.id——云端数据晚到时补挂）
-  const restored = useRef(false);
+  }, [messages.length]);
   useEffect(() => {
-    if (restored.current || !hydrated || !book) return;
-    restored.current = true;
-    if (book.chat.length > 0) setMessages(book.chat);
+    if (!pending) return;
+    const rid = requestAnimationFrame(() => bottomRef.current?.scrollIntoView());
+    return () => cancelAnimationFrame(rid);
+  }, [pending]);
+
+  /* 恢复该书的历史对话。以「书 id + 条数 + 末条 id」为签名，而不是一次性置位：
+   * 云端 bootSync / 多标签 adopt 会用整份快照替换 books（store.ts importData:books=clean.books??s.books、
+   * adopt:st.books??cur.books），此时 book.id 不变但 chat 可能更新——旧实现只在首次挂载恢复，
+   * 晚到的对话永远补不上，注释宣称的「云端数据晚到时补挂」实际只覆盖「书籍本身晚到」。
+   * 本页正在流式输出、或已有比 store 更长的本地会话时不回灌，避免盖掉在途对话。 */
+  const restoredChatSig = useRef<string | null>(null);
+  useEffect(() => {
+    if (!hydrated || !book) return;
+    const chat = book.chat;
+    const sig = `${book.id}:${chat.length}:${chat[chat.length - 1]?.id ?? ""}`;
+    if (restoredChatSig.current === sig) return;
+    if (streaming || messages.length > chat.length) return;
+    restoredChatSig.current = sig;
+    if (chat.length > 0) setMessages(chat);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, book?.id]);
+  }, [hydrated, book?.id, book?.chat, streaming]);
 
   /* 阅读状态机起点：进页即"阅读中"（未开始→阅读中） */
   useEffect(() => {
@@ -218,6 +347,7 @@ export default function BookPage() {
    * ⚠️ 必须放在所有提前 return 之前——hook 顺序在渲染间不能变（v10.4 血泪教训）。 */
   useEffect(() => {
     if (!hydrated || !book || !chapter) return;
+    if (book.verification !== "verified" && !(book.verification === "user_material" && book.pastedText?.trim())) return;
     if (book.chatMode) return;
     if (strategyTried.current.has(chapter.id)) return;
     strategyTried.current.add(chapter.id);
@@ -257,11 +387,49 @@ export default function BookPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, chapter?.id, book?.id]);
 
-  if (!hydrated) return <Skeleton className="h-40 rounded-2xl bg-surface/60" />;
+  if (hydrated && book && book.verification !== "verified" && !(book.verification === "user_material" && book.pastedText?.trim())) return <BookEvidenceGate book={book} />;
+  if (!hydrated) {
+    /* 水合骨架形状对齐真实工作台（返回栏 + 标题卡 + 三栏），加载完成布局不跳动；
+     * 旧实现只有一块 h-40 灰条，水合完成整页展开、且慢网下数秒无任何可导航上下文
+     * （ui.tsx Skeleton 规则：形状必须匹配真实内容）。 */
+    return (
+      <div>
+        <Skeleton className="h-9 rounded-lg bg-surface/60" />
+        <Skeleton className="mt-4 h-24 rounded-2xl bg-surface/60" />
+        <div className="mt-6 grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_290px]">
+          <Skeleton className="hidden h-96 rounded-2xl bg-surface/60 lg:block" />
+          <div className="space-y-4">
+            <Skeleton className="h-20 rounded-2xl bg-surface/60" />
+            <Skeleton className="h-72 rounded-2xl bg-surface/60" />
+          </div>
+          <Skeleton className="hidden h-96 rounded-2xl bg-surface/60 xl:block" />
+        </div>
+      </div>
+    );
+  }
   if (!book) {
+    /* 云端首轮同步还没落定：不是「不存在」，是「还没到」。给同步中骨架，别把用户推走。 */
+    if (cloudSyncing) {
+      return (
+        <div className="py-20 text-center text-ink-dim">
+          <p className="flex items-center justify-center gap-2 text-sm">
+            <span className="size-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            正在从云端同步这本书…
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="py-20 text-center text-ink-dim">
         书不存在。
+        {syncStatus === "error" && (
+          <p className="mt-3 text-xs">
+            云端同步失败了——这本书可能还没拉回来。
+            <Button variant="outline" className="ml-3" onClick={() => void retryCloudSync()}>
+              重试同步
+            </Button>
+          </p>
+        )}
         <Button variant="outline" className="ml-3" onClick={() => router.push("/learn?tab=read")}>
           返回书架
         </Button>
@@ -288,6 +456,7 @@ export default function BookPage() {
       {
         title: book.title,
         author: book.author,
+        materialScope: book.verification === "user_material" ? "此条仅为用户提供的片段，依据 pastedExcerpt 回答。不要推断材料之外的书目、作者或章节" : undefined,
         mapCore: map ? { problem: map.coreProblem, stance: map.authorStance } : null,
         readingGoal: book.goal ? { primary: book.goal.primary, secondary: book.goal.secondary, intent: book.goal.intent } : null,
         planSummary: book.planSummary,
@@ -308,17 +477,35 @@ export default function BookPage() {
       1
     );
 
-  const doSend = () => {
-    const text = input.trim();
-    if (!text || streaming) return;
-    setInput("");
+  const doSend = () => sendReadingQuestion(input.trim());
+
+  const unanswered = book.chat.at(-1);
+  const sendReadingQuestion = (text: string, retry = false) => {
+    if (!text || streaming || retrieving || isBusy() || ragAbortRef.current) return;
+    const rac = new AbortController();
+    ragAbortRef.current = rac;
+    const store = useAppStore.getState();
+    const account = store._storeUserId;
+    const storedBook = store.books.find((item) => item.id === book.id);
+    if (!storedBook) {
+      ragAbortRef.current = null;
+      return;
+    }
+    /* 长聊书防 413：BOOK_CHAT_MAX=300 只限条数不限字节，整份 chat 原样发会把请求体
+     * 顶过 /api/chat 的 1MB 硬闸（route.ts readTextBodyWithLimit），此后每轮发送与
+     * 「继续回答」重试都固定失败且无恢复入口。按字节从最新往回裁剪，本地消息不受影响。 */
+    let history = capChatHistoryByBytes(storedBook.chat);
+    if (!retry) {
+      const user = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
+      setInput("");
+      addBookMsg(book.id, user);
+      history = [...history, user];
+      setMessages(history);
+    }
+    setRetrieving(true);
     void (async () => {
-      /* UI 状态规范（R1/R2/R3）：检索阶段可见，否则用户以为页面卡死 */
       const t0 = performance.now();
-      setPhases([{ label: "检索笔记", state: "running" }]);
-      ragAbortRef.current?.abort(); // 上一轮检索还在飞：掐掉，防并发双跑
-      const rac = new AbortController();
-      ragAbortRef.current = rac;
+      setPhases([{ label: "查找相关笔记", state: "running" }]);
       const notes = useAppStore
         .getState()
         .knowledge.filter((k) => !(k.tags ?? []).includes("MOC"))
@@ -327,7 +514,6 @@ export default function BookPage() {
           links: k.links, version: k.version, updatedAt: k.updatedAt, tags: k.tags,
         }));
       let ragCtx = "";
-      let ragFailed = false;
       try {
         const enhanced = await retrieveEnhanced(
           text,
@@ -335,10 +521,12 @@ export default function BookPage() {
           3,
           { context: `${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`.trim(), signal: rac.signal }
         );
-        console.info("[rag-trace]", { task: "reading-chat", ...enhanced.trace });
+        if (process.env.NODE_ENV !== "production") {
+          /* 诊断用：trace.rewriteQueries 由用户原话改写而来，不得随生产构建输出到用户控制台 */
+          console.info("[rag-trace]", { task: "reading-chat", ...enhanced.trace });
+        }
         ragCtx = enhanced.context;
       } catch {
-        ragFailed = true;
         ragCtx = ragContext(
           wikiRetrieve(
             `${text} ${chapter?.focusQuestion ?? ""} ${chapter?.coreIdea ?? ""}`,
@@ -347,25 +535,23 @@ export default function BookPage() {
           )
         );
       }
-      if (rac.signal.aborted) return; // 已卸载/被新一轮取代：不再落库、不再 send
+      if (rac.signal.aborted || useAppStore.getState()._storeUserId !== account) return;
       const t1 = performance.now();
       setPhases([
         {
-          label: "检索笔记",
-          state: ragFailed ? "failed" : "done",
+          label: "查找相关笔记",
+          state: "done",
           durationMs: t1 - t0,
-          detail: ragFailed ? "增强检索失败，已回退基础检索" : ragCtx ? "已带上你的相关笔记" : "没有相关笔记",
+          detail: ragCtx ? "已找到可参考的笔记" : undefined,
         },
         { label: "思考回答", state: "running" },
       ]);
-      /* 先落库用户消息：send 失败时不丢这轮提问 */
-      addBookMsg(book.id, { id: uid("m"), role: "user", content: text, at: new Date().toISOString() });
       const p = send({
         args: { bookCtx: bookCtx(), ragCtx, mode: activeMode, modeSwitch: book.modeJustSwitched === true },
-        userText: text,
+        history,
         task: "reading-chat",
         onDone: (full) => {
-          if (!full) return;
+          if (!full.trim() || rac.signal.aborted || useAppStore.getState()._storeUserId !== account) return;
           addBookMsg(book.id, { id: uid("m"), role: "assistant", content: full, at: new Date().toISOString() });
           if (book.modeJustSwitched) updateBook(book.id, { modeJustSwitched: false });
         },
@@ -383,6 +569,9 @@ export default function BookPage() {
       );
     })().catch(() => {
       setPhases((prev) => prev.map((x) => (x.state === "running" ? { ...x, state: "failed" } : x)));
+    }).finally(() => {
+      if (ragAbortRef.current === rac) ragAbortRef.current = null;
+      setRetrieving(false);
     });
   };
 
@@ -393,6 +582,8 @@ export default function BookPage() {
     setGoalSecondary(book.goal?.secondary ?? []);
     setGoalIntent(book.goal?.intent ?? "");
     setGoalBackground(book.goal?.background ?? "");
+    /* 表单初值继承自 book.goal：旧目标本身就是推断默认值时，原样确认仍算 inferred */
+    goalFromAiRef.current = !!book.goal?.inferred;
     setGoalEditing(true);
   };
 
@@ -406,10 +597,12 @@ export default function BookPage() {
       secondary: goalSecondary.filter((g) => g !== goalPrimary),
       intent: goalIntent.trim() || undefined,
       background: goalBackground.trim() || undefined,
+      /* inferred 随保存路径写入：埋点与 goal.inferred（1298 行「AI 推断的默认目标」提示）共用一个真相 */
+      inferred: goalFromAiRef.current,
       setAt: new Date().toISOString(),
     };
     const changed = book.goal?.primary !== goal.primary;
-    trackReading("goal_confirmed", { bookId: book.id, goal: goal.primary, inferred: !!goal.inferred });
+    trackReading("goal_confirmed", { bookId: book.id, goal: goal.primary, inferred: goal.inferred === true });
     setBookGoal(book.id, goal);
     setGoalEditing(false);
     if (changed && book.chapters.length > 0) {
@@ -434,6 +627,7 @@ export default function BookPage() {
         onDelta: () => {},
       });
       const parsed = readingGoalSchema.parse(extractJson(full));
+      goalFromAiRef.current = true;
       setGoalPrimary(parsed.primary);
       setGoalSecondary((parsed.secondary ?? []).filter((g): g is ReadingGoalType => g !== parsed.primary));
       if (parsed.reason) toast(parsed.reason);
@@ -461,6 +655,7 @@ export default function BookPage() {
         task: "reading-plan",
         args: {
           desc: buildDesc(),
+          materialOnly: book.verification === "user_material",
           goal: book.goal
             ? {
                 primary: READING_GOAL_LABELS[book.goal.primary].label,
@@ -475,6 +670,14 @@ export default function BookPage() {
         onDelta: () => {},
       });
       const plan = readingPlanSchema.parse(extractJson(full));
+      /* 与 agent 路径（tool-executors.ts rebuild_reading_route 2228-2230）同纪律：先快照
+       * 旧路线再写入。regenerateBookRoute 会给新章节全换新 id、旧 chapters 整组丢弃，
+       * 不快照则 routeHistory 里没有旧路线，restore_book_route 无法回滚这次手动重排——
+       * 同一功能两条入口行为不一致，agent 侧还向用户承诺「旧路线已存入历史（可恢复）」。 */
+      useAppStore.getState().snapshotBookRoute(
+        book.id,
+        `手动重排为${routeType === "full" ? "完整" : routeType === "core" ? "核心" : "目标导向"}路线`
+      );
       regenerateBookRoute(book.id, {
         map: plan.map ? { ...plan.map, generatedAt: new Date().toISOString() } : undefined,
         planSummary: plan.planSummary,
@@ -496,7 +699,7 @@ export default function BookPage() {
       setCurrentChapter(null);
       setExpandedId(null);
       trackReading("roadmap_generated", { bookId: book.id, routeType, nodes: plan.chapters.length, source: "regenerate" });
-      toast.success(`路线已按「${routeType === "full" ? "完整" : routeType === "core" ? "核心" : "目标导向"}」重排。历史验收与沉淀都在。`);
+      toast.success(`路线已按「${routeType === "full" ? "完整" : routeType === "core" ? "核心" : "目标导向"}」重排。旧路线已存入历史（可恢复）；历史验收与沉淀都在。`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "重生成失败——原路线没动。");
     } finally {
@@ -539,7 +742,18 @@ export default function BookPage() {
         id: uid("ch"),
         status: "todo",
       };
-      updateBook(book.id, { chapters: [...book.chapters, node] });
+      /* 写回前重读最新 books：本调用要等 10-60s 的 LLM，等待期间云端 bootSync /
+       * 多标签 adopt 会整份替换 books（本页 222-226 行注释自认），渲染闭包里的
+       * book.chapters 是发起请求那次的快照——用它整组写回会把等待期间其他来源
+       * 带来的章节变更（新增/移动/状态推进）静默回滚。sendReadingQuestion 已有
+       * 先重读的先例（384-389 行），agent 路径更有 EX-15 签名冲突检测；手动路径
+       * 至少做到不拿旧数组覆盖新数据。书已不存在则如实报错、不写入。 */
+      const cur = useAppStore.getState().books.find((b) => b.id === book.id);
+      if (!cur) {
+        toast.error("书已不存在（可能已在别处删除），本次加的节点没有写入。");
+        return;
+      }
+      updateBook(book.id, { chapters: [...cur.chapters, node] });
       setAddNodeOpen(false);
       setAddNodeInterest("");
       toast.success(`已加节点「${node.title}」，可在路线上调整位置。`);
@@ -559,6 +773,11 @@ export default function BookPage() {
 
   const openAssess = async (c: BookChapter) => {
     if (assessBusy) return;
+    /* assess 是全局单份 state：在别的节点已有未提交作答时出题会整体覆盖，作答无声丢失。
+     * 覆盖前明确确认（跨节点点击「开始验收」是常见误触路径）。 */
+    if (assess && assess.chapterId !== c.id && assess.answers.some((a) => a.trim())) {
+      if (!confirm("你在另一个节点还有没提交的验收作答，开始新验收会丢掉它。继续？")) return;
+    }
     setAssessBusy(true);
     setAssessResult(null);
     try {
@@ -615,9 +834,10 @@ export default function BookPage() {
         onDelta: () => {},
       });
       const parsed = readingAssessGradeSchema.parse(extractJson(full));
-      const results = parsed.results
-        .slice(0, assess.questions.length)
-        .map((r) => ({ kind: r.kind, level: r.level, evidence: r.evidence ?? "", feedback: r.feedback ?? "" }));
+      /* 判分结果与出题逐题按 kind 对齐（见 lib/reading-assess.ts：schema 只保证 ≥1 条、
+       * 不校验数量/顺序，直接 slice 会让少回/错序扭曲通过阈值并张冠李戴）。
+       * 对齐后长度恒等于题数，下面 passed 的 max(2, ceil(n*0.66)) 即保持三题 2/3 口径。 */
+      const results = alignAssessResults(assess.questions, parsed.results);
       /* 逐题落档案（book 级，换路线不丢） */
       results.forEach((r, i) => {
         addChapterAssessment(book.id, {
@@ -665,6 +885,13 @@ export default function BookPage() {
 
   /** 补课：把最薄弱点的反馈作为求助消息发进对话区（验收服务于学习，不制造负担） */
   const remediate = (c: BookChapter) => {
+    /* useChat 的并发守卫（busyRef）会让流式期间的第二条 send 静默返回 ""——补课消息
+     * 会写进 store 但不上屏、等不到回复（刷新才凭空出现），setInput("") 还会清掉用户草稿。
+     * 与 doSend 的 `if (!text || streaming) return` 同口径：先拦住并给出提示。 */
+    if (streaming || retrieving) {
+      toast("等这一轮回答完再帮你补课。");
+      return;
+    }
     const weak = (book.assessments ?? []).filter((a) => a.chapterId === c.id && a.level !== "mastered").slice(-1)[0];
     const text = `我验收没过的点是：${weak ? `${ASSESS_KIND_LABELS[weak.kind]}——${weak.feedback}` : c.assessFocus || c.focusQuestion}。带我从头补一遍，别直接给答案。`;
     setInput("");
@@ -748,9 +975,14 @@ export default function BookPage() {
   const masteredNodes = book.chapters.filter((c) => c.masteredAt);
 
   const genTransfer = async () => {
+    if (transfer || recheck) {
+      scrollToPractice();
+      return;
+    }
     if (transferBusy || masteredNodes.length === 0) return;
     setTransferBusy(true);
-    setTransferResult(null);
+    /* 不在开头清 transferResult：那会让迁移卡片整卡卸载，三个入口按钮的 loading 随卡消失、
+     * 生成期间页面像没反应。生成成功后再由 setTransfer 顶上新任务（旧结果自然被替换）。 */
     try {
       const { streamChat } = await import("@/lib/ai/client");
       const full = await streamChat({
@@ -772,8 +1004,10 @@ export default function BookPage() {
         onDelta: () => {},
       });
       const parsed = readingTransferGenSchema.parse(extractJson(full));
+      setTransferResult(null);
       setTransfer({ task: parsed.task, why: parsed.whyThisTask || undefined, answer: "" });
       setHintShown(false);
+      scrollToPractice();
       trackReading("transfer_started", { bookId: book.id, source: "panel" });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "出任务失败，稍后再试。");
@@ -835,18 +1069,28 @@ export default function BookPage() {
   };
 
   /** v26.1 G3：独立迁移复检——同概念换场景，assisted 不得计 independent */
-  const genRecheck = async () => {
-    if (recheckBusy || !lastTransferId) return;
+  const openPracticeResult = (original: BookTransfer) => {
+    if (transfer || recheck) { scrollToPractice(); return; }
+    setLastTransferId(original.id);
+    setTransferResult({ verdict: original.verdict, evidence: original.evidence, feedback: original.feedback });
+    scrollToPractice();
+  };
+
+  const genRecheck = async (transferId: string) => {
+    if (transfer || recheck) { scrollToPractice(); return; }
+    if (recheckBusy || transferBusy) return;
+    const original = (book.transfers ?? []).find((t) => t.id === transferId);
+    if (!original || original.recheck || original.verdict !== "used_correct" || original.hintUsed || original.mode === "assisted") return;
+    openPracticeResult(original);
     setRecheckBusy(true);
     try {
       const { streamChat } = await import("@/lib/ai/client");
-      const original = (book.transfers ?? []).find((t) => t.id === lastTransferId);
       const full = await streamChat({
         task: "reading-transfer-recheck",
         args: {
           book: book.title,
           originalTask: original?.task ?? "",
-          chapters: JSON.stringify(masteredNodes.map((c) => ({ title: c.title, keyConcepts: c.keyConcepts ?? [] }))),
+          chapters: JSON.stringify(book.chapters.filter((c) => original.chapterIds.includes(c.id)).map((c) => ({ title: c.title, keyConcepts: c.keyConcepts ?? [] }))),
           goal: goalText,
         },
         messages: [{ role: "user", content: "出复检题。" }],
@@ -854,7 +1098,8 @@ export default function BookPage() {
         onDelta: () => {},
       });
       const parsed = readingTransferRecheckSchema.parse(extractJson(full));
-      setRecheck({ transferId: lastTransferId, task: parsed.task, answer: "" });
+      setRecheck({ transferId, task: parsed.task, answer: "" });
+      scrollToPractice();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "复检出题失败");
     } finally {
@@ -864,6 +1109,15 @@ export default function BookPage() {
 
   const submitRecheck = async () => {
     if (!recheck || recheckBusy) return;
+    if (!recheck.answer.trim()) {
+      toast.error("先写下你的独立作答——空着没法判定。");
+      return;
+    }
+    const original = book.transfers?.find((t) => t.id === recheck.transferId);
+    if (!original) {
+      toast.error("原迁移记录暂不可用，作答已保留在本机。");
+      return;
+    }
     setRecheckBusy(true);
     try {
       const { streamChat } = await import("@/lib/ai/client");
@@ -871,7 +1125,7 @@ export default function BookPage() {
         task: "reading-transfer-recheck-grade",
         args: {
           task: recheck.task,
-          chapters: JSON.stringify(masteredNodes.map((c) => ({ title: c.title, keyConcepts: c.keyConcepts ?? [] }))),
+          chapters: JSON.stringify(book.chapters.filter((c) => original.chapterIds.includes(c.id)).map((c) => ({ title: c.title, keyConcepts: c.keyConcepts ?? [] }))),
           answer: recheck.answer,
         },
         messages: [{ role: "user", content: "复检判定。" }],
@@ -884,12 +1138,13 @@ export default function BookPage() {
         answer: recheck.answer,
         verdict: parsed.verdict,
         evidence: parsed.evidence ?? "",
+        feedback: parsed.feedback ?? undefined,
         at: new Date().toISOString(),
       });
       setTransferResult({
-        verdict: parsed.verdict === "independent_success" ? "used_correct" : parsed.verdict === "incorrect" ? "used_wrong" : "naming_only",
-        evidence: parsed.evidence ?? "",
-        feedback: `独立迁移检验：${TRANSFER_OUTCOME_LABELS[parsed.verdict]}——${parsed.feedback ?? ""}`,
+        verdict: original.verdict,
+        evidence: original.evidence,
+        feedback: original.feedback,
       });
       setRecheck(null);
     } catch (e) {
@@ -898,6 +1153,10 @@ export default function BookPage() {
       setRecheckBusy(false);
     }
   };
+
+  const activeTransferRecord = book.transfers?.find((item) => item.id === lastTransferId);
+  const canRecheck = activeTransferRecord?.verdict === "used_correct" &&
+    !activeTransferRecord.hintUsed && activeTransferRecord.mode !== "assisted" && !activeTransferRecord.recheck;
 
   /* ================= 整本结业（升级 PRD 3.6） ================= */
 
@@ -1000,7 +1259,7 @@ export default function BookPage() {
           <p className="flex items-center gap-1.5 text-[13px] font-bold text-ink">
             <Target className="size-4 text-accent" /> 这次读这本书，你想得到什么？
           </p>
-          <p className="mt-1 text-xs text-ink-dim">目标决定路线怎么排、用什么方式教、验收考什么。主目标必选，可加次目标，之后随时改。</p>
+          <p className="mt-1 text-xs text-ink-dim">目标决定路线怎么排、用什么方式教、验收考什么。主目标必选，可加次目标；点目标卡右上「设为主目标」随时更换。</p>
         </div>
         {book.goal && (
           <Button variant="ghost" size="sm" onClick={() => setGoalEditing(false)}>
@@ -1014,35 +1273,55 @@ export default function BookPage() {
           const primary = goalPrimary === g;
           const secondary = !primary && goalSecondary.includes(g);
           return (
-            <button
-              key={g}
-              onClick={() => {
-                /* 交互约定：第一个点的是主目标；已有主目标时再点其他目标 = 加为次目标；
-                 * 点已选的次目标 = 取消。 */
-                if (primary) return;
-                if (secondary) {
-                  setGoalSecondary((p) => p.filter((x) => x !== g));
-                  return;
-                }
-                if (goalPrimary) setGoalSecondary((p) => (p.includes(g) ? p : [...p, g]));
-                else setGoalPrimary(g);
-              }}
-              className={cn(
-                "rounded-xl border p-3 text-left transition cursor-pointer",
-                primary
-                  ? "border-accent/60 bg-accent/[0.07]"
-                  : secondary
-                    ? "border-accent/30 bg-accent/[0.03]"
-                    : "border-border bg-white hover:border-accent/40"
+            <div key={g} className="relative">
+              <button
+                onClick={() => {
+                  /* 交互约定：第一个点的是主目标；已有主目标时再点其他目标 = 加为次目标；
+                   * 点已选的次目标 = 取消。换主目标走右上「设为主目标」（见下方按钮）。 */
+                  goalFromAiRef.current = false; // 用户手动改动：不再是 AI 推断的默认值
+                  if (primary) return;
+                  if (secondary) {
+                    setGoalSecondary((p) => p.filter((x) => x !== g));
+                    return;
+                  }
+                  if (goalPrimary) setGoalSecondary((p) => (p.includes(g) ? p : [...p, g]));
+                  else setGoalPrimary(g);
+                }}
+                className={cn(
+                  "w-full rounded-xl border p-3 text-left transition cursor-pointer",
+                  primary
+                    ? "border-accent/60 bg-accent/[0.07]"
+                    : secondary
+                      ? "border-accent/30 bg-accent/[0.03]"
+                      : "border-border bg-white hover:border-accent/40"
+                )}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className={cn("text-[13px] font-bold", primary ? "text-accent" : "text-ink")}>{meta.label}</span>
+                  {primary && <Badge tone="accent">主</Badge>}
+                  {secondary && <Badge tone="dim">次</Badge>}
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">{meta.desc}</p>
+              </button>
+              {/* 重设主目标：旧状态机只有「设主/加次/取消」三分支，主目标一经保存
+                  在编辑器里永远不可更换（openGoalEditor 每次都用 book.goal.primary 预填），
+                  saveGoal 的 changed 恒 false、按新目标重排的提示永不出现——与卡片文案
+                  「之后随时改」直接矛盾。原主目标降为次目标（保留勾选），新主从次目标移除。 */}
+              {goalPrimary && !primary && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!goalPrimary) return;
+                    goalFromAiRef.current = false; // 用户手动换主目标
+                    setGoalSecondary((p) => [...new Set([...p.filter((x) => x !== g), goalPrimary])]);
+                    setGoalPrimary(g);
+                  }}
+                  className="absolute right-2 top-2 z-10 cursor-pointer rounded-md bg-white/90 px-1.5 py-0.5 text-[10px] text-ink-dim transition hover:text-accent"
+                >
+                  设为主目标
+                </button>
               )}
-            >
-              <div className="flex items-center gap-1.5">
-                <span className={cn("text-[13px] font-bold", primary ? "text-accent" : "text-ink")}>{meta.label}</span>
-                {primary && <Badge tone="accent">主</Badge>}
-                {secondary && <Badge tone="dim">次</Badge>}
-              </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">{meta.desc}</p>
-            </button>
+            </div>
           );
         })}
       </div>
@@ -1050,13 +1329,13 @@ export default function BookPage() {
         className="mt-3"
         placeholder="你想用这本书解决什么问题？（可选，一句话）"
         value={goalIntent}
-        onChange={(e) => setGoalIntent(e.target.value)}
+        onChange={(e) => { goalFromAiRef.current = false; setGoalIntent(e.target.value); }}
       />
       <Input
         className="mt-2"
         placeholder="你已经有哪些相关基础？（可选——读过什么/做过什么，教练不会重复讲你懂的）"
         value={goalBackground}
-        onChange={(e) => setGoalBackground(e.target.value)}
+        onChange={(e) => { goalFromAiRef.current = false; setGoalBackground(e.target.value); }}
       />
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={() => void aiRecommendGoal()} loading={goalAiBusy}>
@@ -1085,6 +1364,8 @@ export default function BookPage() {
     <div className="mb-6">
       <button
         onClick={() => setMapOpen((v) => !v)}
+        aria-expanded={mapOpen}
+        aria-label="展开或收起认知地图"
         className="flex w-full cursor-pointer items-center justify-between rounded-t-2xl border border-border bg-surface-2/60 px-4 py-2.5 text-left"
       >
         <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
@@ -1201,12 +1482,20 @@ export default function BookPage() {
           <p className="mt-1.5 text-[11.5px] text-ink-dim">读到没懂的地方，记在这里。</p>
         ) : (
           <ul className="mt-2 space-y-1">
-            {(book.learning?.unresolvedQuestions ?? []).slice(0, 5).map((q, i) => (
-              <li key={`lq-${i}`} className="text-[11.5px] leading-relaxed text-ink-dim">· {q}</li>
-            ))}
-            {(book.deposits ?? []).filter((d) => d.type === "unresolved").slice(0, 5).map((d) => (
-              <li key={d.id} className="text-[11.5px] leading-relaxed text-ink-dim">· {d.text}</li>
-            ))}
+            {/* 快速添加与节点沉淀都是双写（unresolvedQuestions + deposits type=unresolved），
+                同一条问题会在两个来源里各存一份——合并去重后只显示一行，别再分别渲染两份。
+                unresolvedQuestions 是喂给 AI 的权威清单（bookCtx），排前；deposits 里只补
+                不在清单里的旧数据。 */}
+            {[
+              ...new Set([
+                ...(book.learning?.unresolvedQuestions ?? []),
+                ...(book.deposits ?? []).filter((d) => d.type === "unresolved").map((d) => d.text),
+              ]),
+            ]
+              .slice(0, 5)
+              .map((q, i) => (
+                <li key={`uq-${i}`} className="text-[11.5px] leading-relaxed text-ink-dim">· {q}</li>
+              ))}
           </ul>
         )}
         <div className="mt-2 flex gap-1.5">
@@ -1216,7 +1505,8 @@ export default function BookPage() {
             value={questionDraft}
             onChange={(e) => setQuestionDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && questionDraft.trim()) {
+              /* isComposing：中文输入法选词回车不算提交 */
+              if (e.key === "Enter" && !e.nativeEvent.isComposing && questionDraft.trim()) {
                 updateBookLearning(book.id, { unresolvedQuestions: [questionDraft.trim()] });
                 addBookDeposit(book.id, { chapterId: chapter?.id, type: "unresolved", text: questionDraft.trim() });
                 setQuestionDraft("");
@@ -1240,7 +1530,7 @@ export default function BookPage() {
         {(book.assessments ?? []).length > 0 && (
           <p className="mt-2 text-[11px] text-ink-dim">{(() => {
             const last = book.assessments![book.assessments!.length - 1];
-            return `最近验收：${ASSESS_KIND_LABELS[last.kind]} · ${last.level === "mastered" ? "通过" : last.level === "partial" ? "部分" : "未过"}`;
+            return `最近验收：${ASSESS_KIND_LABELS[last.kind]} · ${ASSESS_LEVEL_LABELS[last.level]}`;
           })()}</p>
         )}
       </div>
@@ -1273,19 +1563,18 @@ export default function BookPage() {
             </>
           )}
           {/* 迁移应用：有任一已掌握节点即可做（升级 PRD 2.5——不必等整本读完） */}
-          {masteredCount > 0 && readStatus !== "mastered" && (
-            <Button variant="outline" size="sm" className="w-full" onClick={() => void genTransfer()}>
-              <Route className="size-3.5" /> 迁移应用：用到你的真实问题
+          {masteredCount > 0 && (
+            <Button variant="outline" size="sm" className="w-full" onClick={() => void genTransfer()} loading={transferBusy} disabled={!draftLoaded || recheckBusy}>
+              <Route className="size-3.5" /> {recheck ? "继续独立复验草稿" : transfer ? "继续迁移作答" : "迁移应用：用到你的真实问题"}
             </Button>
           )}
           {readStatus === "mastered" && (
             <>
               <p className="text-[11px] leading-relaxed text-ink-dim">
-                这本书你已验收掌握。做一次迁移应用，或生成结业总结存进第二大脑。
+                {masteredCount > 0
+                  ? "这本书你已验收掌握，可以生成结业总结存进第二大脑。"
+                  : "通过任一阅读节点的验收后，即可做迁移应用。"}
               </p>
-              <Button variant="outline" size="sm" className="w-full" onClick={() => void genTransfer()}>
-                <Route className="size-3.5" /> 迁移应用：用到你的真实问题
-              </Button>
               <Button size="sm" className="w-full" onClick={() => void genGraduation()} loading={graduationBusy}>
                 <GraduationCap className="size-3.5" /> 生成结业总结
               </Button>
@@ -1304,14 +1593,19 @@ export default function BookPage() {
               迁移记录 {book.transfers!.length} 次
             </p>
             <div className="mt-1.5 space-y-1">
-              {book.transfers!.slice(0, 3).map((t) => (
+              {book.transfers!.map((t) => (
                 <div key={t.id} className="rounded-lg bg-surface-2 px-2 py-1.5">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <Badge tone={t.verdict === "used_correct" ? "ok" : t.verdict === "used_wrong" ? "warn" : "default"}>
-                      {TRANSFER_VERDICT_LABELS[t.verdict]}
+                      {t.recheck ? TRANSFER_OUTCOME_LABELS[t.recheck.verdict] : TRANSFER_VERDICT_LABELS[t.verdict]}
                     </Badge>
-                    <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink-dim">{t.task}</span>
                   </div>
+                  <p className="mt-1 line-clamp-2 break-words text-xs leading-relaxed text-ink-dim">{t.task}</p>
+                  <Button variant="ghost" size="sm" className="mt-1 min-h-9 px-1 text-xs" disabled={!draftLoaded || transferBusy || recheckBusy}
+                    onClick={() => t.verdict === "used_correct" && !t.hintUsed && t.mode !== "assisted" && !t.recheck
+                      ? void genRecheck(t.id) : openPracticeResult(t)}>
+                    {t.recheck ? "查看独立复验" : t.verdict === "used_correct" && !t.hintUsed && t.mode !== "assisted" ? "继续独立复验" : "查看迁移结果"}
+                  </Button>
                 </div>
               ))}
             </div>
@@ -1323,23 +1617,19 @@ export default function BookPage() {
 
   return (
     <div>
-      <button
-        onClick={() => router.push("/learn?tab=read")}
-        className="mb-4 flex items-center gap-1.5 text-sm text-ink-dim hover:text-ink cursor-pointer"
-      >
-        <ArrowLeft className="size-4" /> 书架
-      </button>
+      <PageBackBar title={`《${book.title}》`} parentLabel="书架" parentHref="/learn?tab=read" />
 
       <PageHeader
         title={`《${book.title}》`}
         desc={book.author}
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {/* V26.2-H2：书籍核查状态如实标注（PRD §5.5——材料生成 ≠ 已核实完整书目） */}
             {book.verification === "user_material" && <Badge tone="warn">基于你的材料</Badge>}
             {book.verification === "unverified" && <Badge tone="warn">未经核实</Badge>}
             <Badge tone={READ_STATUS_META[readStatus].tone}>{READ_STATUS_META[readStatus].label}</Badge>
-            <Button variant="outline" onClick={() => void extract()} loading={extracting}>
+            {/* whitespace-nowrap：窄屏下按钮文字不得逐字竖排（390 走查实测的溢出根因） */}
+            <Button variant="outline" className="whitespace-nowrap" onClick={() => void extract()} loading={extracting}>
               <Lightbulb className="size-4" /> 提炼洞见
             </Button>
           </div>
@@ -1349,7 +1639,7 @@ export default function BookPage() {
       {goalCard}
       {mapStrip}
 
-      <div className={cn("grid gap-6", planOpen && "lg:grid-cols-[300px_1fr]", panelOpen && "xl:grid-cols-[300px_1fr_290px]")}>
+      <div className={cn("grid min-w-0 gap-6", planOpen && "lg:grid-cols-[300px_minmax(0,1fr)]", panelOpen && "xl:grid-cols-[300px_minmax(0,1fr)_290px]")}>
         {/* ================= 左栏：阅读路线 ================= */}
         {planOpen && (
           <Card className="h-fit lg:sticky lg:top-8">
@@ -1361,6 +1651,8 @@ export default function BookPage() {
                 <button
                   onClick={() => setRouteMenuOpen((v) => !v)}
                   title="路线选项"
+                  aria-label="路线选项"
+                  aria-expanded={routeMenuOpen}
                   className="tap-target grid place-items-center rounded-md text-ink-dim/60 transition hover:text-ink cursor-pointer"
                 >
                   <Layers className="size-4" />
@@ -1376,7 +1668,10 @@ export default function BookPage() {
               </div>
             </div>
             {routeMenuOpen && (
-              <div className="mb-3 space-y-2 rounded-xl border border-border bg-surface-2 p-3">
+              <>
+                {/* 与模式菜单同款交互：遮罩任意处点击关闭（此前路线菜单只能再点一次按钮出去） */}
+                <div className="fixed inset-0 z-20" onClick={() => setRouteMenuOpen(false)} />
+                <div className="relative z-30 mb-3 space-y-2 rounded-xl border border-border bg-surface-2 p-3">
                 <p className="text-[11px] font-semibold text-ink">换一种路线（已有验收与沉淀会保留）</p>
                 <Button variant="outline" size="sm" className="w-full justify-start" disabled={regenBusy} onClick={() => void regenerateRoute("full")}>
                   完整路线 · 按全书结构系统读
@@ -1390,13 +1685,24 @@ export default function BookPage() {
                 <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => { setAddNodeOpen(true); setRouteMenuOpen(false); }}>
                   <Plus className="size-3.5" /> 让 AI 加一个我感兴趣的节点
                 </Button>
-                {regenBusy && <p className="text-[11px] text-accent">正在重排路线…（约 30-60 秒）</p>}
-              </div>
+                </div>
+              </>
+            )}
+            {/* 重排路线的等待提示：菜单在 regenerateRoute 开头即关闭，挂在菜单块内会永远渲染不出来。
+                重排是 30-60 秒的无流式 LLM 调用，期间必须给出可见反馈（PRD：检索阶段可见，否则用户以为卡死）。 */}
+            {regenBusy && (
+              <p className="mb-2 flex items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/[0.04] px-2.5 py-2 text-[11px] text-accent">
+                <span className="size-3 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+                正在重排路线…（约 30-60 秒）
+              </p>
             )}
             {/* 目录独立滚动：长书翻目录不拖整页 */}
             <div className="relative ml-2 max-h-[calc(100dvh-260px)] space-y-1 overflow-y-auto border-l border-border pl-5 lg:pr-1">
               {book.chapters.map((c, i) => {
-                const expanded = expandedId === c.id || chapter?.id === c.id;
+                /* 用户未手动选择时跟随「当前节点」自动展开；一旦选择就以 expandedId 为准，
+                 * 所以再次点击当前节点能真正收起（旧实现 expanded = expandedId===c.id ||
+                 * chapter?.id===c.id，任何被点节点都会先成为当前节点，收起分支永远无效果）。 */
+                const expanded = expandedId === undefined ? chapter?.id === c.id : expandedId === c.id;
                 const verified = !!c.masteredAt;
                 return (
                   <div key={c.id} className="relative">
@@ -1411,12 +1717,14 @@ export default function BookPage() {
                     </span>
                     <button
                       onClick={() => {
+                        const follows = expandedId === undefined ? chapter?.id === c.id : expandedId === c.id;
                         setCurrentChapter(c.id);
                         if (c.status === "todo") {
                           trackReading("learning_node_started", { bookId: book.id, chapterId: c.id, source: "route_click" });
                           setChapterStatus(book.id, c.id, "reading");
                         }
-                        setExpandedId(expanded && chapter?.id === c.id ? null : c.id);
+                        /* 已展开 = 收起（置 null 显式抑制 chapter 匹配重开）；未展开 = 展开它 */
+                        setExpandedId(follows ? null : c.id);
                       }}
                       className={cn(
                         "w-full rounded-xl px-3 py-2.5 text-left transition cursor-pointer",
@@ -1502,7 +1810,16 @@ export default function BookPage() {
                               </div>
                             ))}
                             <div className="flex justify-end gap-1.5">
-                              <Button variant="outline" size="sm" onClick={() => setAssess(null)} disabled={assessBusy}>
+                              {/* 与 openAssess 覆盖确认（跨节点）同纪律：已作答内容静默清空无法找回，
+                                  三题里有任何实际输入都先确认再放弃 */}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  if (!assess.answers.some((a) => a.trim()) || confirm("放弃这次验收的作答？")) setAssess(null);
+                                }}
+                                disabled={assessBusy}
+                              >
                                 以后再说
                               </Button>
                               <Button size="sm" onClick={() => void submitAssess(c)} loading={assessBusy}>
@@ -1518,17 +1835,17 @@ export default function BookPage() {
                                 key={i}
                                 className={cn(
                                   "rounded-lg border p-2",
-                                  r.level === "mastered" ? "border-ok/30 bg-ok/[0.05]" : r.level === "partial" ? "border-warn/30 bg-warn/[0.05]" : "border-bad/25 bg-bad/[0.04]"
+                                  ASSESS_LEVEL_STYLES[r.level]
                                 )}
                               >
-                                <p className="text-[10.5px] font-semibold text-ink-dim">{ASSESS_KIND_LABELS[r.kind]} · {r.level === "mastered" ? "通过" : r.level === "partial" ? "部分" : "未过"}</p>
+                                <p className="text-[10.5px] font-semibold text-ink-dim">{ASSESS_KIND_LABELS[r.kind]} · {ASSESS_LEVEL_LABELS[r.level]}</p>
                                 {r.evidence && <p className="mt-0.5 text-[11px] text-ink-dim">依据：{r.evidence}</p>}
                                 <p className="mt-0.5 text-[11px] leading-relaxed text-ink-dim">{r.feedback}</p>
                               </div>
                             ))}
                             {assessResult.suggestion && <p className="text-[11px] text-ink-dim">下一步：{assessResult.suggestion}</p>}
                             <div className="flex gap-1.5">
-                              <Button variant="outline" size="sm" className="flex-1" onClick={() => remediate(c)}>
+                              <Button variant="outline" size="sm" className="flex-1" onClick={() => remediate(c)} disabled={streaming || retrieving}>
                                 <Bot className="size-3.5" /> 就薄弱点补课
                               </Button>
                               <Button variant="outline" size="sm" className="flex-1" onClick={() => { setAssessResult(null); void openAssess(c); }}>
@@ -1542,9 +1859,12 @@ export default function BookPage() {
                             size="sm"
                             className="w-full"
                             disabled={assessBusy}
+                            /* 已掌握节点再次验收同样要给 10-30s 出题期可见反馈（与未掌握分支、
+                             * 全页其余长任务按钮的 loading 约定一致），不能只剩半透明禁用 */
+                            loading={assessBusy}
                             onClick={() => void openAssess(c)}
                           >
-                            <ShieldCheck className="size-3.5" /> {verified ? "再次验收" : assessBusy ? "正在出题…" : "开始验收（通过=掌握）"}
+                            <ShieldCheck className="size-3.5" /> {assessBusy ? "正在出题…" : verified ? "再次验收" : "开始验收（通过=掌握）"}
                           </Button>
                         )}
 
@@ -1555,6 +1875,7 @@ export default function BookPage() {
                             <select
                               value={depositType}
                               onChange={(e) => setDepositType(e.target.value as DepositType)}
+                              aria-label="沉淀类型"
                               className="h-8 rounded-lg border border-border bg-white px-1.5 text-[11px] text-ink outline-none focus:border-accent/50"
                             >
                               {DEPOSIT_ORDER.map((t) => (
@@ -1566,7 +1887,7 @@ export default function BookPage() {
                               placeholder="用你自己的话…"
                               value={depositText}
                               onChange={(e) => setDepositText(e.target.value)}
-                              onKeyDown={(e) => e.key === "Enter" && addDeposit(c.id)}
+                              onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && addDeposit(c.id)}
                             />
                             <Button size="sm" variant="outline" className="h-8 px-2" onClick={() => addDeposit(c.id)}>
                               记
@@ -1674,7 +1995,8 @@ export default function BookPage() {
           )}
 
           {/* 知识迁移工作面板（升级 PRD 2.5）：AI 出真实场景任务 → 独立作答 → 判定 →（v26.1）独立复检 */}
-          {(transfer || transferResult || exitSurvey) && (
+          {(transfer || recheck || transferResult || exitSurvey) && (
+            <div ref={practiceRef} className="scroll-mt-20">
             <Card className="mb-4 border-accent/30">
               {transfer ? (
                 <>
@@ -1682,7 +2004,14 @@ export default function BookPage() {
                     <Route className="size-4 text-accent" />
                     <p className="text-[13px] font-bold text-ink">迁移应用</p>
                     {hintShown && <Badge tone="warn">已用提示·辅助模式</Badge>}
-                    <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setTransfer(null); setExitSurvey(true); }}>
+                    {/* 与独立复验「暂不做」同口径：已输入的应用方案一旦放弃即被清出 store、
+                        practiceKey 草稿随 effect 删掉，静默丢弃无法找回——草稿非空必须先确认 */}
+                    <Button variant="ghost" size="sm" className="ml-auto" onClick={() => {
+                      if (!transfer.answer.trim() || confirm("放弃已经写好的应用方案？")) {
+                        setTransfer(null);
+                        setExitSurvey(true);
+                      }
+                    }}>
                       暂不做
                     </Button>
                   </div>
@@ -1711,24 +2040,65 @@ export default function BookPage() {
                     </Button>
                   </div>
                 </>
-              ) : transferResult ? (
+              ) : (transferResult || recheck) ? (
+                recheck ? (
+                  /* v26.1 G3：独立迁移复检作答——同概念换场景，作答后 submitRecheck 写回 recheck 字段 */
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <ShieldCheck className="size-4 text-accent" />
+                      <p className="text-[13px] font-bold text-ink">独立复验</p>
+                      <Badge tone="accent">换场景再答一次</Badge>
+                      <Button variant="ghost" size="sm" className="ml-auto" disabled={recheckBusy} onClick={() => {
+                        if (!recheck.answer.trim() || confirm("放弃这次独立复验的草稿？")) setRecheck(null);
+                      }}>
+                        暂不做
+                      </Button>
+                    </div>
+                    <p className="mt-2 rounded-xl bg-surface-2 p-3 text-[13px] leading-relaxed text-ink">{recheck.task}</p>
+                    <Textarea
+                      rows={5}
+                      className="mt-2.5"
+                      placeholder="不看前面的答案，用你自己的话在新场景里再做一次…"
+                      value={recheck.answer}
+                      onChange={(e) => setRecheck({ ...recheck, answer: e.target.value })}
+                    />
+                    <div className="mt-2.5 flex justify-end gap-1.5">
+                      <Button size="sm" onClick={() => void submitRecheck()} loading={recheckBusy}>
+                        提交独立作答
+                      </Button>
+                    </div>
+                  </>
+                ) : (
                 <>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Route className="size-4 text-accent" />
-                    <p className="text-[13px] font-bold text-ink">迁移判定</p>
-                    <Badge tone={transferResult.verdict === "used_correct" ? "ok" : transferResult.verdict === "used_wrong" ? "warn" : "default"}>
-                      {TRANSFER_VERDICT_LABELS[transferResult.verdict]}
+                    <p className="text-[13px] font-bold text-ink">{activeTransferRecord?.recheck ? "独立复验结果" : "迁移判定"}</p>
+                    <Badge tone={activeTransferRecord?.recheck
+                      ? activeTransferRecord.recheck.verdict === "independent_success" ? "ok" : "warn"
+                      : transferResult?.verdict === "used_correct" ? "ok" : transferResult?.verdict === "used_wrong" ? "warn" : "default"}>
+                      {activeTransferRecord?.recheck ? TRANSFER_OUTCOME_LABELS[activeTransferRecord.recheck.verdict] : transferResult && TRANSFER_VERDICT_LABELS[transferResult.verdict]}
                     </Badge>
                   </div>
-                  {transferResult.evidence && <p className="mt-2 text-[11.5px] text-ink-dim">依据：{transferResult.evidence}</p>}
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-ink-dim">{transferResult.feedback}</p>
-                  {transferResult.nextStep && (
+                  {activeTransferRecord?.recheck ? (
+                    <div className="mt-2 space-y-2 break-words text-sm leading-relaxed text-ink-dim">
+                      <p className="whitespace-pre-wrap">{activeTransferRecord.recheck.task}</p>
+                      <p className="whitespace-pre-wrap">你的作答：{activeTransferRecord.recheck.answer}</p>
+                      {activeTransferRecord.recheck.evidence && <p>判定依据：{activeTransferRecord.recheck.evidence}</p>}
+                      {activeTransferRecord.recheck.feedback && <p>{activeTransferRecord.recheck.feedback}</p>}
+                    </div>
+                  ) : (
+                    <>
+                      {transferResult?.evidence && <p className="mt-2 break-words text-xs leading-relaxed text-ink-dim">依据：{transferResult.evidence}</p>}
+                      <p className="mt-1 break-words text-sm leading-relaxed text-ink-dim">{transferResult?.feedback}</p>
+                    </>
+                  )}
+                  {!activeTransferRecord?.recheck && transferResult?.nextStep && (
                     <p className="mt-2 rounded-lg bg-accent/[0.05] px-2.5 py-2 text-[11.5px] text-ink-dim">
                       <b className="text-ink/80">下一步：</b>{transferResult.nextStep}
                     </p>
                   )}
                   {/* v26.1 G3：独立检验——只有首轮独立模式通过才值得做；辅助模式先重做独立任务 */}
-                  {transferResult.verdict === "used_correct" && (
+                  {canRecheck && (
                     <div className="mt-2.5 rounded-xl border border-ok/30 bg-ok/[0.04] p-2.5">
                       <p className="text-[12px] font-semibold text-ink">下一步：独立迁移检验</p>
                       <p className="mt-0.5 text-[11px] leading-relaxed text-ink-dim">
@@ -1736,20 +2106,21 @@ export default function BookPage() {
                       </p>
                     </div>
                   )}
-                  <div className="mt-2.5 flex justify-end gap-1.5">
-                    <Button variant="outline" size="sm" onClick={() => setTransferResult(null)}>
+                  <div className="mt-2.5 flex flex-wrap justify-end gap-1.5">
+                    <Button variant="outline" size="sm" disabled={recheckBusy || transferBusy} onClick={() => setTransferResult(null)}>
                       收下
                     </Button>
-                    {transferResult.verdict === "used_correct" && lastTransferId && !(book.transfers ?? []).find((t) => t.id === lastTransferId)?.recheck && (
-                      <Button size="sm" onClick={() => void genRecheck()} loading={recheckBusy}>
+                    {canRecheck && lastTransferId && (
+                      <Button size="sm" onClick={() => void genRecheck(lastTransferId)} loading={recheckBusy} disabled={transferBusy}>
                         <ShieldCheck className="size-3.5" /> 开始独立检验
                       </Button>
                     )}
-                    <Button variant="outline" size="sm" onClick={() => void genTransfer()}>
+                    <Button variant="outline" size="sm" onClick={() => void genTransfer()} loading={transferBusy} disabled={recheckBusy}>
                       再来一个场景
                     </Button>
                   </div>
                 </>
+                )
               ) : exitSurvey ? (
                 /* v26.1 G4：流失原因轻条（放弃迁移时页内出现，可跳过，不打断阅读） */
                 <>
@@ -1788,6 +2159,7 @@ export default function BookPage() {
                 </>
               ) : null}
             </Card>
+            </div>
           )}
 
           {/* 手机/窄屏：学习状态折叠条（PRD：按需展开收起） */}
@@ -1816,19 +2188,19 @@ export default function BookPage() {
             {messages.map((m) => (
               <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                 {m.role === "user" ? (
-                  <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#1d1d1f] px-4 py-2.5 text-sm text-white">
+                  <div className="max-w-[80%] rounded-2xl rounded-br-md bg-ink px-4 py-2.5 text-sm text-white">
                     {m.content}
                   </div>
                 ) : (
                   <Card className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
-                    <Markdown text={m.content} />
+                    <Markdown text={m.content} className="prose-reading" />
                   </Card>
                 )}
               </div>
             ))}
             {pending && (
               <Card aria-live="polite" className="max-w-[92%] rounded-2xl rounded-bl-md py-4">
-                <Markdown text={pending} />
+                <Markdown text={pending} className="prose-reading" />
                 <span className="stream-cursor" />
               </Card>
             )}
@@ -1858,13 +2230,14 @@ export default function BookPage() {
             <div className="relative mb-2">
               <button
                 onClick={() => setModeMenuOpen((v) => !v)}
-                className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-white px-3 py-1.5 text-[11.5px] text-ink-dim transition hover:border-accent/50 hover:text-accent"
+                className="flex max-w-full cursor-pointer items-center gap-1.5 rounded-full border border-border bg-white px-3 py-1.5 text-[11.5px] text-ink-dim transition hover:border-accent/50 hover:text-accent"
                 aria-expanded={modeMenuOpen}
               >
-                <MessagesSquare className="size-3.5" />
-                <span className="font-semibold">{activeModeMeta.label}</span>
-                <span className="max-w-[320px] truncate text-ink-dim/60">{activeModeMeta.hint}</span>
-                <ChevronDown className={cn("size-3.5 transition", modeMenuOpen && "rotate-180")} />
+                <MessagesSquare className="size-3.5 shrink-0" />
+                <span className="shrink-0 font-semibold">{activeModeMeta.label}</span>
+                {/* 窄屏 390 实测：固定 max-w-[320px] 会把胶囊撑出视口——改弹性收缩 + 截断 */}
+                <span className="min-w-0 flex-1 truncate text-ink-dim/60 sm:max-w-[320px]">{activeModeMeta.hint}</span>
+                <ChevronDown className={cn("size-3.5 shrink-0 transition", modeMenuOpen && "rotate-180")} />
               </button>
               {modeMenuOpen && (
                 <>
@@ -1904,23 +2277,26 @@ export default function BookPage() {
                 </>
               )}
             </div>
-            {error && (
-              <p className="mb-2 rounded-lg border border-bad/25 bg-bad/[0.05] px-3 py-2 text-xs leading-relaxed text-bad">
-                {error}
-              </p>
+            {error && <p role="alert" className="mb-2 text-xs text-bad">{error}</p>}
+            {!streaming && !retrieving && unanswered?.role === "user" && (
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-ink-dim">
+                <span>上一条问题还没收到回复。</span>
+                <Button size="sm" variant="outline" onClick={() => sendReadingQuestion(unanswered.content, true)}>继续回答</Button>
+              </div>
             )}
             <div className="flex gap-2">
               <Input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && doSend()}
+                onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && doSend()}
                 placeholder="说说你的理解、困惑，或反驳…"
                 disabled={streaming}
               />
-              {streaming && (
+              {(streaming || retrieving) && (
                 <Button
                   variant="outline"
                   onClick={() => {
+                    ragAbortRef.current?.abort();
                     stop();
                     /* 主动取消不是失败：阶段标 cancelled */
                     setPhases((prev) =>
@@ -1932,7 +2308,7 @@ export default function BookPage() {
                   停止
                 </Button>
               )}
-              <Button onClick={doSend} loading={streaming} className="h-11 shrink-0 sm:h-10">
+              <Button onClick={doSend} loading={streaming} disabled={retrieving} className="h-11 shrink-0 sm:h-10">
                 发送
               </Button>
             </div>

@@ -8,25 +8,34 @@ export interface ParsedDirectives {
   /** 全部工具（支持多个=并行调用） */
   tools?: { name: ToolName; args: Record<string, unknown> }[];
   plan?: string[];
+  /** 出现但无法解析的 ```tool 块数（坏 JSON / 缺 name / 未知工具名）。
+   *  静默丢弃会让「模型以为调了、用户以为办了、实际什么都没发生」——
+   *  调用方（runner）必须据此回注模型让其重发，而不是当普通回答收尾。 */
+  badToolBlocks?: number;
 }
 
 export function parseDirectives(text: string): ParsedDirectives {
   let tool: ParsedDirectives["tool"];
   let tools: ParsedDirectives["tools"];
   let plan: string[] | undefined;
+  let badToolBlocks = 0;
 
   /* 全部 tool 块（支持多个=并行调用；取第一个作兼容字段） */
   const toolMatches = [...text.matchAll(/```tool\s*([\s\S]*?)```/g)];
   for (const m of toolMatches) {
     try {
       const j = JSON.parse(m[1].trim()) as { name?: string; args?: Record<string, unknown> };
-      if (j?.name && j.name in TOOLS) {
+      /* Object.hasOwn 而非 in：TOOLS 是普通对象字面量，in 会命中原型链上的
+       * toString/constructor 等继承属性，模型写 {"name":"toString"} 即可穿过校验。 */
+      if (j?.name && Object.hasOwn(TOOLS, j.name)) {
         const call = { name: j.name as ToolName, args: j.args ?? {} };
         if (!tools) tools = [];
         tools.push(call);
         if (!tool) tool = call;
+      } else {
+        badToolBlocks += 1;
       }
-    } catch { /* 坏 JSON → 跳过这一个 */ }
+    } catch { badToolBlocks += 1; /* 坏 JSON → 计数上报，由 runner 回注模型 */ }
   }
 
   const planMatch = text.match(/```plan\s*([\s\S]*?)```/);
@@ -36,11 +45,15 @@ export function parseDirectives(text: string): ParsedDirectives {
       if (Array.isArray(arr)) plan = arr.map((s) => String(s)).filter(Boolean).slice(0, 8);
     } catch { /* ignore */ }
   }
-  return { tool, tools, plan };
+  return { tool, tools, plan, badToolBlocks };
 }
 
 export function stripDirectives(text: string): string {
-  const RULE_WORDS = "(?:不要说|不要寒暄|不要反问|不要附加|不要建议|不要输出|不要工具块|不要写|禁止|只输出|只给|长度短|中文口语|不写小标题|禁寒暄)";
+  /* 只收「模型复述自己输出纪律」的短语。「禁止」「只给」这类词在正常教学内容里极常见
+   * （「gets 是禁止使用的」「老师只给了一个提示」），整句删除会把用户已在流式里看过的
+   * 正文吞掉且无标记——违反 output-integrity.ts「不删内容只标记」与 PRD §5.2
+   * 「最终消息必须与被接受的流式内容相符」。 */
+  const RULE_WORDS = "(?:不要说|不要寒暄|不要反问|不要附加|不要建议|不要输出|不要工具块|不要写|只输出|长度短|中文口语|不写小标题|禁寒暄)";
   /* 普通代码围栏先摘成占位符（\u0000 序号 \u0000）：下面的行级清理与尾部截断
    * 不再伤及代码内容（json/js 示例曾整段被删）。空围栏不摘（留给黑条清理）；
    * 占位符不含中英文，其余清理规则也扫不到它（各类字符类均排除 \u0000）。 */
@@ -59,10 +72,29 @@ export function stripDirectives(text: string): string {
       fences.push(m);
       return `\u0000${fences.length - 1}\u0000`;
     })
-    /* 独占一行的 JSON 残留（已在围栏外） */
-    .replace(/^\s*["[\]{}].*$/gm, "")
-    /* 模型复读规则：以句号/换行为界，把含指令词的整句删掉（不跨占位符） */
-    .replace(new RegExp(`(?:^|[。！？\\n])\\s*[^。！？\\n\\u0000]{0,20}${RULE_WORDS}[^。！？\\n\\u0000]{0,40}[。；;]?`, "g"), (m) =>
+    /* 独占一行的 JSON 残留（已在围栏外）：
+     * 只删「整体能被 JSON.parse 通过」的行（{...}/[...]/"..." 残留）；
+     * 不再按行首字符粗删——此前 ["[\]{}.*$ 会把行首 markdown 链接（[标题](url)）、
+     * 引用样式行（[1] 标题）、引号对白整行吞掉，用户答案缺内容且无提示。
+     * 裸 ASCII 引号字符串本身是合法 JSON 值，但独立成行且带中文句读的
+     * `"好的，我们明天开始"` 是对白/确认语而非残留——按内容判据保留。 */
+    .replace(/^\s*["[{][^\n]*$/gm, (line) => {
+      const t = line.trim();
+      try {
+        const v = JSON.parse(t) as unknown;
+        if (typeof v === "string" && /[\u4e00-\u9fff]/.test(v) && /[，、。！？：；…—]/.test(v)) return line;
+        return "";
+      } catch {
+        /* 不是完整 JSON 值 → 是正常内容（如 [标题](url) 链接行、[1] 引用行、引号对白），保留 */
+        return line;
+      }
+    })
+    /* 模型复读规则：只删「整句就是在复述指令」的句子——句首（可带括号/标点）即指令词。
+     * 此前只要指令词出现在句中任意位置就整句删除：「在 C 语言里，gets 函数是禁止使用的，
+     * 因为缓冲区溢出风险。」「老师只给了一个提示，剩下的要自己推导。」这类正常教学内容
+     * 被静默吞掉且无标记——违反 output-integrity.ts 的「不删内容只标记」纪律与
+     * PRD §5.2「最终消息必须与被接受的流式内容相符」。 */
+    .replace(new RegExp(`(?:^|[。！？\\n])\\s*(?:[（(【\\[]\\s*)?${RULE_WORDS}[^。！？\\n\\u0000]{0,40}[。；;]?`, "g"), (m) =>
       m.startsWith("\n") || m.startsWith("。") || m.startsWith("！") || m.startsWith("？") ? m[0] : ""
     )
     /* 末尾混入英文内部独白 → 截断到最后一个中文句末（限单行：跨行会把收尾代码块整个删掉） */

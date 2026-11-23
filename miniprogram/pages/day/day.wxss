@@ -82,7 +82,9 @@
   color: var(--accent);
 }
 .pass-card {
-  border-color: rgba(4, 120, 87, 0.3);
+  /* 走 --ok-line 令牌（app.wxss）：此前以字面量写 rgba(4,120,87,.3)，令牌调整/
+   * 主题化时会脱队（day.wxml 迁移门 hero 的内联 #047857 同批改掉） */
+  border-color: var(--ok-line);
 }
 
 /* 跳过区：视觉上明确"次要且带后果" */

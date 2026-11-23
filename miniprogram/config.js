@@ -31,20 +31,18 @@ function availableBases() {
   return isDev() ? BASES : { prod: BASES.prod };
 }
 
-function current() {
-  try {
-    var saved = wx.getStorageSync(KEY);
-    if (saved && availableBases()[saved]) return BASES[saved];
-  } catch (e) { /* 存储不可用时用默认 */ }
-  return BASES.prod;
-}
-
+/* 后端 id 是唯一真源：只在这里读存储 + 按环境校验合法性。
+ * current() 由它派生，避免「请求地址」与「会话 cookie 键」各算一遍而错位。 */
 function currentId() {
   try {
     var saved = wx.getStorageSync(KEY);
     if (saved && availableBases()[saved]) return saved;
-  } catch (e) { /* 同上 */ }
+  } catch (e) { /* 存储不可用时用默认 */ }
   return "prod";
+}
+
+function current() {
+  return availableBases()[currentId()] || BASES.prod;
 }
 
 function set(id) {

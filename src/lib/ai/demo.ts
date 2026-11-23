@@ -1,6 +1,7 @@
 /* Demo 模式：无 API Key 时的脚本化响应，保证全流程可体验、可验收。
  * 仅服务端使用（下面的 import 把这条纪律变成构建期错误，而不是注释里的君子协定）。 */
 import "server-only";
+import { DEFAULT_SEAT_COLOR } from "@/lib/ai/persona-meta";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -36,6 +37,17 @@ function ctxField(system: string, name: string): string {
       default: return c;
     }
   });
+}
+
+/** 从提示词里的 ctx JSON 取**数值**字段（无引号形态）。
+ *  ctx 嵌的是 JSON.stringify(goalCard)，weeklyHours 按 goalCardSchema 是 number，
+ *  序列化成 "weeklyHours": 8——只认带引号字符串值的 ctxField 永远取不到，
+ *  会静默回退默认 8，演示输出与用户真实目标卡不同形（违背 demo parity 契约）。 */
+function ctxNumber(system: string, name: string): string {
+  const quoted = ctxField(system, name);
+  if (quoted) return quoted;
+  const m = system.match(new RegExp(`"${name}":\\s*(-?\\d+(?:\\.\\d+)?)`));
+  return m ? m[1] : "";
 }
 
 /** 找第一段"像样"的正文（去掉 markdown 标记后 ≥12 字），返回它的**原样一行**作依据。
@@ -78,10 +90,19 @@ export async function* demoIntake(messages: Msg[]) {
     return;
   }
   // 信息齐了 → 目标卡
-  /* 每周小时数是第 3 问（INTAKE_QUESTIONS[2]）专门收集的，优先读那一轮的回答；
-   * 用户没按流程走再回退首句，最后才用默认值。 */
-  const hoursTurn = userTurns[2]?.content ?? first;
-  const hours = hoursTurn.match(/(\d+)\s*小时/)?.[1] ?? first.match(/(\d+)\s*小时/)?.[1] ?? "8";
+  /* 每周小时数是第 3 问（INTAKE_QUESTIONS[2]）专门收集的，优先读那一轮的回答。
+   * 轮次账必须算对：userTurns[0] 是开场白（「我想学X」），它的回复才是第 1 问的回答，
+   * 即第 i 问（INTAKE_QUESTIONS[i]）的用户回答落在 userTurns[i+1]。
+   * 旧实现读 userTurns[2] = 第 2 问（基础）的回答，第 3 问的回答永远不被读取，
+   * 用户答「每周5小时」后卡片仍可能落到默认 8 或误抓基础里的「每天学2小时」。
+   * 用户没按流程走（该轮缺失/没写小时数）再回退首句，最后才用默认值。 */
+  const HOURS_QUESTION_INDEX = 2;
+  const hoursTurn = userTurns[HOURS_QUESTION_INDEX + 1]?.content ?? first;
+  const rawHours =
+    hoursTurn.match(/(\d+)\s*小时/)?.[1] ?? first.match(/(\d+)\s*小时/)?.[1];
+  /* 目标卡 schema 约束 weeklyHours ∈ [1,80]（client.ts goalCardSchema）：越界数字会让
+   * splitGoalReply 整卡解析失败，演示链路当场断、用户看不到卡。夹到边界保住链路。 */
+  const hours = rawHours ? Math.min(80, Math.max(1, Number(rawHours))) : 8;
   const card = {
     topic,
     direction: `能独立做出一个小的 ${topic} 实战项目并读懂相关开源代码`,
@@ -89,7 +110,7 @@ export async function* demoIntake(messages: Msg[]) {
     motivation: first.slice(0, 40),
     background: "零基础 / 有零散接触",
     deadline: null,
-    weeklyHours: Number(hours) || 8,
+    weeklyHours: hours,
     successCriteria: [
       `能独立完成一个 ${topic} 小项目`,
       "能读懂相关领域开源项目的核心代码",
@@ -264,16 +285,40 @@ function demoPhaseDetail(topic: string, requested: DemoRequestedDay[]) {
   };
 }
 
+/** 取出 text 里第一个**括号配平**的 JSON 数组字面量；找不到/不配平返回 null。
+ *  不能用 lastIndexOf("]")：PLANNER_PHASE_DETAIL 在 daysJson 之后还有「## 输出」JSON 示例，
+ *  示例里的 ] 会把切片拉长到覆盖整段规则文本，JSON.parse 必炸 → 演示展开永远回退默认模板、
+ *  把 Day 1 内容写进任意日期槽位。括号计数要忽略字符串里的 [ ]。 */
+function sliceFirstJsonArray(text: string): string | null {
+  const start = text.indexOf("[");
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "[") depth++;
+    else if (ch === "]" && --depth === 0) return text.slice(start, i + 1);
+  }
+  return null;
+}
+
 /** 真实链路把「本轮要写的天」原样写进提示词，demo 从同一位置解析回来照抄。 */
 function parseRequestedDays(system: string): DemoRequestedDay[] {
   const head = system.indexOf("## 本轮要写的天");
   if (head < 0) return [];
   const rest = system.slice(head);
-  const start = rest.indexOf("[");
-  const end = rest.lastIndexOf("]");
-  if (start < 0 || end <= start) return [];
+  const slice = sliceFirstJsonArray(rest);
+  if (!slice) return [];
   try {
-    const parsed = JSON.parse(rest.slice(start, end + 1));
+    const parsed = JSON.parse(slice);
     return Array.isArray(parsed) ? (parsed as DemoRequestedDay[]) : [];
   } catch {
     return [];
@@ -282,7 +327,7 @@ function parseRequestedDays(system: string): DemoRequestedDay[] {
 
 export async function* demoPlan(system: string) {
   const topic = ctxField(system, "topic") || "Python";
-  const hours = ctxField(system, "weeklyHours") || "8";
+  const hours = ctxNumber(system, "weeklyHours") || "8";
   const draft = system.includes("本轮只为清单里")
     ? demoPhaseDetail(topic, parseRequestedDays(system))
     : system.includes("总学习纲要")
@@ -338,7 +383,11 @@ def report():
  * ungradable、overall 变 fail。demo 不绕开这道闸——它从 ctx.lesson 里现场摘一句原文。
  * 摘不到（讲义还没生成）就如实判 ungradable，与真实行为一致。 */
 export async function* demoQuizGrade(system: string) {
-  const ids = [...system.matchAll(/"itemId":\s*"([^"]+)"/g)].map((m) => m[1]);
+  /* 判分项数量必须封顶：itemId 个数由 system 文本决定，而 system 来自请求体（直连 API 可控），
+   * 且 chunked 以固定慢速（6 字节/12ms ≈ 500B/s）流出——用请求体上限内的一条 ctx 反复塞
+   * "itemId":"x" 可生成数万条判分项、以 MB 级字符串流出数小时，单 IP 突发就能钉住大量长连接
+   * 与内存（自托管侧无 maxDuration 钳制，会拖到 OOM）。真实验收每课只有个位数题，封顶 20 足够宽。 */
+  const ids = [...system.matchAll(/"itemId":\s*"([^"]+)"/g)].map((m) => m[1]).slice(0, 20);
   const items = ids.length ? ids : ["q1", "q2"];
   const evidence = firstSubstantiveLine(ctxField(system, "lesson"));
 
@@ -384,10 +433,16 @@ export async function* demoQuizGrade(system: string) {
 }
 
 /* ---------- 人生伙伴（演示） ---------- */
+/* 兜底演示话术：note-assist / wiki-compile / resource-fix / direction-guide / life-post /
+ * verify-score 等未适配任务在 route 的 default 分支都落到这里。它是唯一无（演示）标注的
+ * prose 生成器，而调用点会把它当成功结果写入（如笔记页「AI 润色全文」直接 setBody 覆盖正文、
+ * life-post 直接当生成文案）——用户看到成功提示、内容却与任务无关。首行必须显式标注演示模式。 */
 export async function* demoCouncil(messages: Msg[]) {
   const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const snippet = lastUser.slice(0, 30);
-  yield* chunked(`**我的判断：你这个担心本身问错了问题。**
+  yield* chunked(`**（演示模式）** 这条是本地演示话术，用来在没配 API Key 时把流程跑通；接上你自己的 Key 后，这里会是针对你这条内容的真实回答。下面的话与你的具体任务无关，请勿采用。
+
+**我的判断：你这个担心本身问错了问题。**
 
 你说「${snippet}……」，你真正的风险不是事情本身，而是**你在用焦虑代替决策**——担心了这么久，你为最坏情况做过任何一件具体准备吗？
 
@@ -527,9 +582,23 @@ export async function* demoReadingSystem(task: string, args: Record<string, unkn
     return;
   }
   if (task === "reading-assess-grade") {
-    /* 演示判分也要讲证据纪律：有实质回答给 partial+具体缺口，空白给 not。 */
-    const qa = JSON.parse(String(args.qa || "[]")) as { answer?: string }[];
-    const results = qa.map((x, i) => {
+    /* 演示判分也要讲证据纪律：有实质回答给 partial+具体缺口，空白给 not。
+     * args.qa 由请求体原样透传（route 不校验），畸形输入（非 JSON / 合法 JSON 但非数组）
+     * 不能让整个演示响应退化成一条原始引擎报错（客户端直接 toast 报错）——
+     * 与 parseRequestedDays 同款 try/catch + Array.isArray 降级。
+     * 判分 schema 要求 results ≥1，解析不出任何作答时按「一题空答」处理（与空白回答同语义）。 */
+    let qa: { answer?: string }[] = [];
+    try {
+      const parsed = JSON.parse(String(args.qa || "[]"));
+      /* 元素也要逐项校验：`[null]` 是合法数组，直接 as 收下后下方 x.answer 会抛
+       * TypeError（原始引擎报错直达客户端）——正是本段注释承诺要避免的结果。
+       * 与 demoPhaseDetail 的 r?. 逐字段防护同一纪律。 */
+      if (Array.isArray(parsed)) qa = parsed.filter((x): x is { answer?: string } => !!x && typeof x === "object");
+    } catch {
+      qa = [];
+    }
+    const list = qa.length ? qa : [{ answer: "" }];
+    const results = list.map((x, i) => {
       const blank = !x.answer || !String(x.answer).trim();
       return blank
         ? { kind: i === 0 ? "explain" : i === 1 ? "connect" : "apply", level: "not", evidence: "空白", feedback: "（演示）这题没答，先回正文找一句你觉得最关键的话抄下来，再用自己的话改写。" }
@@ -699,7 +768,10 @@ export async function* demoReviewGrade(system: string) {
  * demo 同样宁缺毋滥：找不到用户说过实质内容，就返回空，由页面如实提示。 */
 export async function* demoInsight(system: string) {
   const said: string[] = [];
-  for (const m of system.matchAll(/用户：([\s\S]{6,200}?)(?:\n\n|$)/g)) {
+  /* 段长不设上限：此前 {6,200} 要求终止符落在「用户：」后 200 字内，用户认真写的
+   * 单段长反思（无空行）整条匹配失败，最有实质内容的输入反而提炼不出洞见。
+   * 上限只用于最终引用摘录（slice(0,150)），不影响识别。 */
+  for (const m of system.matchAll(/用户：([\s\S]*?)(?:\n\n|$)/g)) {
     const line = m[1].replace(/\s+/g, " ").trim();
     if (line.length >= 10 && !/^（演示/.test(line)) said.push(line);
   }
@@ -779,7 +851,7 @@ export async function* demoPersona() {
         signatureQuestions: ["这个判断在什么条件下是错的？", "你愿意为这个观点下注吗？"],
         style: "直接、具体、有立场",
         quotes: ["判断先于安慰。"],
-        color: "violet",
+        color: DEFAULT_SEAT_COLOR,
         system:
           "你是 Mentora 人生伙伴中的一个自定义智能体（演示档案）。第一句必须是明确判断；挑战坏问题的框架；主动给出最强反方；诚实标注无知；不给情绪安慰，给可执行判断；每次回答附下一步动作与一个用户没问但应该问的问题。",
       }) +
@@ -865,7 +937,11 @@ export async function* demoRoundtableTake(name: string, messages: Msg[], persona
     (messages.filter((m) => m.role === "user").at(-1)?.content ?? "")
       .replace(/\s+/g, " ")
       .slice(0, 24) || "这件事";
-  const voice = RT_VOICE[personaId];
+  /* 必须走自有属性判断：personaId 由请求体原样透传、无白名单，
+   *  'constructor'/'toString'/'__proto__' 等会经原型链取到继承的函数对象（truthy），
+   *  随后 voice.text(...) 因 text 为 undefined 抛 TypeError。
+   *  与 reading-modes.ts 的 Set 白名单、ai-config.ts 的 Object.hasOwn 同一纪律。 */
+  const voice = Object.hasOwn(RT_VOICE, personaId) ? RT_VOICE[personaId] : undefined;
   if (voice) {
     yield* chunked(voice.text(name, q));
     return;
@@ -876,15 +952,39 @@ export async function* demoRoundtableTake(name: string, messages: Msg[], persona
   );
 }
 
+/** 圆桌席位上限：names/takes 由请求体原样透传（route.ts:285-289），不封顶时
+ *  一份超长 names 可造出十万级席位，逐个对 takes 全文 split 是 O(席位×|takes|)
+ *  的同步 CPU，单请求即可阻塞事件循环。数值与 council-engine 的
+ *  MAX_ROUNDTABLE_SEATS=6 同口径（本文件 server-only，不能 import 客户端模块）。 */
+const MAX_DEMO_SEATS = 6;
+
 export async function* demoRoundtableHost(names: string, takes: string, question: string) {
   const seatNames = names
     .split(/[、,，]/)
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, MAX_DEMO_SEATS);
   const q = question.replace(/\s+/g, " ").slice(0, 24) || "（本轮问题）";
+  /* 单趟扫描 takes，把【名字】切成段落表——每个席位只查一次表，
+   * 不再对整段 takes 做 split（后者是 O(席位×|takes|)）。
+   * 同名取第一段，与原语义一致；标记数封顶，避免病态输入（1MB 全「【x】」）
+   * 造出十万级匹配对象钉住内存。 */
+  const MAX_MARKS = 512;
+  const segs = new Map<string, string>();
+  const marks: { name: string; start: number; end: number }[] = [];
+  for (const m of takes.matchAll(/【([^】]{1,200})】/g)) {
+    if (marks.length >= MAX_MARKS) break;
+    marks.push({ name: m[1], start: m.index ?? 0, end: (m.index ?? 0) + m[0].length });
+  }
+  for (let i = 0; i < marks.length; i++) {
+    const { name, end } = marks[i];
+    if (segs.has(name)) continue;
+    const segEnd = i + 1 < marks.length ? marks[i + 1].start : takes.length;
+    segs.set(name, takes.slice(end, segEnd));
+  }
   const per = seatNames
     .map((n) => {
-      const seg = takes.split(`【${n}】`)[1] ?? "";
+      const seg = segs.get(n) ?? "";
       const snippet = seg
         .replace(/\s+/g, " ")
         .split("【")[0]

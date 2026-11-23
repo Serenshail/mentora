@@ -133,6 +133,193 @@ ok("skip logged forced", goal.quizLog.some((q) => q.forced === true));
 const config = require(path.join(proj, "config.js"));
 ok("config default prod", config.current().indexOf("https://") === 0);
 
+/* ============ Mini V1.0：协议归一化 + 计划构建（utils/schema.js） ============ */
+const schema = require(path.join(proj, "utils/schema.js"));
+
+/* splitGoalReply：GOAL_READY 标记形态 */
+const cardReply =
+  '好的，先明确方向。<!--GOAL_READY-->\n```json\n{"topic":"系统架构","direction":"三个月内通过软考架构","domainKind":"exam","motivation":"升职","background":"五年后端","weeklyHours":6,"learnerProfile":["晚上学"],"successCriteria":["真题 45 分以上"],"assumptions":["不承诺日期"]}\n```';
+const cardR = schema.splitGoalReply(cardReply);
+ok("goal card: 标记形态出卡", cardR.card && cardR.card.topic === "系统架构" && cardR.card.domainKind === "exam");
+ok("goal card: prose 已剔 json", cardR.prose.length > 0 && cardR.prose.indexOf('"topic"') < 0);
+/* 裸 JSON（模型漏标记） */
+const cardR2 = schema.splitGoalReply(
+  '聊两句\n{"topic":"Rust","direction":"能写小工具","domainKind":"coding","motivation":"兴趣","background":"会 C","weeklyHours":4,"successCriteria":["写出一个 CLI"]}'
+);
+ok("goal card: 裸 json 出卡", cardR2.card && cardR2.card.topic === "Rust");
+ok("goal card: 普通回复不出卡", schema.splitGoalReply("你每周能投入多久？").card === null);
+
+/* masterDraftToPlan：estDays 字符串容错 + 标题公式 + 激活起点 */
+const mPlan = schema.masterDraftToPlan(
+  {
+    summary: "整体路线",
+    totalDaysEstimate: 9,
+    phases: [
+      { title: "打基础", outcome: "能跑起来", estDays: "3", outline: ["语法", "练习"], boundary: "不碰宏" },
+      { title: "做项目", outcome: "能交付", estDays: 6, outline: ["CLI"] }
+    ]
+  },
+  { weeklyHours: 5 }
+);
+ok("master plan: 阶段标题公式", mPlan.phases[0].title === "阶段1 · 打基础" && mPlan.phases[1].title === "阶段2 · 做项目");
+ok("master plan: 首阶段 active 其余 locked", mPlan.phases[0].status === "active" && mPlan.phases[1].status === "locked");
+ok("master plan: estDays 字符串容错", mPlan.totalDays === 9);
+ok("master plan: 无天目录 planned=false", mPlan.phases[0].planned === false && mPlan.phases[0].dayIds.length === 0);
+ok("master plan: boundary 落档", mPlan.phases[0].boundary === "不碰宏");
+
+/* normPhaseList + setPhaseCatalog：目录落库 → stub 占位 → 首天激活 */
+const catList = schema.normPhaseList({
+  boundary: "只学核心",
+  days: [
+    { title: "Day 1：入门", knowledgePoints: ["a", { text: "b", knowledgeType: "procedure" }] },
+    { title: "Day 2：进阶", knowledgePoints: ["c"] }
+  ]
+});
+ok("phase list: boundary + 2 天", catList.boundary === "只学核心" && catList.days.length === 2);
+const catGoalId = store.addGoal({
+  id: "g-cat",
+  topic: "测试目标",
+  direction: "方向",
+  domainKind: "coding",
+  motivation: "m",
+  background: "b",
+  weeklyHours: 5,
+  successCriteria: ["x"],
+  status: "active",
+  createdAt: new Date().toISOString(),
+  quizLog: [],
+  intakeTranscript: [],
+  plan: JSON.parse(JSON.stringify(mPlan))
+});
+store.setPhaseCatalog(
+  "g-cat",
+  mPlan.phases[0].id,
+  catList.boundary,
+  catList.days.map(function (d, i) {
+    return { id: "cd" + (i + 1), title: d.title, knowledgePoints: d.knowledgePoints };
+  })
+);
+const catGoal = store.goalById("g-cat");
+const catPhase = catGoal.plan.phases[0];
+ok("catalog: dayIds 接通", catPhase.dayIds.join(",") === "cd1,cd2" && catPhase.catalog.length === 2);
+ok("catalog: stub 占位 + 次天仍锁", catGoal.plan.days.cd1.stub === true && catGoal.plan.days.cd2.status === "locked");
+ok("catalog: 首天激活 + 阶段激活", catGoal.plan.days.cd1.status === "active" && catPhase.status === "active");
+ok("catalog: planned 仍 false（有 stub）", catPhase.planned === false);
+
+/* phaseDraftToDay：单日细节容错（year 字符串/kind 非法/acceptance kind 回落） */
+const dayDraft = schema.phaseDraftToDay(
+  {
+    title: "Day 1：入门",
+    knowledgePoints: ["a", { text: "b", knowledgeType: "PROCEDURE" }],
+    resources: [
+      { title: "官方文档", url: "https://x.dev/a", why: "w", year: "2025年", kind: "doc" },
+      { title: "坏链资源", url: "ftp://nope", why: "w" }
+    ],
+    method: "读→练",
+    example: { title: "t", description: "d", code: "print(1)" },
+    acceptance: [
+      { kind: "explain", question: "q1" },
+      { kind: "bogus", question: "q2" }
+    ]
+  },
+  catPhase.id,
+  "cd1"
+);
+ok("phase day: knowledgeType 大写归一", dayDraft.knowledgePoints[1].knowledgeType === "procedure");
+ok("phase day: year 字符串解析", dayDraft.resources[0].year === 2025);
+ok("phase day: 非 http url 剥离（资源保留，与 Web 同）", dayDraft.resources.length === 2 && dayDraft.resources[1].url === undefined);
+ok("phase day: 验收 kind 回落 apply", dayDraft.acceptance[1].kind === "apply");
+store.setDayDetail("g-cat", catPhase.id, "cd1", dayDraft);
+const catGoal2 = store.goalById("g-cat");
+const cd1 = catGoal2.plan.days.cd1;
+ok("setDayDetail: stub 摘除 + 细节落位", cd1.stub === false && cd1.acceptance.length === 2 && cd1.method === "读→练");
+ok("setDayDetail: 运行态保留（active）", cd1.status === "active" && cd1.attempts === 0);
+ok("setDayDetail: 目录标题优先", cd1.title === "Day 1：入门");
+
+/* 阅读目标归一化 */
+ok("reading goal: 枚举回落 understand", schema.normReadingGoal({ primary: "bogus" }).primary === "understand");
+ok("reading goal: secondary 非法剔除", schema.normReadingGoal({ primary: "think", secondary: ["apply", "nope"] }).secondary.join(",") === "apply");
+ok("goalText: 未设定", schema.goalText(null) === "未设定");
+const gt = schema.goalText({ primary: "think", secondary: ["apply"], intent: "用于审计", background: "懂 SQL" });
+ok("goalText: 主次目标+意图拼接", gt.indexOf("主目标 思考") === 0 && gt.indexOf("应用") > 0 && gt.indexOf("审计") > 0);
+
+/* 三重验收归一化 */
+const genQ = schema.normAssessGen({
+  questions: [
+    { kind: "bogus", question: "a" },
+    { question: "b" },
+    { question: "c" },
+    { question: "d" }
+  ]
+});
+ok("assess gen: kind 回落 explain + 截 3", genQ.questions.length === 3 && genQ.questions[0].kind === "explain");
+const agGrade = schema.normAssessGrade({
+  results: [
+    { kind: "explain", level: "mastered", evidence: "用户原话", feedback: "好" },
+    { kind: "connect", level: "weird", feedback: "x" }
+  ],
+  suggestion: "补课建议",
+  misconception: { concept: "误解甲", note: "把 A 当成 B" }
+});
+ok("assess grade: 非法 level 回落 partial", agGrade.results[1].level === "partial");
+ok("assess grade: misconception 带出", agGrade.misconception && agGrade.misconception.concept === "误解甲");
+
+/* ============ Mini V1.0：阅读系统 store 写路径 ============ */
+store.onLogin("u-read");
+const bidV1 = store.createBookFromPlan(
+  "测试之书",
+  "作者甲",
+  "",
+  {
+    map: { coreProblem: "P", authorStance: "S", lineage: "L", controversies: "C" },
+    chapters: [
+      { title: "第一章", focusQuestion: "q1?" },
+      { title: "第二章", focusQuestion: "q2?" },
+      { title: "第三章", focusQuestion: "q3?" }
+    ]
+  },
+  "verified"
+);
+const bookV1 = store.bookById(bidV1);
+ok("建书: map 四区域 + verification", bookV1.map && bookV1.map.coreProblem === "P" && bookV1.verification === "verified");
+store.updateBook(bidV1, {
+  goal: { primary: "think", secondary: ["apply"], intent: "", background: "", inferred: false, setAt: new Date().toISOString() }
+});
+ok("阅读目标: setBookGoal 落档", store.bookById(bidV1).goal.primary === "think");
+
+/* 手动读完不写 masteredAt；验收通过才写 */
+const chV1 = store.bookById(bidV1).chapters[0].id;
+store.setChapterStatus(bidV1, chV1, "done");
+const chAfterManual = store.bookById(bidV1).chapters[0];
+ok("手动读完: done 但无 masteredAt", chAfterManual.status === "done" && !chAfterManual.masteredAt);
+store.addChapterAssessment(bidV1, { chapterId: chV1, kind: "explain", question: "q", answer: "a", level: "mastered", evidence: "e1", feedback: "f" }, { concept: "误解甲", note: "把 A 当 B" });
+store.addChapterAssessment(bidV1, { chapterId: chV1, kind: "apply", question: "q2", answer: "a2", level: "mastered", evidence: "e2", feedback: "f2" });
+store.markChapterMastered(bidV1, chV1, "e1 e2");
+const bAfterMaster = store.bookById(bidV1);
+ok("验收通过: masteredAt 落档", Boolean(bAfterMaster.chapters[0].masteredAt) && bAfterMaster.chapters[0].status === "done");
+ok("验收档案: assessments 追加", (bAfterMaster.assessments || []).length === 2);
+ok("学习状态: misconception 两态落库", bAfterMaster.learning.misconceptions.some(function (m) { return m.concept === "误解甲" && m.clarified === false; }));
+ok("学习状态: 证据入档", bAfterMaster.learning.evidence.some(function (e) { return e.text === "e1 e2"; }));
+
+/* 沉淀：question/unresolved 联动待解决问题 */
+store.addBookDeposit(bidV1, { type: "question", text: "为什么甲会这样？" });
+const bAfterDeposit = store.bookById(bidV1);
+ok("沉淀: 七类落库", bAfterDeposit.deposits.length === 1 && bAfterDeposit.deposits[0].type === "question");
+ok("沉淀: 待解决问题联动", bAfterDeposit.learning.unresolvedQuestions.indexOf("为什么甲会这样？") >= 0);
+
+/* 整本五态：finished/mastered 联动 */
+store.setBookReadStatus(bidV1, "finished");
+ok("五态: finished 联动 finishedAt+status", store.bookById(bidV1).readStatus === "finished" && Boolean(store.bookById(bidV1).finishedAt) && store.bookById(bidV1).status === "done");
+store.setBookReadStatus(bidV1, "mastered");
+ok("五态: mastered 联动 masteredAt", store.bookById(bidV1).readStatus === "mastered" && Boolean(store.bookById(bidV1).masteredAt));
+
+/* recap 入第二大脑：source=read + 进复习队列（Web addKnowledge read 路径同语义） */
+store.addReadKnowledge([{ title: "《测试之书》· 第一章", body: "本章小结正文", domain: "测试之书" }], "《测试之书》");
+const recapNote = store.state.knowledge.filter(function (k) { return k.title === "《测试之书》· 第一章"; })[0];
+ok("recap 入库: source=read", Boolean(recapNote) && recapNote.source === "read");
+ok("recap 入库: 进复习队列", Boolean(recapNote && recapNote.nextReviewAt));
+
+
 /* ============ 结业回归锁（曾经的真 bug） ============
  * unlockNext 早期直接给传入对象赋 status="done"，而调用方传的是临时 shadow，
  * 赋值丢失 → 目标永远 active（首页永远"进行中"、结业回路永不触发）。
@@ -228,6 +415,43 @@ const { createStreamRenderer } = require(path.join(proj, "utils/stream-view.js")
   const r = await store2.pullIfSafe(false);
   ok("防抖窗口内 pull 必须 skip", r === "skip");
   ok("防抖窗口内本地改动不被覆盖", store2.goalById("g-race").topic === "local-edit");
+
+  /* ---- 断流校验（t=end 必达，与 Web ai/client.ts 同语义） ----
+   * 模拟网关掐断：喂了正文但服务端从不发 {"t":"end"}，success 先到——
+   * 旧实现把半截当完整 resolve；修复后必须 reject 且 err.partial 带回半截内容。 */
+  const chatMod = require(path.join(proj, "utils/chat.js"));
+  global.wx.request = function (opts) {
+    return {
+      abort: function () {},
+      onChunkReceived: function (fn) {
+        fn({ data: '{"t":"d","v":"半截"}\n' });
+        setTimeout(function () {
+          opts.success({ statusCode: 200, header: {} });
+        }, 5);
+      }
+    };
+  };
+  const broken = await chatMod
+    .streamChat({ task: "lesson", args: {}, messages: [] })
+    .then(function () { return null; })
+    .catch(function (e) { return e; });
+  ok("断流: 无 t=end 必须失败", Boolean(broken) && broken.message.indexOf("连接中断") >= 0);
+  ok("断流: err.partial 保留半截", Boolean(broken) && broken.partial === "半截");
+
+  /* 完整流：d + end + success → resolve 全文 */
+  global.wx.request = function (opts) {
+    return {
+      abort: function () {},
+      onChunkReceived: function (fn) {
+        fn({ data: '{"t":"d","v":"全文"}\n{"t":"end"}\n' });
+        setTimeout(function () {
+          opts.success({ statusCode: 200, header: {} });
+        }, 5);
+      }
+    };
+  };
+  const whole = await chatMod.streamChat({ task: "lesson", args: {}, messages: [] });
+  ok("完整流: 见 t=end 才 resolve", whole === "全文");
 
   // 还原 api 缓存，避免影响其它断言
   if (saved) require.cache[apiPath] = saved;

@@ -29,10 +29,38 @@ export function hashPassword(password: string): { salt: string; hash: string } {
   return { salt, hash };
 }
 
+/** 异步版哈希：参数与输出格式和 hashPassword 完全一致（hex 盐 + 64 字节 hex hash），
+ *  仅把 scryptSync 换成线程池上的 crypto.scrypt。请求热路径（注册/改密/重置）用同步版
+ *  会独占事件循环，理由同 verifyPasswordAsync——公开端点统一走异步版。 */
+export function hashPasswordAsync(password: string): Promise<{ salt: string; hash: string }> {
+  const salt = crypto.randomBytes(16).toString("hex");
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, 64, (err, key) => {
+      if (err || !key) return reject(err ?? new Error("scrypt failed"));
+      resolve({ salt, hash: key.toString("hex") });
+    });
+  });
+}
+
 export function verifyPassword(password: string, salt: string, hash: string): boolean {
   const test = crypto.scryptSync(password, salt, 64);
   const saved = Buffer.from(hash, "hex");
   return test.length === saved.length && crypto.timingSafeEqual(test, saved);
+}
+
+/** 异步版密码校验：scrypt 默认 N=16384，单次几十毫秒。放在请求热路径上用同步版会
+ *  独占事件循环——分布式撞库（数百 IP 并发打 /api/auth/login）时 scrypt 串行排队，
+ *  自托管单进程上全站请求一起卡顿。Node 官方明确建议请求路径用 crypto.scrypt。
+ *  参数与 verifyPassword 完全一致，校验逻辑也逐字对齐，两条路径可互换。 */
+export function verifyPasswordAsync(password: string, salt: string, hash: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    crypto.scrypt(password, salt, 64, (err, key) => {
+      if (err || !key) return resolve(false);
+      const saved = Buffer.from(hash, "hex");
+      if (key.length !== saved.length) return resolve(false);
+      resolve(crypto.timingSafeEqual(key, saved));
+    });
+  });
 }
 
 /* ---- 会话：HMAC 签名 cookie（无状态） ---- */
@@ -52,7 +80,13 @@ export function readSessionToken(token: string | undefined): SessionUser | null 
   const [payload, sig] = token.split(".");
   if (!payload || !sig) return null;
   const expect = sign(payload);
-  if (sig.length !== expect.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect))) {
+  /* 长度守卫必须按**字节**比，不能按字符串长度（UTF-16 码元）：sig 来自 cookie，
+   * 攻击者可发 43 个多字节字符（str.length 相等、UTF-8 129 字节），
+   * timingSafeEqual 遇字节长不等直接抛 ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH，
+   * 会穿过 getSessionUser/verifySession 变成 500。伪造 cookie 应判"未登录"。 */
+  const got = Buffer.from(sig);
+  const want = Buffer.from(expect);
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) {
     return null;
   }
   try {

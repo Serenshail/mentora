@@ -14,6 +14,40 @@ export interface SeatMeta {
   color: string; // tailwind gradient class
 }
 
+/** 自建/演示人物的兜底配色：必须与内置席位同形（gradient class），
+ *  否则 UI 一旦按 className 渲染就会静默失去配色。生产者统一引用此常量。 */
+export const DEFAULT_SEAT_COLOR = "from-violet-500 to-purple-600";
+
+/** 把裸色名（"violet" / "amber" 等历史/模型输出）归一成 tailwind 渐变类。
+ *  该字段的契约是 gradient class（见 SeatMeta.color），落库前归一，
+ *  避免同字段两种格式并存、UI 消费时静默失去配色。 */
+const BARE_COLOR_GRADIENTS: Record<string, string> = {
+  violet: "from-violet-500 to-purple-600",
+  purple: "from-purple-500 to-violet-600",
+  amber: "from-amber-500 to-orange-600",
+  orange: "from-orange-500 to-red-500",
+  red: "from-red-500 to-rose-600",
+  rose: "from-rose-500 to-pink-600",
+  pink: "from-pink-500 to-fuchsia-600",
+  emerald: "from-emerald-500 to-teal-600",
+  teal: "from-teal-500 to-cyan-600",
+  cyan: "from-cyan-600 to-blue-700",
+  blue: "from-blue-600 to-indigo-700",
+  indigo: "from-indigo-500 to-blue-700",
+  sky: "from-sky-600 to-indigo-700",
+  slate: "from-slate-500 to-slate-700",
+  stone: "from-stone-600 to-stone-800",
+  zinc: "from-zinc-600 to-zinc-800",
+};
+
+export function normalizeSeatColor(color: unknown): string {
+  const c = String(color ?? "").trim();
+  if (!c) return DEFAULT_SEAT_COLOR;
+  if (BARE_COLOR_GRADIENTS[c.toLowerCase()]) return BARE_COLOR_GRADIENTS[c.toLowerCase()];
+  /* 已是渐变类（含 from-/to-/bg- 等前缀）或任意 tailwind 类名：原样保留 */
+  return c;
+}
+
 export const PERSONA_SEATS: SeatMeta[] = [
   {
     id: "naval",
@@ -106,21 +140,21 @@ export const CONCEPT_SEATS: SeatMeta[] = [
     id: "first-principles",
     name: "第一性原理",
     tag: "把问题拆到不可再拆的事实",
-    bio: "亚里士多德提出、马斯克带火的思维工具：不靠类比,回到事物最基本的事实从头推演。",
+    bio: "亚里士多德提出、马斯克带火的思维工具：不靠类比，回到事物最基本的事实从头推演。",
     color: "from-slate-500 to-slate-700",
   },
   {
     id: "incentives",
     name: "激励相容",
     tag: "看懂每个人的行为由什么激励驱动",
-    bio: "2007 年诺贝尔经济学奖（机制设计,Hurwicz/Maskin/Myerson）的核心：一个安排好不好,看它是否让参与者的自利行为恰好推进整体目标。",
+    bio: "2007 年诺贝尔经济学奖（机制设计，Hurwicz/Maskin/Myerson）的核心：一个安排好不好，看它是否让参与者的自利行为恰好推进整体目标。",
     color: "from-amber-600 to-orange-700",
   },
   {
     id: "antifragile-filter",
     name: "反脆弱过滤",
     tag: "这个决定在波动里会更强还是更脆",
-    bio: "塔勒布《反脆弱》的决策过滤器：偏好从波动中受益的选项,消除单点脆弱,用小代价试错替代豪赌。",
+    bio: "塔勒布《反脆弱》的决策过滤器：偏好从波动中受益的选项，消除单点脆弱，用小代价试错替代豪赌。",
     color: "from-stone-600 to-stone-800",
   },
   {

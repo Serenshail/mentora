@@ -27,7 +27,7 @@
   <!-- draft（引导中）目标还没有 plan：空的路径区要有引导，不能光秃秃 -->
   <view wx:if="{{!phases.length}}" class="card empty">
     <view class="empty-title">学习路径还没生成</view>
-    <view class="empty-sub">苏格拉底引导在网页版完成，计划会同步到手机；也可以先用示例目标走一遍闭环。</view>
+    <view class="empty-sub">回「学习」页开始一个新目标，或等网页端的计划同步过来。</view>
   </view>
 
   <block wx:else>
@@ -43,13 +43,23 @@
           <view class="row gap-12">
             <view class="dot dot-{{ph.tone}}"></view>
             <text class="h3">{{ph.title}}</text>
+            <!-- 阶段级状态文字：locked 阶段此前只有一个灰点，用户看不出「为什么点不动」 -->
+            <view class="badge badge-{{ph.tone}}">{{ph.statusLabel}}</view>
           </view>
           <view wx:if="{{ph.outcome}}" class="sub clamp-2" style="margin-top: 8rpx">{{ph.outcome}}</view>
         </view>
         <text class="chev {{ph.open ? 'chev-open' : ''}}">›</text>
       </view>
 
-      <view wx:if="{{ph.open}}" class="days">
+      <!-- 该阶段还没有天目录：一键排出（总纲要只有阶段骨架，目录是学习的前提） -->
+      <view wx:if="{{ph.open && ph.needCatalog}}" class="gen-catalog">
+        <view class="sub">这个阶段还没有排出学习日。</view>
+        <button class="btn btn-ink btn-sm" style="margin-top: 16rpx" data-phase="{{ph.id}}" bindtap="genCatalog" loading="{{genBusy}}">
+          {{genBusy ? "正在排目录…" : "生成本阶段学习日（约半分钟）"}}
+        </button>
+      </view>
+
+      <view wx:if="{{ph.open && ph.days.length}}" class="days">
         <view
           wx:for="{{ph.days}}"
           wx:for-item="d"
@@ -57,6 +67,7 @@
           class="day {{d.status === 'locked' ? 'day-off' : ''}}"
           data-id="{{d.id}}"
           data-status="{{d.status}}"
+          data-stub="{{d.stub}}"
           bindtap="openDay"
           aria-role="button"
           aria-label="第 {{d.index}} 天 {{d.title}}，{{d.statusLabel}}{{d.status === 'locked' ? '，未解锁' : ''}}"

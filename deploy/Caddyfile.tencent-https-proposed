@@ -1,0 +1,28 @@
+# 提案：先保留现有 HTTP 服务，同时增加 IP 的 HTTPS；验证成功后再规划迁移和关闭明文入口。
+{
+	default_sni 192.144.181.171
+	auto_https disable_redirects
+}
+
+(mentora_proxy) {
+	reverse_proxy 127.0.0.1:3000
+	@html {
+		not path /_next/static/*
+		not path /_next/image*
+		path /*
+	}
+	header @html Cache-Control "no-cache, must-revalidate"
+}
+
+:80 {
+	import mentora_proxy
+}
+
+https://192.144.181.171 {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+		}
+	}
+	import mentora_proxy
+}

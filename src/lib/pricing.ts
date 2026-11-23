@@ -48,8 +48,11 @@ export const PLANS: Record<PlanId, PlanInfo> = {
 
 export const PLAN_ORDER: PlanId[] = ["trial", "month", "year", "founder"];
 
+/** 唯一查找入口。用 hasOwn 而非 `in`：`in` 会走原型链，
+ *  "constructor"/"toString"/"__proto__" 会被当成合法套餐返回函数/原型对象，
+ *  调用方再取 .days/.price 就是 undefined（甚至 TypeError）。 */
 export function planOf(id: string | undefined | null): PlanInfo | null {
-  return id && id in PLANS ? PLANS[id as PlanId] : null;
+  return typeof id === "string" && Object.hasOwn(PLANS, id) ? PLANS[id as PlanId] : null;
 }
 
 /** 页面展示用：9.9 → "9.9"，99 → "99" */

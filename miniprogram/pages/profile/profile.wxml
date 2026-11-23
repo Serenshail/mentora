@@ -3,17 +3,20 @@
 <view class="page">
   <view class="head">
     <view class="head-greet">我的</view>
-    <view class="head-title">{{user ? user.name : "未登录"}}</view>
+    <view class="head-title">{{booting ? "…" : user ? user.name : "未登录"}}</view>
     <view wx:if="{{user}}" class="head-sub">{{user.email}}</view>
   </view>
 
-  <!-- 账号与数据概况：一张卡说完，不做成四条 -->
+  <!-- 账号与数据概况：一张卡说完，不做成四条。
+       booting（会话恢复中）必须同时守住统计卡：profile.js:16 的设计意图是
+       「头部不能先显示未登录、计数也不该先报 0」——旧实现只守了标题，
+       恢复窗口内用户会看到「0 目标 0 笔记 0 书 0 会话」的假零态。 -->
   <view class="card">
     <view class="stats">
-      <view class="stat"><view class="stat-n">{{counts.goals}}</view><view class="stat-l">目标</view></view>
-      <view class="stat"><view class="stat-n">{{counts.notes}}</view><view class="stat-l">笔记</view></view>
-      <view class="stat"><view class="stat-n">{{counts.books}}</view><view class="stat-l">书</view></view>
-      <view class="stat"><view class="stat-n">{{counts.sessions}}</view><view class="stat-l">会话</view></view>
+      <view class="stat"><view class="stat-n">{{booting ? "…" : counts.goals}}</view><view class="stat-l">目标</view></view>
+      <view class="stat"><view class="stat-n">{{booting ? "…" : counts.notes}}</view><view class="stat-l">笔记</view></view>
+      <view class="stat"><view class="stat-n">{{booting ? "…" : counts.books}}</view><view class="stat-l">书</view></view>
+      <view class="stat"><view class="stat-n">{{booting ? "…" : counts.sessions}}</view><view class="stat-l">会话</view></view>
     </view>
     <view wx:if="{{sync}}" class="sync-line">
       <view class="dot dot-{{syncTone}}"></view>

@@ -2,6 +2,14 @@ import { NextRequest } from "next/server";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { verifySession } from "@/lib/server/auth";
 import { isDeployed } from "@/lib/server/deploy-env";
+import { relevantSearchResults } from "@/lib/search-relevance";
+import {
+  BROWSER_HEADERS,
+  MAX_SEARCH_RESULTS,
+  SEARCH_TIMEOUT_MS,
+  searchBing,
+  type SearchResult,
+} from "@/lib/server/search-bing";
 
 export const runtime = "nodejs";
 
@@ -13,21 +21,23 @@ export const runtime = "nodejs";
  *  - 每用户持久限流：容量 20、按天回填（≈20 次/天），部署者成本可控。
  * 日志脱敏：只记结果数与通道，不记完整 query。 */
 
-export const SEARCH_TIMEOUT_MS = 8_000;
-const MAX_RESULTS = 5;
+const MAX_RESULTS = MAX_SEARCH_RESULTS;
 
-interface SearchResult {
-  title: string;
-  url: string;
-  snippet: string;
-}
+/* 全链聚合预算：单 provider 的 fetch 各有 8s AbortSignal 超时，但链上没有总闸——
+ * 全上游同时挂起（自托管出网被墙/DNS 黑洞时典型）最坏 8s×4 串行 ≈32s，突破设备认证
+ * 注释里的「网关 15s 无数据熔断线」（device-auth.ts:17），用户拿到网关层 500 而非
+ * 结构化 502，并占用函数槽。与 fetch-page（TOTAL_TIMEOUT_MS 全程 deadline）、
+ * cron/expiry-reminder（BUDGET_MS 分块预算）同一纪律：每个 provider 只拿到
+ * min(8s, 剩余预算)，预算耗尽即停，剩余 provider 不再尝试，直接落 502/空态。
+ * 取 14s：给网关 15s 熔断线留 1s 响应序列化余量。每用户 20 次/天持久限流封顶滥用面。 */
+const SEARCH_CHAIN_BUDGET_MS = 14_000;
 
-async function searchTavily(query: string): Promise<SearchResult[]> {
+async function searchTavily(query: string, timeoutMs: number): Promise<SearchResult[]> {
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_key: process.env.TAVILY_API_KEY, query, max_results: MAX_RESULTS }),
-    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`tavily ${res.status}`);
   const j = (await res.json()) as { results?: { title?: string; url?: string; content?: string }[] };
@@ -37,10 +47,10 @@ async function searchTavily(query: string): Promise<SearchResult[]> {
     .map((r) => ({ title: r.title || r.url!, url: r.url!, snippet: (r.content || "").slice(0, 300) }));
 }
 
-async function searchBrave(query: string): Promise<SearchResult[]> {
+async function searchBrave(query: string, timeoutMs: number): Promise<SearchResult[]> {
   const res = await fetch(
     `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${MAX_RESULTS}`,
-    { headers: { "X-Subscription-Token": process.env.BRAVE_API_KEY!, Accept: "application/json" }, signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) }
+    { headers: { "X-Subscription-Token": process.env.BRAVE_API_KEY!, Accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) }
   );
   if (!res.ok) throw new Error(`brave ${res.status}`);
   const j = (await res.json()) as { web?: { results?: { title?: string; url?: string; description?: string }[] } };
@@ -50,76 +60,11 @@ async function searchBrave(query: string): Promise<SearchResult[]> {
     .map((r) => ({ title: r.title || r.url!, url: r.url!, snippet: (r.description || "").slice(0, 300) }));
 }
 
-/* 浏览器伪装头（抄自参考实现的核心纪律）：搜索引擎对非浏览器
- * UA / 缺 Accept-Language 的请求直接 403；带上完整 Chrome 头可过基础反爬。 */
-const BROWSER_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-const BROWSER_HEADERS: Record<string, string> = {
-  "User-Agent": BROWSER_UA,
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-  "Cache-Control": "no-cache",
-  Pragma: "no-cache",
-};
 
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&ensp;|&#8194;/g, " ")
-    .replace(/&middot;|&#0183;/g, "·")
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)));
-}
-
-/** 无 Key 默认源：Bing 网页解析（cn.bing.com 国内外服务器均可达；
- * DDG 对数据中心 IP 反爬封锁，实测 Vercel hkg1 与国内直连都不可用，仅作末位兜底）。 */
-async function searchBing(query: string): Promise<SearchResult[]> {
-  const hosts = ["https://cn.bing.com", "https://www.bing.com"];
-  let html = "";
-  for (const host of hosts) {
-    const url = `${host}/search?q=${encodeURIComponent(query)}&mkt=zh-CN&count=10`;
-    const res = await fetch(url, {
-      headers: { ...BROWSER_HEADERS, Referer: `${host}/` },
-      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`bing ${res.status}`);
-    html = await res.text();
-    if (html.includes('class="b_algo"')) break;
-  }
-  if (!html.includes('class="b_algo"')) throw new Error("bing 无结果页");
-
-  const out: SearchResult[] = [];
-  /* 每条结果是一个 <li class="b_algo"> 块：h2>a=标题+链接，第一个 <p>=摘要 */
-  for (const m of html.matchAll(/<li class="b_algo"[\s\S]*?<\/li>/g)) {
-    if (out.length >= MAX_RESULTS) break;
-    const block = m[0];
-    const a = /<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
-    if (!a) continue;
-    let href = a[1];
-    /* bing 的跳转链接 /ck/a?...&u=a1<base64url> → 解出真实地址 */
-    const uParam = /[?&]u=a1([^&]+)/.exec(href);
-    if (uParam && /^https?:\/\//i.test(Buffer.from(uParam[1], "base64").toString("utf8"))) {
-      href = Buffer.from(uParam[1], "base64").toString("utf8");
-    }
-    if (!/^https?:\/\//i.test(href)) continue;
-    const title = decodeEntities(a[2].replace(/<[^>]+>/g, "")).trim();
-    const p = /<p[^>]*>([\s\S]*?)<\/p>/i.exec(block);
-    const snippet = p ? decodeEntities(p[1].replace(/<[^>]+>/g, "")).trim() : "";
-    out.push({ title: title || href, url: href, snippet: snippet.slice(0, 300) });
-  }
-  if (out.length === 0) throw new Error("bing 解析为空");
-  return out;
-}
-
-/** 无 Key 兜底：DuckDuckGo Lite 网页解析（尽力而为，被反爬时如实报错） */
-async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
+async function searchDuckDuckGo(query: string, timeoutMs: number): Promise<SearchResult[]> {
   const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
     headers: { ...BROWSER_HEADERS, Referer: "https://www.google.com/" },
-    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`duckduckgo ${res.status}`);
   const html = (await res.text()).slice(0, 400_000);
@@ -162,20 +107,27 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "缺少搜索词" }, { status: 400 });
   }
 
-  const providers: { name: string; run: () => Promise<SearchResult[]> }[] = [];
-  if (process.env.TAVILY_API_KEY) providers.push({ name: "tavily", run: () => searchTavily(query) });
-  if (process.env.BRAVE_API_KEY) providers.push({ name: "brave", run: () => searchBrave(query) });
-  providers.push({ name: "bing", run: () => searchBing(query) });
-  providers.push({ name: "duckduckgo", run: () => searchDuckDuckGo(query) });
+  const providers: { name: string; run: (timeoutMs: number) => Promise<SearchResult[]> }[] = [];
+  if (process.env.TAVILY_API_KEY) providers.push({ name: "tavily", run: (t) => searchTavily(query, t) });
+  if (process.env.BRAVE_API_KEY) providers.push({ name: "brave", run: (t) => searchBrave(query, t) });
+  providers.push({ name: "bing", run: (t) => searchBing(query, t) });
+  providers.push({ name: "duckduckgo", run: (t) => searchDuckDuckGo(query, t) });
 
   let lastErr = "";
+  let emptyProvider = "";
+  const chainDeadline = Date.now() + SEARCH_CHAIN_BUDGET_MS;
   for (const p of providers) {
+    /* 总预算闸（fetch-page 的 deadline 同款）：剩余不足就停，不再发起注定撞熔断线的上游 */
+    const remaining = chainDeadline - Date.now();
+    if (remaining <= 0) break;
     try {
-      const results = await p.run();
-      return Response.json({ results, provider: p.name });
+      const results = relevantSearchResults(query, await p.run(Math.min(SEARCH_TIMEOUT_MS, remaining)));
+      if (results.length) return Response.json({ results, provider: p.name });
+      emptyProvider ||= p.name;
     } catch (e) {
       lastErr = e instanceof Error ? e.message : "unknown";
     }
   }
+  if (emptyProvider) return Response.json({ results: [], provider: emptyProvider });
   return Response.json({ error: `搜索上游不可用（${lastErr.slice(0, 80)}）` }, { status: 502 });
 }

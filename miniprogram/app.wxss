@@ -31,6 +31,8 @@ page {
   --accent-line: rgba(91, 84, 230, 0.24);
   --ok: #047857;
   --ok-wash: rgba(4, 120, 87, 0.08);
+  /* 同 --accent-line 的口径：ok 系描边色（pass-card 边框等），不再在页面里写字面量 */
+  --ok-line: rgba(4, 120, 87, 0.3);
   --warn: #b45309;
   --warn-wash: rgba(180, 83, 9, 0.08);
   --bad: #dc2626;
@@ -343,6 +345,9 @@ page {
 .dot-bad { background: var(--bad); }
 .dot-accent { background: var(--accent); }
 .dot-idle { background: var(--faint); }
+/* tone="dim" 是数据层的通用灰（goal.js STATUS_META.locked、learn.js 暂停/引导中目标），
+ * 与 .badge-dim 同口径。此前只有 .dot-idle，dim 圆点没有背景色因而不可见。 */
+.dot-dim { background: var(--faint); }
 
 /* ============ 表单 ============ */
 .field-label {
@@ -575,7 +580,6 @@ page {
 .heat-1 { background: rgba(91, 84, 230, 0.18); }
 .heat-2 { background: rgba(91, 84, 230, 0.46); }
 .heat-3 { background: var(--accent); }
-.heat-off { opacity: 0.28; }
 .heat-legend { display: flex; align-items: center; justify-content: flex-end; gap: 8rpx; margin-top: 16rpx; }
 .heat-legend-cell { width: 18rpx; height: 18rpx; border-radius: 4rpx; }
 

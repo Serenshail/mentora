@@ -98,16 +98,41 @@ function extractMetaTags(metaBlock: string): string[] {
   return [...out];
 }
 
-/** 批量解析。onProgress(已解析数) 用于进度条 */
+/** 单次解析的硬上限（篇数 + 已读字节）。
+ * 为什么必须有：按目录勾选与「仅结构」都发生在 parseVault 之后，而解析会把每个 .md 的
+ * 正文 file.text() 读进 ParsedNote 常驻内存（out + setParsed 的 React state）。单文件
+ * 512KB 上限只管单篇、管不住篇数与总量：移动端选一个几万篇的库，会在看到任何降级选项
+ * 之前先把数百 MB 字符串拉进内存，崩标签页。因此解析阶段自己兜一层总预算，超出即停止
+ * 读取并把未解析篇数回报给调用方（由 UI 提示分批导入），而不是读完再让用户选。 */
+export const PARSE_MAX_FILES = 20000;
+export const PARSE_MAX_BYTES = 32 * 1024 * 1024;
+
+export interface ParseVaultResult {
+  notes: ParsedNote[];
+  /** 因超出 PARSE_MAX_FILES / PARSE_MAX_BYTES 而未读取的文件数（0 = 全部已解析） */
+  truncated: number;
+}
+
+/** 批量解析。onProgress(已解析数) 用于进度条；limits 仅供测试注入小预算 */
 export async function parseVault(
   files: File[],
-  onProgress?: (done: number, total: number) => void
-): Promise<ParsedNote[]> {
+  onProgress?: (done: number, total: number) => void,
+  limits: { maxFiles?: number; maxBytes?: number } = {}
+): Promise<ParseVaultResult> {
+  const maxFiles = limits.maxFiles ?? PARSE_MAX_FILES;
+  const maxBytes = limits.maxBytes ?? PARSE_MAX_BYTES;
   const out: ParsedNote[] = [];
   const titles = new Set<string>();
   let done = 0;
+  let bytes = 0; // 已读文件的字节数（file.size；内存占用约 ≤2 倍）
+  let truncated = 0;
 
   for (const file of files) {
+    /* 预算在读取之前判定：out 的篇数与已读字节都不再无界增长 */
+    if (out.length >= maxFiles || bytes >= maxBytes) {
+      truncated = files.length - done;
+      break;
+    }
     const rel = relativePath(file);
     const segs = rel.split("/");
     let skipped: string | null = null;
@@ -126,6 +151,7 @@ export async function parseVault(
 
     if (!skipped) {
       try {
+        bytes += file.size;
         const raw = await readAsText(file);
         /* metaBlock 由 splitFrontmatter 一并带回：旧实现先手动 match 再调函数再 match，
          * 同一正则跑两遍（报告 3.2 登记）。 */
@@ -156,8 +182,9 @@ export async function parseVault(
     done += 1;
     if (onProgress && done % 25 === 0) onProgress(done, files.length);
   }
-  if (onProgress) onProgress(files.length, files.length);
-  return out;
+  /* 截断时 done < files.length：进度按实际解析数收尾，不谎报已全量读完 */
+  if (onProgress) onProgress(done, files.length);
+  return { notes: out, truncated };
 }
 
 /** 把双链目标规范化：与导入清单/已有笔记标题做大小写不敏感匹配 */

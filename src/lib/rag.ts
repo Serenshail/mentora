@@ -1,8 +1,13 @@
 /* ============================================================
- * RAG 检索第一步：词法检索（BM25 简化版，中文按二元组切词）
- * —— 不需要任何额外 API Key，本地即可跑；
- * 向量检索（embedding）留有同名接口：配置嵌入模型后可无缝升级，
- * 检索结果统一走 retrieve()，上层对话无感。
+ * RAG 检索基础层：词法检索（BM25 简化版，中文按二元组切词）与上下文构建
+ * —— 不需要任何额外 API Key，本地即可跑；本文件只提供可复用的基础件。
+ *
+ * 实际检索入口（上层不要直接调本文件里的 retrieve()）：
+ *   · 客户端 / 对话：wikiRetrieve()（图导航）→ rag-pipeline 的 retrieveEnhanced()
+ *     （见 rag-pipeline.ts、agent/tool-executors.ts、read/[id]/page.tsx）；
+ *   · 服务端混排：retrieveAsync()（BM25 + 向量 RRF，embed 由调用方注入）。
+ * retrieve() 为早期同步入口，全仓（含测试）零调用方、且不含图导航/融合，
+ * 已废弃并仅为兼容旧引用保留，勿在它之上叠加新能力。
  * ============================================================ */
 
 export interface RagDoc {
@@ -36,16 +41,29 @@ function tokenize(text: string): string[] {
 
 /** 分词缓存：一条消息里的检索链路会多次遍历同一批语料（基线 + 融合 + 图导航），
  *  每次都对每篇标题+正文重分词是纯浪费——笔记内容不变时结果必然相同。
- *  键带 version/updatedAt，改动过的笔记自动失效；超过上限整表清空（够用且不泄漏）。 */
-const tokenCache = new Map<string, string[]>();
-function cachedTokens(d: RagDoc): string[] {
-  const key = `${d.id}|${d.version ?? 0}|${d.updatedAt ?? ""}`;
+ *  同一条记录里把词频（tf）一起算好：BM25 每次调用都要按篇重建 tf Map，
+ *  同样是 O(全库 token 数)，只缓存分词等于白省一半。tf 的键即去重后的 token，
+ *  故不再另存分词数组（只留长度），缓存体积与原来存一份分词基本持平。
+ *  键带 version/updatedAt，改动过的笔记自动失效；超过上限整表清空（够用且不泄漏）。
+ *  另带正文长度：wiki-compile 等调用方只传 {id,title,body}（无版本/时间戳），
+ *  若只按 id 做键，笔记改完正文后仍会命中旧分词。 */
+interface DocTokens {
+  /** 分词总数（含重复），BM25 的长度归一化用 */
+  len: number;
+  tf: Map<string, number>;
+}
+const tokenCache = new Map<string, DocTokens>();
+function cachedTokens(d: RagDoc): DocTokens {
+  const key = `${d.id}|${d.version ?? 0}|${d.updatedAt ?? ""}|${d.body.length}`;
   const hit = tokenCache.get(key);
   if (hit) return hit;
-  const t = tokenize(`${d.title} ${d.title} ${d.body}`); // 标题权重 ×2
+  const tokens = tokenize(`${d.title} ${d.title} ${d.body}`); // 标题权重 ×2
+  const tf = new Map<string, number>();
+  for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+  const rec: DocTokens = { len: tokens.length, tf };
   if (tokenCache.size > 5000) tokenCache.clear();
-  tokenCache.set(key, t);
-  return t;
+  tokenCache.set(key, rec);
+  return rec;
 }
 
 /** BM25（k1=1.5, b=0.75） */
@@ -59,24 +77,28 @@ export function bm25Search(
   const { k1 = 1.5, b = 0.75 } = opts;
 
   const docsTokens = docs.map((d) => cachedTokens(d));
-  const avgLen = docsTokens.reduce((a, t) => a + t.length, 0) / docs.length || 1;
-  const df = new Map<string, number>();
-  for (const tokens of docsTokens) {
-    for (const t of new Set(tokens)) df.set(t, (df.get(t) ?? 0) + 1);
-  }
+  const avgLen = docsTokens.reduce((a, t) => a + t.len, 0) / docs.length || 1;
   const N = docs.length;
   const qTokens = [...new Set(tokenize(query))];
+  /* df 只对查询词按需统计：旧实现为每个文档的每个 token 建全量 df Map，
+   * 是 O(全库 token 数) 且一条消息要重复 5 次（基线 + 原问句与 ≤3 个改写问句）。
+   * 这里改成 O(|查询词| × 文档数) 的 Map 命中查询，量级从"全库 token 数"降到
+   * "查询词数 × 文档数"，且无需维护 df 缓存，不存在读到过期统计的问题。 */
+  const df = new Map<string, number>();
+  for (const qt of qTokens) {
+    let c = 0;
+    for (const d of docsTokens) if (d.tf.has(qt)) c++;
+    df.set(qt, c);
+  }
 
   const scored = docs.map((doc, i) => {
-    const tokens = docsTokens[i];
-    const tf = new Map<string, number>();
-    for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
-    const len = tokens.length;
+    const { len, tf } = docsTokens[i];
     let score = 0;
     for (const qt of qTokens) {
       const f = tf.get(qt);
       if (!f) continue;
-      const idf = Math.log(1 + (N - (df.get(qt) ?? 0) + 0.5) / ((df.get(qt) ?? 0) + 0.5));
+      const dqt = df.get(qt) ?? 0;
+      const idf = Math.log(1 + (N - dqt + 0.5) / (dqt + 0.5));
       score += idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + (b * len) / avgLen)));
     }
     return { doc, score };
@@ -103,8 +125,10 @@ export function dedupeConflicts(docs: RagDoc[]): RagDoc[] {
   return [...best.values()];
 }
 
-/** 上层统一入口：先做冲突裁决,再 BM25,最后叠加标签/更新度轻量先验重排。
- *  接入嵌入模型后在此切换/混排向量检索,上层无感。 */
+/** @deprecated 全仓（含测试）无调用方，且缺少图导航/多查询融合，已落后于真实入口
+ *  （见文件头）。仅为兼容旧引用保留，勿在它之上叠加新能力；新代码用
+ *  wikiRetrieve()（客户端图导航）或 retrieveAsync()（服务端向量混排）。
+ *  行为：先做冲突裁决,再 BM25,最后叠加标签/更新度轻量先验重排。 */
 export function retrieve(query: string, docs: RagDoc[], k = 3): RagHit[] {
   const clean = dedupeConflicts(docs);
   const hits = bm25Search(query, clean, k * 2);
@@ -152,7 +176,7 @@ function cosine(a: number[], b: number[]): number {
   return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
 }
 
-/** 异步混排入口（服务端检索用）：embed 注入；返回 null / 抛错 → 纯 BM25（行为与 retrieve 一致） */
+/** 异步混排入口（服务端检索用）：embed 注入；返回 null / 抛错 → 纯 BM25（仅 BM25，不含标签/更新度先验） */
 export async function retrieveAsync(
   query: string,
   docs: RagDoc[],

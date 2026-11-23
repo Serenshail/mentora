@@ -1,6 +1,8 @@
 "use client";
 
 import { create } from "zustand";
+import { buildWikiIndex, mapWikiLinks, parseWikiTarget, resolvedWikiIds } from "./wiki-links";
+import { parseWorkspace } from "./workspace";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { fsrs, generatorParameters, createEmptyCard, Rating, State } from "ts-fsrs";
 import { useShallow } from "zustand/react/shallow";
@@ -13,18 +15,21 @@ import type {
   BookLearning,
   BookMap,
   BookReadStatus,
+  BookRouteHistory,
   BookTransfer,
   ChapterAssessment,
   ChatMsg,
   CouncilSession,
   CustomPersona,
   DayPlan,
+  FsrsState,
   Goal,
   KnowledgeItem,
   MasteryStatus,
   KnowledgeSource,
   KnowledgeType,
   NodeStatus,
+  Phase,
   Plan,
   PlanHistoryEntry,
   QuizResult,
@@ -32,6 +37,7 @@ import type {
   Settings,
 } from "./types";
 import { PROVIDERS } from "./ai/providers";
+import { normalizeSeatColor } from "./ai/persona-meta";
 import { todayISO, uid } from "./utils";
 import { backfillReviewDates, reviewPatch } from "./review";
 import { track, trackReading } from "./track";
@@ -41,6 +47,14 @@ import { track, trackReading } from "./track";
  * 悄悄变成「本机写盘也失败」，最终丢的是自上次成功落盘以来的全部编辑。 */
 const QUIZ_LOG_MAX = 200;
 const QUIZ_TEXT_MAX = 600;
+
+/* 同一失效模型不只 quizLog 一处：每日答疑、读书对话、圆桌会话的消息数组同样无界，
+ * 且都进云同步的全量载荷（api/sync FIELDS 的 goals/books/sessions 全量快照）。
+ * 长期重度使用后快照超限会让「推不上」滑向「本机写盘也失败」，丢掉自上次成功落盘
+ * 以来的全部编辑。各留最近 N 条（保留最新，丢弃最旧）。 */
+const DAY_QA_MAX = 100;
+const BOOK_CHAT_MAX = 300;
+const SESSION_MSG_MAX = 300;
 
 function trimQuizResult(r: QuizResult): QuizResult {
   return {
@@ -66,8 +80,25 @@ export const DEFAULT_SETTINGS: Settings = {
 /* ---- FSRS 自适应间隔调度（目标记忆率 90%；开源算法 ts-fsrs） ---- */
 const FSRS = fsrs(generatorParameters({ request_retention: 0.9 }));
 
+const FSRS_STATES: readonly number[] = [State.New, State.Learning, State.Review, State.Relearning];
+
+/* fsrs 字段卫生检查：备份/云端快照/localStorage 被改都可能带来非法日期或非有限数。
+ * 旧实现直接 `new Date(k.fsrs.due)` 得到 Invalid Date 送进 ts-fsrs，recordReview 在
+ * `c.due.toISOString()` 处抛 RangeError——set 不执行、异常被调用方（brain/page.tsx）
+ * catch 吞成「评分服务暂不可用」，该笔记重试永远失败且无指向性提示、无自愈。
+ * 非法即视为「无 fsrs」，回落 createEmptyCard + reviewStage 预热，单笔记自愈。 */
+function isValidFsrsState(f: unknown): f is FsrsState {
+  if (!isRecord(f)) return false;
+  const nums = [f.dif, f.stb, f.elapsed, f.scheduled, f.reps, f.lapses];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return false;
+  if (typeof f.due !== "string" || !Number.isFinite(new Date(f.due).getTime())) return false;
+  if (f.last != null && (typeof f.last !== "string" || !Number.isFinite(new Date(f.last).getTime())))
+    return false;
+  return typeof f.st === "number" && FSRS_STATES.includes(f.st);
+}
+
 function toFsrsCard(k: KnowledgeItem) {
-  if (k.fsrs) {
+  if (isValidFsrsState(k.fsrs)) {
     return {
       ...createEmptyCard(),
       due: new Date(k.fsrs.due),
@@ -82,8 +113,13 @@ function toFsrsCard(k: KnowledgeItem) {
     };
   }
   const card = createEmptyCard();
-  /* 兼容旧数据：reviewStage 0-4 → 预热 reps，让老笔记延续原有进度感 */
-  for (let i = 0; i < k.reviewStage; i++) {
+  /* 兼容旧数据：reviewStage 0-4 → 预热 reps，让老笔记延续原有进度感。
+   * 必须夹到 [0,4]：运行时所有写入点都有界（stageOf 封顶 4、reviewPatch 只写 0/-1、
+   * addKnowledge/importKnowledge 写 0），但 sanitizeBackup 用 `...k` 原样放行 knowledge
+   * 的数值字段——一份 reviewStage:1e7 的导入备份（或 localStorage 被改）会让这里同步
+   * 跑千万次 FSRS.repeat，主线程永久挂死、标签页无响应且应用内无自救入口。 */
+  const preheat = Math.min(4, Math.max(0, Math.floor(k.reviewStage)));
+  for (let i = 0; i < preheat; i++) {
     const r = FSRS.repeat(card, new Date())[Rating.Good];
     Object.assign(card, r.card);
   }
@@ -100,10 +136,9 @@ function stageOf(scheduled: number): number {
 }
 
 interface AppState {
-  /** 首页智能体对话（本地记忆，不参与云同步；跨设备不迁移，M2 范围）
-   * v23.2 起由 agentSessions 承载（多会话）；agentChat 仅作 v6 迁移源 */
-  agentChat: ChatMsg[];
-  /** 主对话框多会话（v23.2）：新建/切换/删除，标题=首问截断 */
+  /** 主对话框多会话（v23.2）：新建/切换/删除，标题=首问截断。
+   *  历史上的单数组 agentChat 已在 v7 迁移中被包成「历史对话」会话；迁移读取的是
+   *  磁盘快照原文（migrateState 的入参），不依赖任何内存字段，故内存态不再保留 agentChat。 */
   agentSessions: AgentSession[];
   agentActiveId: string | null;
   goals: Goal[];
@@ -129,6 +164,21 @@ interface AppState {
   ) => void;
   /** 阶段重排前快照旧目录（V26.2-H5，PRD §6.4 版本留痕）：只增不删，每目标最多 5 条 */
   snapshotPhase: (goalId: string, phaseId: string, reason?: string) => void;
+  /** 整计划结构快照（增删阶段/调整顺序等无法用单阶段表达的变更，PRD AG-04/L09） */
+  snapshotPlan: (goalId: string, reason?: string, anchorPhaseId?: string) => void;
+  /** 只改阶段边界（范围说明），不重建天目录、不动进度（R1：单独改边界必须真实写入） */
+  updatePhaseBoundary: (goalId: string, phaseId: string, boundary: string) => void;
+  /** 修改阶段元信息（标题/目标/预估天数）——只动指定阶段，不触发重排、不清任何进度（PRD AG-03） */
+  updatePhaseMeta: (
+    goalId: string,
+    phaseId: string,
+    patch: Partial<Pick<Phase, "title" | "outcome" | "estDays">>
+  ) => void;
+  /** 整体替换阶段列表（重排阶段顺序 / 增删阶段）。结构变更前调用方应先 snapshotPhase 到旧版本 */
+  replacePhases: (goalId: string, newPhases: Phase[]) => void;
+  /** 把指定 planHistory 条目恢复为该阶段计划结构（只回退该次计划变更，
+   *  不覆盖之后新增的成绩/笔记/其他对象——AG-04/EX-08）。返回成功与否 */
+  restorePlanVersion: (goalId: string, historyEntryId: string) => boolean;
   /** 单日详情回填：把展开后的完整 DayPlan 覆盖进目录占位，保留进度/讲义/答疑等运行态 */
   setDayDetail: (goalId: string, phaseId: string, dayId: string, detail: DayPlan) => void;
   /** 链接体检/替换完成后异步回写资源（不在生成主链路上阻塞） */
@@ -151,11 +201,13 @@ interface AppState {
 
   addFolder: (name: string) => void;
   removeFolder: (name: string) => void;
+  /** 批量入库知识条目。按 title 全库去重（同名整条丢弃），返回**实际新增**条数——
+   *  调用方（如随手记）据此给出真实反馈，旧版返回 void 时撞名会被静默丢弃还提示成功 */
   addKnowledge: (
     items: { title: string; body?: string; domain: string; knowledgeType?: KnowledgeType; masteryStatus?: MasteryStatus }[],
     source: KnowledgeSource,
     sourceTitle: string
-  ) => void;
+  ) => number;
   /** 新建空笔记并返回真实 id（标题自动唯一，保证重名不冲突） */
   createKnowledge: (init?: { title?: string; domain?: string }) => string;
   /** Obsidian 批量导入：按标题去重，双链自动解析为 id；返回新增/跳过数 */
@@ -167,6 +219,10 @@ interface AppState {
   /** 手动把一篇笔记加入/移出复习队列（导入与手写笔记默认不进） */
   enableReview: (id: string, enabled: boolean) => void;
   removeKnowledge: (id: string) => void;
+  /** 批量删除（删文件夹等场景）：一次 set 完成 N 篇删除 + 悬挂链接清理 + 受影响科目 MOC 重建。
+   *  逐篇调 removeKnowledge 每篇都是一次全库 filter/map 重算 + 全仓 persist 同步序列化写盘，
+   *  删几百篇的文件夹会把主线程冻结数秒。 */
+  removeKnowledgeMany: (ids: string[]) => void;
   recordReview: (id: string, ok: boolean) => void;
   linkNotes: (fromId: string, toId: string) => void;
 
@@ -177,7 +233,6 @@ interface AppState {
   removeBook: (id: string) => void;
   addBookMsg: (id: string, msg: ChatMsg) => void;
   addInsight: (bookId: string, text: string) => void;
-  toggleChapter: (bookId: string, chapterId: string) => void;
   /* ---- 阅读系统 V1.0（PRD 2026-11-05）---- */
   /** 设定阅读目标：修改目标不清洗任何已有记录（PRD 4.1 验收 4） */
   setBookGoal: (bookId: string, goal: ReadingGoal) => void;
@@ -208,6 +263,11 @@ interface AppState {
   }) => void;
   /** 整本书阅读状态机：unread→reading→finished→assessing→mastered（PRD 4.5） */
   setBookReadStatus: (bookId: string, status: BookReadStatus) => void;
+  /** 阅读路线重排前快照（第二批 C R04，AG-04 对齐）：只增不删，每书最多 5 条 */
+  snapshotBookRoute: (bookId: string, reason?: string) => void;
+  /** 恢复指定路线历史版本：只回退章节列表与路线类型；对话/沉淀/洞见/学习状态/验收档案不动。
+   *  恢复前把当前版先快照（恢复本身可再回退）。返回是否成功 */
+  restoreBookRoute: (bookId: string, historyId: string) => boolean;
 
   addSession: (s: CouncilSession) => void;
   updateSession: (id: string, patch: Partial<CouncilSession>) => void;
@@ -342,9 +402,12 @@ function withMoc(knowledge: KnowledgeItem[], subject: string): KnowledgeItem[] {
   const title = mocTitle(subject);
   const members = knowledge.filter((k) => (k.domain || "").split("/")[0] === subject && k.title !== title);
   const body =
-    `# ${subject} · 目录\n\n> 自动维护的索引（MOC）：本科目下所有笔记都挂在这里,点链接跳转,新笔记自动加入。\n\n` +
+    `# ${subject} · 目录\n\n> 自动维护的索引（MOC）：本科目下所有笔记都挂在这里，点链接跳转，新笔记自动加入。\n\n` +
     members.map((m) => `- [[${m.title}]]`).join("\n");
-  const existing = knowledge.find((k) => k.title === title);
+  /* 只认自动生成的目录（tags 含 "MOC"）：用户恰好建过同名「<科目> · 目录」
+   * 普通笔记时，标题相等不足以证明它就是我们维护的索引——existing.body 会被
+   * 无声覆盖。tag 不符时另建一张真正的 MOC，用户笔记保留原文（小程序端同口径）。 */
+  const existing = knowledge.find((k) => k.title === title && (k.tags ?? []).includes("MOC"));
   if (existing) {
     if (existing.body === body) return knowledge;
     return knowledge.map((k) =>
@@ -376,12 +439,11 @@ function linkifyNote(
   norm: (t: string) => string
 ): KnowledgeItem {
   const found: string[] = [];
-  const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(k.body || ""))) {
-    const id = byTitle.get(norm(m[1]));
+  mapWikiLinks(k.body || "", raw => {
+    const id = byTitle.get(norm(parseWikiTarget(raw).title));
     if (id && id !== k.id) found.push(id);
-  }
+    return raw;
+  });
   if (!found.length) return k;
   const merged = [...new Set([...(k.links ?? []), ...found])];
   if (merged.length === (k.links?.length ?? 0)) return k;
@@ -391,7 +453,7 @@ function linkifyNote(
 function buildTitleIndex(knowledge: KnowledgeItem[]) {
   const norm = (t: string) => t.trim().toLowerCase();
   const byTitle = new Map<string, string>();
-  for (const k of knowledge) if (!k.unresolved) byTitle.set(norm(k.title), k.id);
+  for (const [title, note] of buildWikiIndex(knowledge.filter(k => !k.unresolved))) if (note) byTitle.set(title, note.id);
   return { norm, byTitle };
 }
 
@@ -415,7 +477,7 @@ function linkifyOne(knowledge: KnowledgeItem[], id: string): KnowledgeItem[] {
  * 手动链是 else-if 逐版判断——v1/v2 仓跳过 v4「Day N：」前缀清洗、漏 v8 书籍迁移。
  * 收敛成一个函数后按版本号顺序逐级执行，两条加载路径永远一致。 */
 function migrateState(
-  state: Partial<AppState> & { knowledge?: unknown[] },
+  state: Partial<AppState> & { knowledge?: unknown[]; agentChat?: ChatMsg[] },
   version: number
 ): Partial<AppState> {
   let s = state;
@@ -500,6 +562,176 @@ function optionalRecords(v: unknown): Record<string, unknown>[] | undefined | nu
   return v.filter(isRecord);
 }
 
+const NODE_STATUSES: readonly NodeStatus[] = ["locked", "active", "passed", "skipped"];
+
+function nodeStatus(v: unknown, fallback: NodeStatus): NodeStatus {
+  return typeof v === "string" && (NODE_STATUSES as readonly string[]).includes(v)
+    ? (v as NodeStatus)
+    : fallback;
+}
+
+/** 只保留数组里的对象元素；非数组一律当空表（下游一律 .filter/.map/.sort，不能拿裸值） */
+function recordsIn(v: unknown): Record<string, unknown>[] {
+  return Array.isArray(v) ? v.filter(isRecord) : [];
+}
+
+/* plan 深层结构校验（备份导入 / 云端恢复共用同一入口）。
+ * 旧实现只做 `isRecord(g.plan)` 浅校验：`{"plan":{"phases":"oops"}}` 这类
+ * 「是对象、深层已坏」的快照照样落库，之后任何交互都当场 TypeError——
+ *   unlockNext        → goal.plan.phases.find / plan.days[dayId]（store.ts:253-255）
+ *   setPhaseCatalog   → structuredClone(g.plan) 后 plan.phases.find（store.ts:659-660）
+ *   学习页时间线      → plan.phases.map、phase.dayIds.map（learn/[id]/page.tsx:1170-1176）
+ * 正是 importData 注释点名要消灭的崩溃类。
+ * 处置沿用同一行既有语义（plan 非对象时也是丢掉而非拒绝整份备份）：形状不可救
+ * （phases 非数组 / days 非对象表）→ 整份 plan 丢弃，目标回到「计划还没有生成」
+ * 可再生成态；形状可救 → 过滤坏阶段、补齐每天必填的数组/字符串字段，正常备份零损失。 */
+
+/** 单天归一：学习页对 knowledgePoints/resources/acceptance 直接 .map 渲染，
+ *  对象或裸值会让 React 抛「Objects are not valid as a React child」，url 非字符串则 href 不可用。
+ *  必填数组一律收敛为空数组（与 `day.qa ?? []` 同口径），其余可选字段保留。 */
+function sanitizeDay(raw: Record<string, unknown>, fallbackId: string): DayPlan {
+  const example = isRecord(raw.example)
+    ? {
+        ...raw.example,
+        title: typeof raw.example.title === "string" ? raw.example.title : "",
+        description: typeof raw.example.description === "string" ? raw.example.description : "",
+        code: typeof raw.example.code === "string" ? raw.example.code : undefined,
+      }
+    : undefined;
+  return {
+    ...raw,
+    id: typeof raw.id === "string" ? raw.id : fallbackId,
+    phaseId: typeof raw.phaseId === "string" ? raw.phaseId : "",
+    title: typeof raw.title === "string" ? raw.title : "",
+    knowledgePoints: recordsIn(raw.knowledgePoints).map((k) => ({
+      ...k,
+      id: typeof k.id === "string" ? k.id : uid("kp"),
+      text: typeof k.text === "string" ? k.text : "",
+    })),
+    resources: recordsIn(raw.resources).map((r) => ({
+      ...r,
+      title: typeof r.title === "string" ? r.title : "",
+      url: typeof r.url === "string" ? r.url : undefined,
+      why: typeof r.why === "string" ? r.why : "",
+      /* kind 会直接进 JSX 文本节点（`KIND_LABEL[kind] ?? kind`，learn/[id]/page.tsx:1751），
+       * 对象/数组同样触发 React 子节点异常；其余可选字段按渲染用途收敛类型。 */
+      kind: typeof r.kind === "string" ? r.kind : undefined,
+      year: typeof r.year === "number" && Number.isFinite(r.year) ? r.year : undefined,
+      evergreen: typeof r.evergreen === "boolean" ? r.evergreen : undefined,
+      verified: typeof r.verified === "boolean" ? r.verified : undefined,
+      author: typeof r.author === "string" ? r.author : undefined,
+    })),
+    acceptance: recordsIn(raw.acceptance).map((a) => ({
+      ...a,
+      id: typeof a.id === "string" ? a.id : uid("a"),
+      kind: typeof a.kind === "string" ? a.kind : "explain",
+      question: typeof a.question === "string" ? a.question : "",
+    })),
+    method: typeof raw.method === "string" ? raw.method : "",
+    example,
+    status: nodeStatus(raw.status, "locked"),
+    attempts: typeof raw.attempts === "number" && Number.isFinite(raw.attempts) ? raw.attempts : 0,
+    stub: typeof raw.stub === "boolean" ? raw.stub : undefined,
+    pendingUnlock: typeof raw.pendingUnlock === "boolean" ? raw.pendingUnlock : undefined,
+    completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
+    qa: Array.isArray(raw.qa)
+      ? raw.qa.filter(isRecord).map((m) => ({
+          ...m,
+          id: typeof m.id === "string" ? m.id : uid("m"),
+          role: m.role === "user" ? "user" : "assistant",
+          content: typeof m.content === "string" ? m.content : "",
+          at: typeof m.at === "string" ? m.at : "",
+        }))
+      : undefined,
+    lesson: typeof raw.lesson === "string" ? raw.lesson : undefined,
+    transferQuestion: typeof raw.transferQuestion === "string" ? raw.transferQuestion : undefined,
+    transferAnswer: typeof raw.transferAnswer === "string" ? raw.transferAnswer : undefined,
+  } as unknown as DayPlan;
+}
+
+/** 单阶段归一：无 id 的阶段无法被 setPhaseCatalog/updatePhaseMeta 定位（find 永远落空），直接丢弃 */
+function sanitizePhase(raw: unknown): Phase | null {
+  if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id) return null;
+  const catalog = Array.isArray(raw.catalog)
+    ? raw.catalog.filter(isRecord).map((c) => ({
+        id: typeof c.id === "string" ? c.id : uid("day"),
+        title: typeof c.title === "string" ? c.title : "",
+        knowledgePoints: Array.isArray(c.knowledgePoints)
+          ? c.knowledgePoints.filter((x): x is string => typeof x === "string")
+          : [],
+      }))
+    : undefined;
+  return {
+    ...raw,
+    id: raw.id,
+    title: typeof raw.title === "string" ? raw.title : "",
+    outcome: typeof raw.outcome === "string" ? raw.outcome : "",
+    dayIds: Array.isArray(raw.dayIds) ? raw.dayIds.filter((x): x is string => typeof x === "string") : [],
+    status: nodeStatus(raw.status, "locked"),
+    outline: Array.isArray(raw.outline)
+      ? raw.outline.filter((x): x is string => typeof x === "string")
+      : undefined,
+    /* boundary 直接进 JSX 文本节点（learn/[id]/page.tsx:1041）：对象会让 React 抛
+     * 「Objects are not valid as a React child」；estDays 参与 Math.max，非数字会静默变 NaN。 */
+    boundary: typeof raw.boundary === "string" ? raw.boundary : undefined,
+    estDays: typeof raw.estDays === "number" && Number.isFinite(raw.estDays) ? raw.estDays : undefined,
+    planned: typeof raw.planned === "boolean" ? raw.planned : undefined,
+    catalog,
+  } as Phase;
+}
+
+function sanitizePlan(raw: unknown): Plan | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (!Array.isArray(raw.phases) || !isRecord(raw.days)) return undefined;
+
+  const phases: Phase[] = [];
+  for (const p of raw.phases) {
+    const phase = sanitizePhase(p);
+    if (phase) phases.push(phase);
+  }
+
+  const days: Record<string, DayPlan> = {};
+  for (const [key, d] of Object.entries(raw.days)) {
+    if (isRecord(d)) days[key] = sanitizeDay(d, key);
+  }
+
+  return {
+    ...raw,
+    summary: typeof raw.summary === "string" ? raw.summary : "",
+    totalDays: typeof raw.totalDays === "number" && Number.isFinite(raw.totalDays) ? raw.totalDays : 0,
+    weeklyHours: typeof raw.weeklyHours === "number" && Number.isFinite(raw.weeklyHours) ? raw.weeklyHours : 0,
+    startDate: typeof raw.startDate === "string" ? raw.startDate : "",
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "",
+    phases,
+    days,
+  } as Plan;
+}
+
+/** planHistory 与 plan 同源同险：restorePlanVersion 对 entry.days 直接
+ *  `d.knowledgePoints.map`（store.ts:779），学习页对 h.at.slice / h.dayIds.length /
+ *  h.days.map(d => d.title) 裸用（learn/[id]/page.tsx:1240）——坏条目同样当场崩。
+ *  这里按「能渲染、能恢复」的最低契约归一，坏到无 phaseId 的条目丢弃。 */
+function sanitizePlanHistory(raw: unknown): PlanHistoryEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: PlanHistoryEntry[] = [];
+  for (const h of raw) {
+    if (!isRecord(h) || typeof h.phaseId !== "string" || !h.phaseId) continue;
+    out.push({
+      ...h,
+      at: typeof h.at === "string" ? h.at : "",
+      reason: typeof h.reason === "string" ? h.reason : "",
+      phaseId: h.phaseId,
+      phaseTitle: typeof h.phaseTitle === "string" ? h.phaseTitle : "",
+      boundary: typeof h.boundary === "string" ? h.boundary : "",
+      dayIds: Array.isArray(h.dayIds) ? h.dayIds.filter((x): x is string => typeof x === "string") : [],
+      days: Array.isArray(h.days)
+        ? h.days.filter(isRecord).map((d, i) => sanitizeDay(d, typeof d.id === "string" ? d.id : `h${i}`))
+        : [],
+    } as PlanHistoryEntry);
+  }
+  return out;
+}
+
 /** 校验后的导入载荷：settings 允许只带部分字段（与现有设置合并） */
 type SanitizedBackup = Omit<Partial<AppState>, "settings"> & { settings?: Partial<Settings> };
 
@@ -516,20 +748,29 @@ function sanitizeBackup(raw: unknown): SanitizedBackup | null {
       topic: typeof g.topic === "string" ? g.topic : "",
       quizLog: Array.isArray(g.quizLog) ? g.quizLog : [],
       intakeTranscript: Array.isArray(g.intakeTranscript) ? g.intakeTranscript : [],
-      plan: isRecord(g.plan) ? g.plan : undefined,
+      plan: sanitizePlan(g.plan),
+      ...(g.planHistory !== undefined ? { planHistory: sanitizePlanHistory(g.planHistory) } : {}),
     })) as unknown as Goal[];
   }
 
   const knowledge = optionalRecords(raw.knowledge);
   if (knowledge === null) return null;
   if (knowledge) {
-    out.knowledge = knowledge.map((k) => ({
-      ...k,
-      id: typeof k.id === "string" ? k.id : uid("k"),
-      title: typeof k.title === "string" ? k.title : "未命名笔记",
-      body: typeof k.body === "string" ? k.body : "",
-      links: Array.isArray(k.links) ? k.links.filter((x): x is string => typeof x === "string") : [],
-    })) as unknown as KnowledgeItem[];
+    out.knowledge = knowledge.map((k) => {
+      /* fsrs 是 knowledge 里唯一的深层结构字段（日期 + 多个数值）：非法值会让
+       * toFsrsCard→recordReview 抛 RangeError，该笔记复习永久坏死。合法才保留，
+       * 非法直接丢掉该字段，笔记回落 reviewStage 预热路径（数值字段有界见 toFsrsCard）。 */
+      const { fsrs, workspace, ...rest } = k;
+      return {
+        ...rest,
+        id: typeof k.id === "string" ? k.id : uid("k"),
+        title: typeof k.title === "string" ? k.title : "未命名笔记",
+        body: typeof k.body === "string" ? k.body : "",
+        links: Array.isArray(k.links) ? k.links.filter((x): x is string => typeof x === "string") : [],
+        ...(isValidFsrsState(fsrs) ? { fsrs } : {}),
+        ...(parseWorkspace(workspace) ? { workspace: parseWorkspace(workspace)! } : {}),
+      };
+    }) as unknown as KnowledgeItem[];
   }
 
   const books = optionalRecords(raw.books);
@@ -556,7 +797,25 @@ function sanitizeBackup(raw: unknown): SanitizedBackup | null {
 
   const personas = optionalRecords(raw.customPersonas);
   if (personas === null) return null;
-  if (personas) out.customPersonas = personas as unknown as CustomPersona[];
+  if (personas) {
+    /* 与 goals/knowledge/books/sessions 同口径做字段级归一：脏 persona（缺 id/system）
+     * 经备份/云端恢复入库后，council 会把 undefined 当系统提示词直接发给模型 API，
+     * 列表渲染也会因 id 缺失而 key 冲突。补齐字符串字段，缺 id 用 uid 兜底。 */
+    out.customPersonas = personas.map((p) => ({
+      ...p,
+      id: typeof p.id === "string" && p.id ? p.id : uid("cp"),
+      name: typeof p.name === "string" ? p.name : "自定义人格",
+      tag: typeof p.tag === "string" ? p.tag : "",
+      bio: typeof p.bio === "string" ? p.bio : "",
+      /* color 的契约是 tailwind 渐变类（persona-meta.ts 的 SeatMeta.color）；历史版本与
+       * 模型蒸馏写入过裸色名（"violet"），经备份/云端恢复入库前归一，避免同一字段
+       * 两种格式并存——UI 一旦按 className 渲染，裸色名会静默失去配色。 */
+      color: normalizeSeatColor(typeof p.color === "string" ? p.color : ""),
+      identityNote: typeof p.identityNote === "string" ? p.identityNote : "",
+      system: typeof p.system === "string" ? p.system : "",
+      createdAt: typeof p.createdAt === "string" ? p.createdAt : new Date().toISOString(),
+    })) as unknown as CustomPersona[];
+  }
 
   /* v27：主对话多会话入云（与 /api/sync FIELDS 同步扩）。
    * 单条形状只做最宽容校验（id/messages），逐条深校验交给各消费端的既有兜底。 */
@@ -585,6 +844,13 @@ function sanitizeBackup(raw: unknown): SanitizedBackup | null {
     if (settings.apiKey !== undefined && typeof settings.apiKey !== "string") {
       delete settings.apiKey;
     }
+    /* 安全铁律：导入/恢复的备份绝不能改写 baseUrl。
+     * 攻击链：恶意备份只需 settings:{provider:"custom",baseUrl:"https://evil.example.com/v1"}
+     * （不带 apiKey），importData 的 {...s.settings, ...incoming} 会保留本机真实 Key，
+     * 下一次 AI 请求 byokHeaders 就把 x-mentora-key=<真实 Key> 发往攻击者域名。
+     * baseUrl 是用户在本机设置页亲手填的端点，不属于「可恢复的用户数据」，
+     * 一律以本机当前值为准——备份里的值直接丢弃。 */
+    delete settings.baseUrl;
     out.settings = settings;
   }
 
@@ -600,7 +866,6 @@ import { masteryFromReview } from "./mastery";
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
-      agentChat: [],
       agentSessions: [],
       agentActiveId: null,
       goals: [],
@@ -644,16 +909,17 @@ export const useAppStore = create<AppState>()(
         set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
-            const plan = structuredClone(g.plan);
-            const phase = plan.phases.find((ph) => ph.id === phaseId);
+            const phase = g.plan.phases.find((ph) => ph.id === phaseId);
             if (!phase || catalog.length === 0) return g;
-            phase.catalog = catalog.map((c) => ({ id: c.id, title: c.title, knowledgePoints: c.knowledgePoints }));
+            /* 定点 patch：只重建本阶段与 catalog 涉及的这几天，其余 days/phases 引用不变。
+             * 旧实现 structuredClone 整个 plan——连同全部已生成讲义/答疑缓存（MB 级）。 */
+            const days = { ...g.plan.days };
             for (const c of catalog) {
-              const old = plan.days[c.id];
+              const old = days[c.id];
               const kps = c.knowledgePoints.map((text) => ({ id: uid("kp"), text }));
               if (!old) {
                 // 目录占位：只有标题与清单级知识点，学到那天再展开详情
-                plan.days[c.id] = {
+                days[c.id] = {
                   id: c.id,
                   phaseId,
                   title: c.title,
@@ -667,31 +933,50 @@ export const useAppStore = create<AppState>()(
                 };
               } else if (old.stub) {
                 // 已展开的天只做目录索引，不覆盖标题/详情（避免老数据标题与正文错位）
-                old.title = c.title;
-                old.knowledgePoints = kps;
+                days[c.id] = { ...old, title: c.title, knowledgePoints: kps };
               }
             }
-            phase.dayIds = catalog.map((c) => c.id);
-            phase.boundary = boundary;
-            phase.planned = catalog.every((c) => plan.days[c.id] && !plan.days[c.id].stub);
-            if (phase.status === "locked") phase.status = "active";
-            const first = plan.days[phase.dayIds[0]];
-            if (first && first.status === "locked") first.status = "active";
-            return { ...g, plan };
+            const dayIds = catalog.map((c) => c.id);
+            const firstId = dayIds[0];
+            const first = days[firstId];
+            if (first && first.status === "locked") days[firstId] = { ...first, status: "active" };
+            const nextPhase: Phase = {
+              ...phase,
+              catalog: catalog.map((c) => ({ id: c.id, title: c.title, knowledgePoints: c.knowledgePoints })),
+              dayIds,
+              boundary,
+              planned: catalog.every((c) => days[c.id] && !days[c.id].stub),
+              status: phase.status === "locked" ? "active" : phase.status,
+            };
+            return {
+              ...g,
+              plan: {
+                ...g.plan,
+                phases: g.plan.phases.map((ph) => (ph.id === phaseId ? nextPhase : ph)),
+                days,
+              },
+            };
           }),
         })),
-      /* V26.2-H5：重排前快照旧阶段目录（深拷贝，只增不删，最多 5 条——旧数据绝不删除） */
+      /* V26.2-H5：重排前快照旧阶段目录（深拷贝，只增不删，最多 5 条——旧数据绝不删除）。
+       *  每个条目带 id，供 restorePlanVersion 精确定位恢复版本（PRD AG-04/EX-08）。 */
       snapshotPhase: (goalId, phaseId, reason) =>
         set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
             const phase = g.plan.phases.find((ph) => ph.id === phaseId);
             if (!phase) return g;
+            const prev = g.planHistory ?? [];
             const entry: PlanHistoryEntry = {
+              id: `pv_${prev.length + 1}_${Math.random().toString(36).slice(2, 6)}`,
               at: new Date().toISOString(),
               reason: reason || "阶段重排",
+              kind: "phase",
               phaseId,
               phaseTitle: phase.title,
+              /* R3：记录阶段元信息，恢复时才能还原 title/outcome/estDays */
+              phaseOutcome: phase.outcome,
+              phaseEstDays: phase.estDays,
               boundary: phase.boundary || "",
               dayIds: [...phase.dayIds],
               days: phase.dayIds
@@ -699,46 +984,236 @@ export const useAppStore = create<AppState>()(
                 .filter((d): d is DayPlan => !!d)
                 .map((d) => structuredClone(d)),
             };
-            return { ...g, planHistory: [...(g.planHistory ?? []), entry].slice(-5) };
+            return { ...g, planHistory: [...prev, entry].slice(-5) };
           }),
         })),
-      setDayDetail: (goalId, phaseId, dayId, detail) =>
+      /* R2（复核 R2）：整计划结构快照——删除阶段/调整顺序/增删阶段无法用单阶段表达，
+       *  必须能整计划回退。phaseId 记首个受影响阶段（仅作展示锚点）。 */
+      snapshotPlan: (goalId, reason, anchorPhaseId) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const prev = g.planHistory ?? [];
+            const anchor = g.plan.phases.find((p) => p.id === anchorPhaseId) ?? g.plan.phases[0];
+            const entry: PlanHistoryEntry = {
+              id: `pv_${prev.length + 1}_${Math.random().toString(36).slice(2, 6)}`,
+              at: new Date().toISOString(),
+              reason: reason || "计划结构修改",
+              kind: "plan",
+              phaseId: anchor?.id ?? "",
+              phaseTitle: anchor?.title ?? "",
+              boundary: "",
+              dayIds: [],
+              days: [],
+              planSnapshot: structuredClone(g.plan),
+            };
+            return { ...g, planHistory: [...prev, entry].slice(-5) };
+          }),
+        })),
+      /* PRD AG-03：精确编辑阶段元信息。只改选定字段，不触发重排、不动天目录与已完成的进度。
+       * 纪律：跳过 undefined —— 调用方只传要改的字段，未传字段必须保持原值
+       * （Object.assign 会把 undefined 一并写入，导致「只改目标」时标题被清空）。 */
+      updatePhaseMeta: (goalId, phaseId, patch) =>
         set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
             const plan = structuredClone(g.plan);
             const phase = plan.phases.find((ph) => ph.id === phaseId);
-            const old = plan.days[dayId];
-            if (!phase || !old) return g;
-            plan.days[dayId] = {
-              ...detail,
-              id: dayId,
-              phaseId,
-              stub: false,
-              title: phase.catalog?.find((c) => c.id === dayId)?.title ?? detail.title,
-              // 进度与学习痕迹属于运行态，回填细节时原样保留
-              status: old.status,
-              completedAt: old.completedAt,
-              attempts: old.attempts,
-              lesson: old.lesson,
-              qa: old.qa,
-              pendingUnlock: old.pendingUnlock,
-              transferQuestion: old.transferQuestion,
-              transferAnswer: old.transferAnswer,
-            };
-            phase.planned = phase.catalog?.length
-              ? phase.catalog.every((c) => plan.days[c.id] && !plan.days[c.id].stub)
-              : phase.dayIds.every((id) => plan.days[id] && !plan.days[id].stub);
+            if (!phase) return g;
+            if (patch.title !== undefined) phase.title = patch.title;
+            if (patch.outcome !== undefined) phase.outcome = patch.outcome;
+            if (patch.estDays !== undefined) phase.estDays = patch.estDays;
             return { ...g, plan };
+          }),
+        })),
+      /* PRD AG-03/L04：整体替换阶段列表（重排顺序/增删）。天级结构不动，只改阶段顺序与集合。 */
+      updatePhaseBoundary: (goalId, phaseId, boundary) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const plan = structuredClone(g.plan);
+            const phase = plan.phases.find((ph) => ph.id === phaseId);
+            if (!phase) return g;
+            phase.boundary = boundary;
+            return { ...g, plan };
+          }),
+        })),
+      replacePhases: (goalId, newPhases) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const plan = structuredClone(g.plan);
+            plan.phases = newPhases;
+            return { ...g, plan };
+          }),
+        })),
+      /* PRD AG-04/EX-08：恢复某次阶段计划版本。用 planHistory 条目重建该阶段的天目录与边界，
+       *  只回退「该次计划变更的结构」，不删除后来新增的天对象、不动比例之外的成绩/笔记。
+       *  恢复后再对新历史快照当前版，保证恢复本身也可追溯、可再回退。 */
+      restorePlanVersion: (goalId, historyEntryId) => {
+        let ok = false;
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const hist = g.planHistory ?? [];
+            const entry = hist.find((h) => h.id === historyEntryId);
+            if (!entry) return g;
+
+            /* R2：整计划结构快照（增删阶段/排序）——直接回退阶段列表与天，不重建单阶段目录。
+             *  仍保留「恢复本身也可再回退」：先快照当前整计划。 */
+            if (entry.kind === "plan" && entry.planSnapshot) {
+              const curEntry: PlanHistoryEntry = {
+                id: `pv_${hist.length + 1}_${Math.random().toString(36).slice(2, 6)}`,
+                at: new Date().toISOString(),
+                reason: `恢复至 ${entry.at.slice(0, 10)} 版本`,
+                kind: "plan",
+                phaseId: entry.phaseId,
+                phaseTitle: entry.phaseTitle,
+                boundary: "",
+                dayIds: [],
+                days: [],
+                planSnapshot: structuredClone(g.plan),
+              };
+              /* 恢复阶段列表与天：天按 id 合并——已存在的不覆盖运行态，缺失的补回 */
+              const restored = structuredClone(entry.planSnapshot);
+              for (const [id, d] of Object.entries(g.plan.days)) {
+                if (!restored.days[id]) restored.days[id] = structuredClone(d);
+                else {
+                  /* 保留当前进度/成绩/掌握证据 */
+                  restored.days[id] = {
+                    ...structuredClone(d),
+                    title: restored.days[id].title,
+                    phaseId: restored.days[id].phaseId,
+                  };
+                }
+              }
+              ok = true;
+              return { ...g, plan: restored, planHistory: [...hist, curEntry].slice(-5) };
+            }
+
+            const plan = structuredClone(g.plan);
+            const phase = plan.phases.find((ph) => ph.id === entry.phaseId);
+            if (!phase) return g;
+            /* 把当前版本先快照为可回退的历史（复用 snapshotPhase 语义） */
+            const curEntry: PlanHistoryEntry = {
+              id: `pv_${hist.length + 1}_${Math.random().toString(36).slice(2, 6)}`,
+              at: new Date().toISOString(),
+              reason: `恢复至 ${entry.at.slice(0, 10)} 版本`,
+              phaseId: phase.id,
+              phaseTitle: phase.title,
+              boundary: phase.boundary || "",
+              dayIds: [...phase.dayIds],
+              days: phase.dayIds
+                .map((id) => plan.days[id])
+                .filter((d): d is DayPlan => !!d)
+                .map((d) => structuredClone(d)),
+            };
+            /* 恢复目录：旧内的天 id 重建为 stub 占位（内容不回滚，避免覆盖之后新增内容）。 */
+            const catalog: { id: string; title: string; knowledgePoints: string[] }[] = entry.days.map(
+              (d) => ({
+                id: d.id,
+                title: d.title,
+                knowledgePoints: d.knowledgePoints.map((k) => (typeof k === "string" ? k : k.text)),
+              })
+            );
+            phase.catalog = catalog.map((c) => ({ id: c.id, title: c.title, knowledgePoints: c.knowledgePoints }));
+            phase.dayIds = entry.dayIds;
+            phase.boundary = entry.boundary;
+            /* R3：还原阶段元信息——恢复必须覆盖本次实际修改的计划字段（title/outcome/estDays） */
+            phase.title = entry.phaseTitle;
+            if (entry.phaseOutcome !== undefined) phase.outcome = entry.phaseOutcome;
+            if (entry.phaseEstDays !== undefined) phase.estDays = entry.phaseEstDays;
+            for (const c of catalog) {
+              if (!plan.days[c.id]) {
+                plan.days[c.id] = {
+                  id: c.id,
+                  phaseId: phase.id,
+                  title: c.title,
+                  stub: true,
+                  knowledgePoints: c.knowledgePoints.map((text) => ({ id: uid("kp"), text })),
+                  resources: [],
+                  method: "",
+                  acceptance: [],
+                  status: "locked",
+                  attempts: 0,
+                };
+              } else {
+                /* 天已存在（可能是之后新展开的）——只回填标题与目录级知识，不覆盖详情/进度/成绩。
+                 * AG-04 铁律：知识点按文本合并，沿用原对象以保留 masteryStatus/historicalHighest/
+                 * hintLevel/detail（掌握证据不得因恢复丢失）；已展开的天绝不回退成 stub。 */
+                const old = plan.days[c.id];
+                const byText = new Map(old.knowledgePoints.map((k) => [k.text, k]));
+                old.knowledgePoints = c.knowledgePoints.map(
+                  (text) => byText.get(text) ?? { id: uid("kp"), text }
+                );
+                /* 旧目录里有、新目录没有的知识点：保留为历史（不计入目录，但不删掌握证据） */
+                const keptTexts = new Set(c.knowledgePoints);
+                for (const k of byText.values()) {
+                  if (!keptTexts.has(k.text)) old.knowledgePoints.push(k);
+                }
+                if (old.title !== c.title) old.title = c.title;
+              }
+            }
+            if (phase.status === "locked") phase.status = "active";
+            const first = plan.days[phase.dayIds[0]];
+            if (first && first.status === "locked") first.status = "active";
+            /* 恢复后保留当前版本快照，保证「恢复」也可再回退；不删除旧历史 */
+            const nextHistory = [...hist, curEntry].slice(-5);
+            ok = true;
+            return { ...g, plan, planHistory: nextHistory };
+          }),
+        }));
+        return ok;
+      },
+      setDayDetail: (goalId, phaseId, dayId, detail) =>
+        set((s) => ({
+          goals: s.goals.map((g) => {
+            if (g.id !== goalId || !g.plan) return g;
+            const phase = g.plan.phases.find((ph) => ph.id === phaseId);
+            const old = g.plan.days[dayId];
+            if (!phase || !old) return g;
+            /* 定点 patch：只重建这一天与所属阶段（planned 需重算），其余 days/phases 引用不变。
+             * 回填细节时进度与学习痕迹属于运行态，从 old 原样保留。 */
+            const days = {
+              ...g.plan.days,
+              [dayId]: {
+                ...detail,
+                id: dayId,
+                phaseId,
+                stub: false,
+                title: phase.catalog?.find((c) => c.id === dayId)?.title ?? detail.title,
+                status: old.status,
+                completedAt: old.completedAt,
+                attempts: old.attempts,
+                lesson: old.lesson,
+                qa: old.qa,
+                pendingUnlock: old.pendingUnlock,
+                transferQuestion: old.transferQuestion,
+                transferAnswer: old.transferAnswer,
+              },
+            };
+            const planned = phase.catalog?.length
+              ? phase.catalog.every((c) => days[c.id] && !days[c.id].stub)
+              : phase.dayIds.every((id) => days[id] && !days[id].stub);
+            return {
+              ...g,
+              plan: {
+                ...g.plan,
+                days,
+                phases: g.plan.phases.map((ph) => (ph.id === phaseId ? { ...ph, planned } : ph)),
+              },
+            };
           }),
         })),
       updateDayResources: (goalId, dayId, resources) =>
         set((s) => ({
           goals: s.goals.map((g) => {
-            if (g.id !== goalId || !g.plan || !g.plan.days[dayId]) return g;
-            const plan = structuredClone(g.plan);
-            plan.days[dayId].resources = resources;
-            return { ...g, plan };
+            if (g.id !== goalId || !g.plan) return g;
+            const day = g.plan.days[dayId];
+            if (!day) return g;
+            /* 定点 patch：只替换这一天的 resources（与此前 setDayKnowledgeMastery 同口径），
+             * 不再深拷贝整个 plan。 */
+            return { ...g, plan: { ...g.plan, days: { ...g.plan.days, [dayId]: { ...day, resources } } } };
           }),
         })),
       setDayStatus: (goalId, dayId, status, opts) => {
@@ -757,6 +1232,10 @@ export const useAppStore = create<AppState>()(
         return set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
+            /* 此处必须整体深拷贝：下方 unlockNext({ ...g, plan }, dayId) 会就地改写 plan
+             * （解锁下一天/下一阶段），不能把这些改动落到 live 的 days/phases 子对象上。
+             * 相邻的 incrementAttempts/updateDayResources/setDayDetail/setPhaseCatalog
+             * 不调 unlockNext，已改为定点 patch，不再全量深拷。 */
             const plan = structuredClone(g.plan);
             const day = plan.days[dayId];
             if (!day) return g;
@@ -791,6 +1270,7 @@ export const useAppStore = create<AppState>()(
         set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
+            /* 同 setDayStatus：unlockNext 就地改写 plan，必须深拷贝后再交给它。 */
             const plan = structuredClone(g.plan);
             const day = plan.days[dayId];
             if (!day || day.status !== "passed") return g;
@@ -815,10 +1295,15 @@ export const useAppStore = create<AppState>()(
         set((s) => ({
           goals: s.goals.map((g) => {
             if (g.id !== goalId || !g.plan) return g;
-            const plan = structuredClone(g.plan);
-            const day = plan.days[dayId];
-            if (day) day.attempts += 1;
-            return { ...g, plan };
+            const day = g.plan.days[dayId];
+            if (!day) return g;
+            /* 定点 patch：只重建这一天，其余 days 保持引用不变。旧实现 structuredClone
+             * 整个 plan（含全部已生成讲义/答疑缓存，数月目标可达 MB 级）——本函数每次
+             * 验收失败都调用（learn/[id]/page.tsx），深拷 + GC 纯属浪费。 */
+            return {
+              ...g,
+              plan: { ...g.plan, days: { ...g.plan.days, [dayId]: { ...day, attempts: day.attempts + 1 } } },
+            };
           }),
         })),
       setDayKnowledgeMastery: (goalId, dayId, mastery) =>
@@ -854,7 +1339,7 @@ export const useAppStore = create<AppState>()(
               ...g,
               plan: {
                 ...g.plan,
-                days: { ...g.plan.days, [dayId]: { ...day, qa: [...(day.qa ?? []), msg] } },
+                days: { ...g.plan.days, [dayId]: { ...day, qa: [...(day.qa ?? []), msg].slice(-DAY_QA_MAX) } },
               },
             };
           }),
@@ -877,7 +1362,10 @@ export const useAppStore = create<AppState>()(
         })),
 
       addKnowledge: (items, source, sourceTitle) => {
-        const existing = new Set(get().knowledge.map((k) => k.title));
+        /* 去重只按「真笔记」的标题：unresolved 占位**不算重复**（与 importKnowledge v18.1 同口径）。
+         * 旧实现把占位也算进 existing，于是同标题占位存在时，学习/读书产出的知识点被整条
+         * 静默丢弃、占位永远灰着、指向占位 id 的既有链接永久悬空（导入路径早已原位升级占位）。 */
+        const existing = new Set(get().knowledge.filter((k) => !k.unresolved).map((k) => k.title));
         const fresh: KnowledgeItem[] = items
           .filter((i) => i.title && !existing.has(i.title))
           .map((i) => ({
@@ -899,14 +1387,34 @@ export const useAppStore = create<AppState>()(
             version: 1,
             updatedAt: new Date().toISOString(),
           }));
-        set((s) => {
-          let k = [...fresh, ...s.knowledge];
-          for (const subj of new Set(fresh.map((f) => (f.domain || "").split("/")[0]))) {
-            k = withMoc(k, subj);
+        /* 同标题 unresolved 占位 → 原位升级并收养其 id：新学到的正文进得来，
+         * 占位/入链/图谱全部指向同一 id，链接不再悬空、也不会留下同名双笔记。 */
+        const phIds = new Map<string, string>();
+        for (const k of get().knowledge) if (k.unresolved && !phIds.has(k.title)) phIds.set(k.title, k.id);
+        const upgraded = new Map<string, KnowledgeItem>(); // 占位 id -> 升级后的条目
+        for (const f of fresh) {
+          const pid = phIds.get(f.title);
+          if (pid) {
+            f.id = pid;
+            upgraded.set(pid, f);
           }
+        }
+        set((s) => {
+          let k = [
+            ...fresh.filter((f) => !upgraded.has(f.id)),
+            ...s.knowledge.map((x) => upgraded.get(x.id) ?? x),
+          ];
+          const subjs = new Set(fresh.map((f) => (f.domain || "").split("/")[0]));
+          // 被升级的占位若原属别的科目，旧科目的目录也要重算（否则残留指向旧标题的死链）
+          for (const pid of upgraded.keys()) {
+            const old = get().knowledge.find((x) => x.id === pid);
+            if (old) subjs.add((old.domain || "").split("/")[0]);
+          }
+          for (const subj of subjs) k = withMoc(k, subj);
           k = linkifyBodies(k);
           return { knowledge: k };
         });
+        return fresh.length;
       },
 
 
@@ -917,21 +1425,28 @@ export const useAppStore = create<AppState>()(
         let n = 2;
         while (titles.has(title)) title = `${base} ${n++}`;
         const id = uid("k");
+        const domain = init?.domain ?? "笔记";
         set((s) => ({
-          knowledge: [
-            {
-              id,
-              title,
-              body: "",
-              domain: init?.domain ?? "笔记",
-              source: "manual",
-              sourceTitle: "手动记录",
-              masteredAt: todayISO(),
-              reviewStage: 0,
-              links: [],
-            },
-            ...s.knowledge,
-          ],
+          /* 新建笔记也要进所属科目的 MOC 目录：目录正文自称「新笔记自动加入」
+           * （withMoc 生成），旧实现只在 addKnowledge/removeKnowledge/改 domain 时重算，
+           * createKnowledge 漏了——新建的笔记在「XX · 目录」里一直缺席，直到下次增删才自愈。 */
+          knowledge: withMoc(
+            [
+              {
+                id,
+                title,
+                body: "",
+                domain,
+                source: "manual",
+                sourceTitle: "手动记录",
+                masteredAt: todayISO(),
+                reviewStage: 0,
+                links: [],
+              },
+              ...s.knowledge,
+            ],
+            domain.split("/")[0]
+          ),
         }));
         return id;
       },
@@ -1118,7 +1633,7 @@ export const useAppStore = create<AppState>()(
           let knowledge = s.knowledge.map((k) => {
             if (k.id !== id) return k;
             // 只有内容性修订（标题/正文）才递增版本；复习状态等元数据更新不算改版
-            const contentEdit = patch.title !== undefined || patch.body !== undefined;
+            const contentEdit = patch.title !== undefined || patch.body !== undefined || patch.workspace !== undefined;
             return {
               ...k,
               ...patch,
@@ -1132,7 +1647,36 @@ export const useAppStore = create<AppState>()(
             knowledge = withMoc(knowledge, (old.domain || "").split("/")[0]);
             knowledge = withMoc(knowledge, (patch.domain || "").split("/")[0]);
           }
+          /* 改标题也要刷新所属科目的 MOC 目录：目录正文是 `- [[标题]]`（withMoc），
+           * 而 wiki-markdown 按标题解析链接（wiki-markdown.tsx:29 byTitle）——
+           * 不刷新就留下指向旧标题的死链，渲染成「笔记不存在，点击创建」，
+           * 点一下会新建一篇同旧标题的重复笔记。只在目录已存在时刷新，
+           * 避免为本来没建过目录的科目凭空造一个。 */
+          if (old && patch.title !== undefined && patch.title !== old.title) {
+            const oldIndex = buildWikiIndex(s.knowledge);
+            knowledge = knowledge.map(k => {
+              const body = mapWikiLinks(k.body, raw => {
+                const parsed = parseWikiTarget(raw);
+                if (oldIndex.get(parsed.title.toLowerCase())?.id !== old.id) return `[[${raw}]]`;
+                const destination = raw.split("|")[0].split("#")[0].trim();
+                const prefix = destination.includes("/") ? destination.slice(0,destination.lastIndexOf("/")+1) : "";
+                const extension = /\.md$/i.test(destination) ? ".md" : "";
+                const alias = raw.includes("|") ? raw.slice(raw.indexOf("|")) : "";
+                return `[[${prefix}${patch.title}${extension}${parsed.heading ? `#${parsed.heading}` : ""}${alias}]]`;
+              });
+              return body === k.body ? k : { ...k, body, ...(k.id !== id ? { version: (k.version ?? 1)+1, updatedAt: new Date().toISOString() } : {}) };
+            });
+            const subject = (old.domain || "").split("/")[0];
+            if (subject && knowledge.some((k) => k.title === mocTitle(subject))) {
+              knowledge = withMoc(knowledge, subject);
+            }
+          }
           // 正文改了→重解析该篇 [[双链]] 进 links（只扫当前笔记：逐键编辑全库扫描是打字卡顿大头）
+          if (patch.body !== undefined && old) {
+            const index = buildWikiIndex(knowledge);
+            const previousText = new Set(resolvedWikiIds(old.body,index));
+            knowledge = knowledge.map(k => k.id !== id ? k : { ...k, links: [...new Set([...(k.links ?? []).filter(link => !previousText.has(link)),...resolvedWikiIds(k.body,index).filter(link => link !== id)])] });
+          }
           if (patch.body !== undefined) knowledge = linkifyOne(knowledge, id);
           return { knowledge };
         }),
@@ -1152,6 +1696,24 @@ export const useAppStore = create<AppState>()(
           if (target) k = withMoc(k, (target.domain || "").split("/")[0]);
           return { knowledge: k };
         }),
+
+      removeKnowledgeMany: (ids) => {
+        const doomed = new Set(ids);
+        if (doomed.size === 0) return;
+        set((s) => {
+          /* 与单篇 removeKnowledge 同口径：受影响科目逐一重建 MOC（withMoc 对空科目是
+           * no-op），但合并在一次 set 里——否则 N 次全库重算 + N 次全仓 persist 写盘 */
+          const subjects = new Set<string>();
+          for (const k of s.knowledge) {
+            if (doomed.has(k.id)) subjects.add((k.domain || "").split("/")[0]);
+          }
+          let k = s.knowledge
+            .filter((x) => !doomed.has(x.id))
+            .map((x) => ({ ...x, links: x.links.filter((l) => !doomed.has(l)) }));
+          for (const subject of subjects) k = withMoc(k, subject);
+          return { knowledge: k };
+        });
+      },
       recordReview: (id, ok) => {
         const done = (next: string | undefined, info: Partial<KnowledgeItem>) =>
           set((s) => ({
@@ -1230,7 +1792,7 @@ export const useAppStore = create<AppState>()(
       addBookMsg: (id, msg) =>
         set((s) => ({
           books: s.books.map((b) =>
-            b.id === id ? { ...b, chat: [...b.chat, msg] } : b
+            b.id === id ? { ...b, chat: [...b.chat, msg].slice(-BOOK_CHAT_MAX) } : b
           ),
         })),
       addInsight: (bookId, text) =>
@@ -1247,21 +1809,6 @@ export const useAppStore = create<AppState>()(
               : b
           ),
         })),
-      toggleChapter: (bookId, chapterId) =>
-        set((s) => ({
-          books: s.books.map((b) => {
-            if (b.id !== bookId) return b;
-            return {
-              ...b,
-              chapters: b.chapters.map((c) =>
-                c.id === chapterId
-                  ? { ...c, status: c.status === "done" ? "todo" : "done" }
-                  : c
-              ),
-            };
-          }),
-        })),
-
       /* ---- 阅读系统 V1.0（PRD 2026-11-05）---- */
       setBookGoal: (bookId, goal) =>
         set((s) => ({
@@ -1440,7 +1987,10 @@ export const useAppStore = create<AppState>()(
         return transferId;
       },
       attachTransferRecheck: (bookId, transferId, recheck) => {
-        trackReading("transfer_evaluated", { bookId, stage: "recheck", result: recheck.verdict });
+        /* v26.1 G3：复检埋点带上原迁移的 mode——独立成功只认 mode=independent，
+         * assisted 复检通过在后台统计须降级为 assisted_success（对齐 transferOutcome 唯一真源） */
+        const origin = get().books.find((b) => b.id === bookId)?.transfers?.find((t) => t.id === transferId);
+        trackReading("transfer_evaluated", { bookId, stage: "recheck", result: recheck.verdict, mode: origin?.mode ?? "independent" });
         set((s) => ({
           books: s.books.map((b) =>
             b.id === bookId
@@ -1503,6 +2053,51 @@ export const useAppStore = create<AppState>()(
             };
           }),
         })),
+      /* 第二批 C R04：路线重排前快照（AG-04 对齐：修改前保留可追溯版本） */
+      snapshotBookRoute: (bookId, reason) =>
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            const prev = b.routeHistory ?? [];
+            const entry: BookRouteHistory = {
+              id: `rh_${prev.length + 1}_${Math.random().toString(36).slice(2, 6)}`,
+              at: new Date().toISOString(),
+              reason: reason || "路线重排",
+              routeType: b.routeType,
+              chapters: structuredClone(b.chapters),
+            };
+            return { ...b, routeHistory: [...prev, entry].slice(-5) };
+          }),
+        })),
+      /* 第二批 C R04：恢复路线版本。只回退章节列表与路线类型；对话/沉淀/洞见/学习状态/验收档案不动。
+       * 恢复前先快照当前版（恢复本身可再回退）。 */
+      restoreBookRoute: (bookId, historyId) => {
+        let ok = false;
+        set((s) => ({
+          books: s.books.map((b) => {
+            if (b.id !== bookId) return b;
+            const hist = b.routeHistory ?? [];
+            const entry = hist.find((h) => h.id === historyId);
+            if (!entry) return b;
+            /* 恢复前把当前版先存为可回退历史 */
+            const curEntry: BookRouteHistory = {
+              id: `rh_${hist.length + 1}_${Math.random().toString(36).slice(2, 6)}`,
+              at: new Date().toISOString(),
+              reason: `恢复至 ${entry.at.slice(0, 10)} 版本`,
+              routeType: b.routeType,
+              chapters: structuredClone(b.chapters),
+            };
+            ok = true;
+            return {
+              ...b,
+              routeType: entry.routeType,
+              chapters: structuredClone(entry.chapters),
+              routeHistory: [...hist, curEntry].slice(-5),
+            };
+          }),
+        }));
+        return ok;
+      },
 
       addSession: (sess) => set((s) => ({ sessions: [sess, ...s.sessions] })),
       updateSession: (id, patch) =>
@@ -1516,7 +2111,7 @@ export const useAppStore = create<AppState>()(
       addSessionMsg: (id, msg) =>
         set((s) => ({
           sessions: s.sessions.map((x) =>
-            x.id === id ? { ...x, messages: [...x.messages, msg] } : x
+            x.id === id ? { ...x, messages: [...x.messages, msg].slice(-SESSION_MSG_MAX) } : x
           ),
         })),
       appendAgentMsg: (msg, sessionId) => {
@@ -1531,6 +2126,15 @@ export const useAppStore = create<AppState>()(
           let sessions = s.agentSessions;
           let activeId = explicit || s.agentActiveId || "";
           const valid = sessions.find((x) => x.id === activeId);
+          /* 显式 sid 不存在 → 拒绝写入（独立复核 2026-11-12 §3）：
+           * 兜底新建会话会把「别的账户/已删除会话的迟到回写」变成一条幽灵对话，
+           * 并且落进当前用户的 persist 仓（跨账户串写）。后台回写目标不存在就该丢弃，
+           * 由调用方按「会话已不属于本账户」处理。无显式 sid（用户在输入框发送）仍保留
+           * 原来的兜底新建——那是正常的「首条消息创建会话」路径。 */
+          if (explicit && !valid) {
+            resolved = "";
+            return s;
+          }
           if (!valid) {
             const now = new Date().toISOString();
             const fresh: AgentSession = {
@@ -1567,11 +2171,10 @@ export const useAppStore = create<AppState>()(
       },
       clearAgentChat: () =>
         set((s) => ({
-          /* 语义跟随多会话：清空当前激活会话的消息；没有会话时清 legacy 字段 */
+          /* 语义跟随多会话：清空当前激活会话的消息（无激活会话时为空操作）。 */
           agentSessions: s.agentSessions.map((x) =>
             x.id === s.agentActiveId ? { ...x, messages: [], updatedAt: new Date().toISOString() } : x
           ),
-          ...(s.agentActiveId ? {} : { agentChat: [] }),
         })),
       newAgentSession: () => {
         const now = new Date().toISOString();
@@ -1699,7 +2302,6 @@ export const useAppStore = create<AppState>()(
       },
       resetAll: () =>
         set({
-          agentChat: [],
           agentSessions: [],
           agentActiveId: null,
           goals: [],
@@ -1721,7 +2323,6 @@ export const useAppStore = create<AppState>()(
       skipHydration: true,
       storage: createJSONStorage(() => safeStorage),
       partialize: (state) => ({
-        agentChat: state.agentChat,
         agentSessions: state.agentSessions,
         agentActiveId: state.agentActiveId,
         goals: state.goals,
@@ -1772,11 +2373,15 @@ export function setStoreUser(userId: string | null) {
 
   useAppStore.persist.setOptions({ name: key });
 
+  /* 账户切换（S07）：立即取消旧用户的在途任务并清空运行态——迟到的 delta/审批结果
+   * 不得写进新账户。同一账户的重复调用是空操作（不会打断正在跑的任务）。
+   * 动态 import 打断「store → 运行管理器 → store」的循环依赖。 */
+  void import("./agent/session-runtime").then((m) => m.resetRuntimeForAccount(userId));
+
   // 同步加载目标仓（替代 persist.rehydrate 的异步加载）：
   // rehydrate 是异步的，期间任何 clearLocalStore/写入都会把空状态写进刚切换的仓，
   // 曾导致用户本地快照被清空（数据"消失"事故）。localStorage 读取是同步的，无竞态。
   const defaults = {
-    agentChat: [] as ChatMsg[],
     agentSessions: [] as AgentSession[],
     agentActiveId: null as string | null,
     goals: [] as Goal[],
@@ -1857,6 +2462,11 @@ export function bindStoreSync() {
       const st = parsed?.state;
       if (!st) return;
       const cur = useAppStore.getState();
+      /* 回采字段集必须与 partialize 的持久化字段集对称。
+       * 历史事故：partialize 持久化 agentSessions/agentActiveId，但这里没回采，
+       * 于是学习窗口（另一标签页）每次 focus 都会把打开时的旧快照 setState 回去，
+       * 再触发 persist 全量落盘 —— 主窗口新产生的智能体对话被静默回滚。
+       * 原则：凡是 partialize 写盘的字段，这里都要回采，否则该字段就会被旧快照覆写。 */
       const next = {
         goals: st.goals ?? cur.goals,
         knowledge: st.knowledge ?? cur.knowledge,
@@ -1865,6 +2475,8 @@ export function bindStoreSync() {
         customPersonas: st.customPersonas ?? cur.customPersonas,
         folders: st.folders ?? cur.folders,
         settings: st.settings ?? cur.settings,
+        agentSessions: st.agentSessions ?? cur.agentSessions,
+        agentActiveId: st.agentActiveId ?? cur.agentActiveId,
       };
       const now = {
         goals: cur.goals,
@@ -1874,6 +2486,8 @@ export function bindStoreSync() {
         customPersonas: cur.customPersonas,
         folders: cur.folders,
         settings: cur.settings,
+        agentSessions: cur.agentSessions,
+        agentActiveId: cur.agentActiveId,
       };
       // 内容一致就不 setState：避免每次聚焦都整树重渲染
       if (JSON.stringify(next) === JSON.stringify(now)) return;
@@ -1902,4 +2516,10 @@ export function useDueReviews(): KnowledgeItem[] {
       );
     })
   );
+}
+
+/* 仅开发环境：把 store 挂到 window 供 UI 走查/诊断脚本驱动真实 store 方法。
+ * 生产构建（NODE_ENV=production）不暴露，避免把内部状态变成可被页面脚本随意改写的入口。 */
+if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+  (window as unknown as { __mentoraStore?: typeof useAppStore }).__mentoraStore = useAppStore;
 }

@@ -6,8 +6,9 @@ import { useTypewriter } from "@/lib/use-typewriter";
 import { usePopText } from "@/lib/use-poptext";
 import { QRCodeSVG } from "qrcode.react";
 import { ArrowRight, BookOpen, Brain, Check, Compass, GraduationCap } from "lucide-react";
-import { Modal } from "@/components/ui";
+import { Input, Modal, Textarea } from "@/components/ui";
 import { PLANS, priceLabel } from "@/lib/pricing";
+import { copyText } from "@/lib/utils";
 import { toast } from "sonner";
 
 /* ================= Mainframe 规格资产 ================= */
@@ -16,9 +17,18 @@ const VIDEO_SRC = "/hero.mp4";
 const SENSITIVITY = 0.8; // 鼠标横向移动 → 视频时间轴的灵敏度
 const CONTACT_EMAIL = "hi@mentora.app";
 
-/** 鼠标横向擦洗控制的背景视频（不自动播放，onSeeked 排队防 seek 洪泛） */
-function HeroVideo() {
+/** 鼠标横向擦洗控制的背景视频（不自动播放，onSeeked 排队防 seek 洪泛）
+ *  active=false 表示 hero 已被下方实底内容完全盖住：视频不可见时横向移动鼠标
+ *  不应再改 currentTime——preload="metadata" 下每次 seek 都可能发起媒体 range
+ *  请求 + 解码，全是给看不见的画面白耗带宽与电量。 */
+function HeroVideo({ active }: { active: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
+  /* 用 ref 而非把 active 放进下面 effect 的依赖：滚动会让 active 反复翻转，
+   * 重挂 window 监听没有必要，监听器内部读最新值即可。 */
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   useEffect(() => {
     const video = ref.current;
@@ -31,11 +41,16 @@ function HeroVideo() {
     const onLoaded = () => {
       if (video.duration && isFinite(video.duration)) {
         target = video.duration * 0.12;
+        /* 快滚离开首屏后才 loadeddata 的话，别为看不见的画面补这一刀 seek；
+         * target 已记下，滚回后第一次移动会 seek 到它。 */
+        if (!activeRef.current) return;
         video.currentTime = target;
         seeking = true;
       }
     };
     const applySeek = () => {
+      /* hero 不可见时不发 seek：onSeeked 的重试分支也会走到这里 */
+      if (!activeRef.current) return;
       if (seeking || !video.duration) return;
       seeking = true;
       video.currentTime = target;
@@ -45,6 +60,12 @@ function HeroVideo() {
       if (Math.abs(video.currentTime - target) > 0.05) applySeek();
     };
     const onMove = (e: MouseEvent) => {
+      if (!activeRef.current) {
+        /* 不可见：不累计位移、不 seek；但仍同步 prevX，
+         * 否则滚回 hero 后第一次移动会用旧起点算出一个大跳。 */
+        prevX = e.clientX;
+        return;
+      }
       if (prevX !== null && video.duration) {
         const delta = e.clientX - prevX;
         target = Math.min(
@@ -124,6 +145,16 @@ function Pill({
     : "inline-flex items-center justify-center whitespace-nowrap rounded-full border border-black/10 bg-white px-4 text-black transition-colors duration-200 hover:bg-black hover:text-white sm:px-5";
   const size = "py-[0.3em] mx-[0.2em] mb-[0.4em] text-[13px] sm:text-[15px]";
   if (href) {
+    /* 站内路由走 next/link（客户端路由+预取）：hero 的「我有激活码」此前用原生 <a>，
+     * 与桌面 CTA / 移动菜单 / 定价卡到同一目的地（/login?mode=register）的 Link 行为
+     * 不一致——一处秒开一处整页白屏重载。纯页内锚点（#method/#pricing）保持原生 <a>。 */
+    if (href.startsWith("/")) {
+      return (
+        <Link href={href} onClick={onClick} className={`${cls} ${size}`}>
+          {children}
+        </Link>
+      );
+    }
     return (
       <a href={href} onClick={onClick} className={`${cls} ${size}`}>
         {children}
@@ -191,6 +222,25 @@ export default function Landing() {
   const { elRef: popRef, failed: popFailed } = usePopText("Mentora", 300);
   const [showPills, setShowPills] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  /* 顶栏滚动感知：浅色产品区实底滚到视口顶后，fixed 顶栏从「白字无底」切换为
+   * 玻璃浅底+墨色字（glass-chrome 配方同 app-shell 吸顶栏）——否则白字压在
+   * bg-bg(#f5f5f7) 上对比度≈1.05:1，logo/导航/登录/汉堡全部不可读。
+   * 用实底容器 rect 而非 window.innerHeight：移动端 100vh 与动态视口有差。 */
+  const solidRef = useRef<HTMLDivElement>(null);
+  const [pastHero, setPastHero] = useState(false);
+  useEffect(() => {
+    const onScroll = () => {
+      const el = solidRef.current;
+      setPastHero(!!el && el.getBoundingClientRect().top <= 0);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, []);
   const [copyNote, setCopyNote] = useState(""); // 空串=无提示；成功/失败都让读屏与视力用户感知到
   const [trialOpen, setTrialOpen] = useState(false);
   const [trialEmail, setTrialEmail] = useState("");
@@ -205,27 +255,23 @@ export default function Landing() {
     return () => clearTimeout(t);
   }, []);
 
+  /* 「已复制」提示的清空定时器：同文件其它定时器（243 行、use-typewriter）都做了
+   * 卸载清理，这里同样持有句柄、卸载时清除（回调在已卸载组件上 setState 是卫生问题）。 */
+  const copyNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copyNoteTimer.current) clearTimeout(copyNoteTimer.current);
+    },
+    []
+  );
+
   const copyEmail = async () => {
-    let ok = true;
-    try {
-      await navigator.clipboard.writeText(CONTACT_EMAIL);
-    } catch {
-      /* 剪贴板 API 被拒 → 降级 execCommand */
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = CONTACT_EMAIL;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        ok = document.execCommand("copy");
-        ta.remove();
-      } catch {
-        ok = false;
-      }
-    }
+    /* 复制降级链统一走 lib/utils 的 copyText（clipboard→execCommand，带 readonly 防
+     * iOS 聚焦弹键盘）：本组件不再手抄一份，两份并存日后修 bug 必漏一处 */
+    const ok = await copyText(CONTACT_EMAIL);
     setCopyNote(ok ? "已复制" : "复制失败，请手动选择邮箱");
-    setTimeout(() => setCopyNote(""), 2400);
+    if (copyNoteTimer.current) clearTimeout(copyNoteTimer.current);
+    copyNoteTimer.current = setTimeout(() => setCopyNote(""), 2400);
   };
 
   const submitTrial = async () => {
@@ -240,6 +286,11 @@ export default function Landing() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: trialEmail.trim(), contact: trialContact.trim(), note: trialNote.trim() }),
+        /* 弱网/连接停滞下不设超时 fetch 可挂起数分钟，trialBusy 恒 true——提交按钮
+         * 永远「提交中…」且 disabled，关掉弹窗再开也不恢复（openTrial 不重置它）。
+         * 15s 与 feedback-widget 等全站客户端 fetch 的超时纪律一致；超时走 catch
+         * 提示、finally 复位 trialBusy，用户可以重试。 */
+        signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -247,7 +298,14 @@ export default function Landing() {
       }
       setTrialSent(true);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "提交失败");
+      /* AbortSignal.timeout 抛的 DOMException 原文是英文（TimeoutError），翻译成可读文案 */
+      toast.error(
+        e instanceof DOMException && e.name === "TimeoutError"
+          ? "提交超时，请检查网络后重试"
+          : e instanceof Error
+            ? e.message
+            : "提交失败"
+      );
     } finally {
       setTrialBusy(false);
     }
@@ -260,14 +318,27 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen">
-      <HeroVideo />
+      {/* pastHero 即「下方实底已盖住 hero」——用它同时作为视频擦洗的可见性开关 */}
+      <HeroVideo active={!pastHero} />
 
       {/* ===== 导航栏（fixed，z-10） ===== */}
-      <header className="fixed top-0 z-10 flex w-full items-center justify-between px-5 py-4 sm:px-8 sm:py-5">
+      <header
+        className={`fixed top-0 z-10 flex w-full items-center justify-between px-5 py-4 transition-[background-color,backdrop-filter] duration-300 sm:px-8 sm:py-5 ${
+          pastHero ? "glass-chrome" : ""
+        }`}
+      >
         <Link href="/" className="flex items-baseline gap-3">
-          <span className="font-brand text-[26px] leading-none text-white sm:text-[30px]">Mentora</span>
           <span
-            className="select-none text-[25px] leading-none text-white sm:text-[30px]"
+            className={`font-brand text-[26px] leading-none transition-colors duration-300 sm:text-[30px] ${
+              pastHero ? "text-ink" : "text-white"
+            }`}
+          >
+            Mentora
+          </span>
+          <span
+            className={`select-none text-[25px] leading-none transition-colors duration-300 sm:text-[30px] ${
+              pastHero ? "text-ink" : "text-white"
+            }`}
             style={{ letterSpacing: "-0.02em" }}
           >
             ✳︎
@@ -275,10 +346,14 @@ export default function Landing() {
         </Link>
 
         {/* 桌面导航（md+ 居中） */}
-        <nav className="hidden items-center text-[23px] text-white md:flex">
+        <nav
+          className={`hidden items-center text-[23px] transition-colors duration-300 md:flex ${
+            pastHero ? "text-ink" : "text-white"
+          }`}
+        >
           {NAV_LINKS.map((l, i) => (
             <span key={l.href} className="flex items-center">
-              {i > 0 && <span className="text-white/80">, </span>}
+              {i > 0 && <span className={pastHero ? "text-ink/70" : "text-white/80"}>, </span>}
               <a href={l.href} className="transition-opacity hover:opacity-60">
                 {l.label}
               </a>
@@ -290,7 +365,9 @@ export default function Landing() {
         <div className="hidden md:block">
           <Link
             href="/login"
-            className="text-[23px] text-white underline underline-offset-2 transition-opacity hover:opacity-60"
+            className={`text-[23px] underline underline-offset-2 transition-opacity hover:opacity-60 ${
+              pastHero ? "text-ink" : "text-white"
+            }`}
           >
             登录
           </Link>
@@ -305,15 +382,15 @@ export default function Landing() {
           className="flex cursor-pointer flex-col gap-[5px] md:hidden"
         >
           <span
-            className="block h-[2px] w-6 bg-white transition-all duration-300"
+            className={`block h-[2px] w-6 transition-all duration-300 ${pastHero ? "bg-ink" : "bg-white"}`}
             style={menuOpen ? { transform: "rotate(45deg) translateY(7px)" } : undefined}
           />
           <span
-            className="block h-[2px] w-6 bg-white transition-all duration-300"
+            className={`block h-[2px] w-6 transition-all duration-300 ${pastHero ? "bg-ink" : "bg-white"}`}
             style={menuOpen ? { opacity: 0 } : undefined}
           />
           <span
-            className="block h-[2px] w-6 bg-white transition-all duration-300"
+            className={`block h-[2px] w-6 transition-all duration-300 ${pastHero ? "bg-ink" : "bg-white"}`}
             style={menuOpen ? { transform: "rotate(-45deg) translateY(-7px)" } : undefined}
           />
         </button>
@@ -414,7 +491,7 @@ export default function Landing() {
       </section>
 
       {/* ===== 下方产品区（实底盖住 fixed 视频） ===== */}
-      <div className="relative z-[1] border-t border-white/10 bg-bg">
+      <div ref={solidRef} className="relative z-[1] border-t border-white/10 bg-bg">
         {/* 四大功能 */}
         <section className="mx-auto max-w-5xl px-4 py-20">
           <div className="grid gap-4 md:grid-cols-2">
@@ -603,31 +680,33 @@ export default function Landing() {
             </p>
             <label className="block text-xs text-ink-dim">
               邮箱（必填）
-              <input
+              {/* 复用共享 Input/Textarea（ui.tsx）：移动端 16px 防 iOS 聚焦自动放大、
+                  44px 触达高度与全站焦点环口径一致——手抄 text-sm 三处全违反该契约 */}
+              <Input
                 type="email"
                 value={trialEmail}
                 onChange={(e) => setTrialEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="mt-1.5 w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent/60"
+                className="mt-1.5"
               />
             </label>
             <label className="block text-xs text-ink-dim">
               微信 / 手机（可选，方便直接发你）
-              <input
+              <Input
                 value={trialContact}
                 onChange={(e) => setTrialContact(e.target.value)}
                 placeholder="微信号或手机号"
-                className="mt-1.5 w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent/60"
+                className="mt-1.5"
               />
             </label>
             <label className="block text-xs text-ink-dim">
               想学什么？（可选，我会按你的目标给建议）
-              <textarea
+              <Textarea
                 value={trialNote}
                 onChange={(e) => setTrialNote(e.target.value)}
                 rows={3}
                 placeholder="比如：三个月内能独立做数据分析"
-                className="mt-1.5 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent/60"
+                className="mt-1.5"
               />
             </label>
             <button

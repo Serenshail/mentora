@@ -1,6 +1,7 @@
 "use client";
 
 import { z } from "zod";
+import { councilEvidence } from "@/lib/web-search";
 
 export type WirePart =
   | { type: "text"; text: string }
@@ -74,6 +75,7 @@ export async function streamChat(
     signal?: AbortSignal;
     task?: ChatTask;
     onDelta: (text: string) => void;
+    onActivity?: (activity: "searching" | "waiting") => void;
     /** 推理模型思考心跳：正文产出前的 reasoning 摘要。用于长任务等待反馈（"模型思考中…"），
      *  不拼进返回正文。缺省时静默忽略（老调用点零改动）。 */
     onThink?: (text: string) => void;
@@ -81,13 +83,27 @@ export async function streamChat(
     onToolCalls?: (calls: WireToolCall[]) => void;
     /** 网关拒收原生 tools 已降级为围栏协议（t=n tools_off）：后续轮不必再声明 nativeTools */
     onNativeOff?: () => void;
+    /** 供应商回传的 token 用量（t=u）。没回传就不回调——调用方据此标 unknown，
+     *  绝不当成 0（PRD §8「缺失 usage 标 unknown」）。 */
+    onUsage?: (u: { inputTokens: number; outputTokens: number; cachedTokens: number }) => void;
   }
 ): Promise<string> {
+  let args = opts.args;
+  let sources = "";
+  if (opts.task === "council" && args?.mode === "single" && typeof args.evidence !== "string") {
+    const last = opts.messages.at(-1);
+    if (last?.role === "user" && typeof last.content === "string") {
+      const result = await councilEvidence(last.content, opts.signal, () => opts.onActivity?.("searching"));
+      opts.onActivity?.("waiting");
+      args = { ...args, evidence: result.evidence };
+      sources = result.sources;
+    }
+  }
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: await byokHeaders(),
     body: JSON.stringify({
-      args: opts.args,
+      args,
       system: opts.system,
       messages: opts.messages,
       temperature: opts.temperature,
@@ -114,6 +130,7 @@ export async function streamChat(
    * 下游把它当成功：extractJson 报「无法解析 JSON」掩盖真因，聊天里也把残句当完整答案。 */
   let sawEnd = false;
 
+  try {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -134,6 +151,15 @@ export async function streamChat(
           if (Array.isArray(calls) && calls.length > 0) opts.onToolCalls?.(calls);
         } else if (ev.t === "n" && ev.v === "tools_off") {
           opts.onNativeOff?.();
+        } else if (ev.t === "u") {
+          const u = ev.v as { inputTokens?: number; outputTokens?: number; cachedTokens?: number };
+          if (u && typeof u.inputTokens === "number" && typeof u.outputTokens === "number") {
+            opts.onUsage?.({
+              inputTokens: u.inputTokens,
+              outputTokens: u.outputTokens,
+              cachedTokens: typeof u.cachedTokens === "number" ? u.cachedTokens : 0,
+            });
+          }
         } else if (ev.t === "end") {
           sawEnd = true;
         } else if (ev.t === "e") {
@@ -146,47 +172,18 @@ export async function streamChat(
     }
   }
   if (!sawEnd) throw new Error("连接中断，回答没有生成完——内容不完整，请重试");
-  return full;
+  return full.trim() ? full + sources : "";
+  } finally {
+    // Error events and consumer failures must stop the HTTP stream as well.
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
-/** 从 LLM 输出中稳健提取 JSON（容忍 ```json 围栏 / 前后缀文本） */
-export function extractJson<T>(text: string): T {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidates: string[] = [];
-  if (fenced?.[1]) candidates.push(fenced[1].trim());
-
-  // 大括号/中括号配对扫描（跳过字符串内部）
-  const scanned: { start: number; text: string }[] = [];
-  for (const [open, close] of [["{", "}"], ["[", "]"]] as const) {
-    const start = text.indexOf(open);
-    if (start === -1) continue;
-    let depth = 0, inStr = false, esc = false, end = -1;
-    for (let i = start; i < text.length; i++) {
-      const ch = text[i];
-      if (esc) { esc = false; continue; }
-      if (ch === "\\") { esc = true; continue; }
-      if (ch === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (ch === open) depth++;
-      else if (ch === close) {
-        depth--;
-        if (depth === 0) { end = i; break; }
-      }
-    }
-    // 记录起点,后面按"在原文中出现最早"排序——裸数组 "[{...}]" 时先命中整个数组而非首个对象
-    if (end > start) scanned.push({ start, text: text.slice(start, end + 1) });
-  }
-  scanned.sort((a, b) => a.start - b.start);
-  for (const s of scanned) candidates.push(s.text);
-  candidates.push(text.trim());
-
-  for (const c of candidates) {
-    try {
-      return JSON.parse(c) as T;
-    } catch { /* try next */ }
-  }
-  throw new Error("无法从模型输出中解析 JSON");
-}
+/** 从 LLM 输出中稳健提取 JSON（容忍 ```json 围栏 / 前后缀文本）。
+ *  v27 起真身在 ./json.ts（插件 codegen 单一真源），此处重导出保持原导入面。 */
+import { extractJson } from "./json";
+export { extractJson };
 
 /* ========= 结构化产物 Schema ========= */
 
@@ -271,6 +268,43 @@ export const phaseListSchema = z.object({
 });
 export type PhaseListDraft = z.infer<typeof phaseListSchema>;
 
+/* 天级计划里 resources/acceptance 的字段定义抽成常量，phasePlanSchema 与遗留的 planSchema
+ * 共用一份，杜绝「改容错逻辑要同步两处、漏一处就静默失效」。 */
+const resourceDraftSchema = z.object({
+  title: z.string(),
+  url: z.string().optional().nullable(),
+  why: z.string(),
+  /* 资料时效/类型元数据:容错解析——模型常把年份写成字符串/带"年"、kind 自由发挥。
+   * 这些是可选增强字段,绝不能因格式不符让整个计划 parse 失败(工程:边界降级)。 */
+  year: z.preprocess(
+    (v) =>
+      typeof v === "number"
+        ? v
+        : typeof v === "string"
+          ? parseInt(v.replace(/\D/g, ""), 10) || null
+          : null,
+    z.number().optional().nullable()
+  ),
+  kind: z.preprocess((v) => (typeof v === "string" ? v : null), z.string().optional().nullable()),
+  evergreen: z.preprocess(
+    (v) => (v === true || v === "true" ? true : v === false || v === "false" ? false : null),
+    z.boolean().optional().nullable()
+  ),
+});
+
+const acceptanceDraftSchema = z
+  .array(
+    z.object({
+      kind: z.preprocess(
+        (v) => (["explain", "apply", "oral", "essay", "build"].includes(String(v)) ? v : "apply"),
+        z.enum(["explain", "apply", "oral", "essay", "build"])
+      ),
+      question: z.string(),
+      hint: z.string().optional().nullable(),
+    })
+  )
+  .min(2);
+
 export const phasePlanSchema = z.object({
   boundary: z.string().optional().nullable(),
   days: z
@@ -291,29 +325,7 @@ export const phasePlanSchema = z.object({
             ),
           }),
         ])).min(1),
-        resources: z.array(
-          z.object({
-            title: z.string(),
-            url: z.string().optional().nullable(),
-            why: z.string(),
-            /* 资料时效/类型元数据:容错解析——模型常把年份写成字符串/带"年"、kind 自由发挥。
-             * 这些是可选增强字段,绝不能因格式不符让整个计划 parse 失败(工程:边界降级)。 */
-            year: z.preprocess(
-              (v) =>
-                typeof v === "number"
-                  ? v
-                  : typeof v === "string"
-                    ? parseInt(v.replace(/\D/g, ""), 10) || null
-                    : null,
-              z.number().optional().nullable()
-            ),
-            kind: z.preprocess((v) => (typeof v === "string" ? v : null), z.string().optional().nullable()),
-            evergreen: z.preprocess(
-              (v) => (v === true || v === "true" ? true : v === false || v === "false" ? false : null),
-              z.boolean().optional().nullable()
-            ),
-          })
-        ),
+        resources: z.array(resourceDraftSchema),
         method: z.string(),
         example: z
           .object({
@@ -323,24 +335,15 @@ export const phasePlanSchema = z.object({
           })
           .optional()
           .nullable(),
-        acceptance: z
-          .array(
-            z.object({
-              kind: z.preprocess(
-                (v) => (["explain", "apply", "oral", "essay", "build"].includes(String(v)) ? v : "apply"),
-                z.enum(["explain", "apply", "oral", "essay", "build"])
-              ),
-              question: z.string(),
-              hint: z.string().optional().nullable(),
-            })
-          )
-          .min(2),
+        acceptance: acceptanceDraftSchema,
       })
     )
     .min(1),
 });
 export type PhasePlanDraft = z.infer<typeof phasePlanSchema>;
 
+/** @deprecated 已被三段契约取代（masterPlanSchema / phaseListSchema / phasePlanSchema），
+ *  真实链路不再产出此形状；仅为 plan.ts 的历史映射回归锁保留，新代码请勿使用。 */
 export const planSchema = z.object({
   summary: z.string(),
   totalDays: z.number(),
@@ -353,29 +356,7 @@ export const planSchema = z.object({
         z.object({
           title: z.string(),
           knowledgePoints: z.array(z.string()).min(1),
-          resources: z.array(
-            z.object({
-            title: z.string(),
-            url: z.string().optional().nullable(),
-            why: z.string(),
-            /* 资料时效/类型元数据:容错解析——模型常把年份写成字符串/带"年"、kind 自由发挥。
-             * 这些是可选增强字段,绝不能因格式不符让整个计划 parse 失败(工程:边界降级)。 */
-            year: z.preprocess(
-              (v) =>
-                typeof v === "number"
-                  ? v
-                  : typeof v === "string"
-                    ? parseInt(v.replace(/\D/g, ""), 10) || null
-                    : null,
-              z.number().optional().nullable()
-            ),
-            kind: z.preprocess((v) => (typeof v === "string" ? v : null), z.string().optional().nullable()),
-            evergreen: z.preprocess(
-              (v) => (v === true || v === "true" ? true : v === false || v === "false" ? false : null),
-              z.boolean().optional().nullable()
-            ),
-          })
-          ),
+          resources: z.array(resourceDraftSchema),
           method: z.string(),
           example: z
             .object({
@@ -385,23 +366,13 @@ export const planSchema = z.object({
             })
             .optional()
             .nullable(),
-          acceptance: z
-            .array(
-              z.object({
-                kind: z.preprocess(
-                (v) => (["explain", "apply", "oral", "essay", "build"].includes(String(v)) ? v : "apply"),
-                z.enum(["explain", "apply", "oral", "essay", "build"])
-              ),
-                question: z.string(),
-                hint: z.string().optional().nullable(),
-              })
-            )
-            .min(2),
+          acceptance: acceptanceDraftSchema,
         })
       ).min(1),
     })
   ).min(1),
 });
+/** @deprecated 见 planSchema：三段契约已取代，勿在新代码中使用。 */
 export type PlanDraft = z.infer<typeof planSchema>;
 
 export const quizGradeSchema = z.object({
@@ -542,7 +513,7 @@ export const readingPlanSchema = z.preprocess(
           assessFocus: z.string().optional().nullable(),
         })
       )
-      .min(3),
+      .min(1),
   })
 );
 export type ReadingPlan = z.infer<typeof readingPlanSchema>;
@@ -579,7 +550,10 @@ export const readingStrategySchema = z.object({
   reason: z.string().optional().nullable(),
 });
 
-/** 验收出题（PRD 4.5）：kind 非法回落 explain；固定 3 题，多了截断少了报错 */
+/** 验收出题（PRD 4.5）：kind 非法回落 explain；固定 3 题——多的截断、少的报错。
+ *  截断必须在这里做（而不是 .max(5) 硬拒）：模型偶尔给 4-6 题且题面都有效，此前整包 parse 失败
+ *  会让页面回退到与章节内容无关的本地通用三题（read/[id]/page.tsx 的 catch 兜底），
+ *  比「截到 3 题」是更差的降级。少于 2 题仍视为无效输出（min(2)）。 */
 export const readingAssessGenSchema = z.object({
   questions: z
     .array(
@@ -592,7 +566,7 @@ export const readingAssessGenSchema = z.object({
       })
     )
     .min(2)
-    .max(5),
+    .transform((qs) => qs.slice(0, 3)),
 });
 
 /** 验收判分（PRD 4.5 + 升级 PRD 3.5 四级）：evidence 纪律在提示词里，schema 只兜形状。

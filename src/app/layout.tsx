@@ -26,8 +26,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
   return (
     <html lang="zh-CN" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">
+      <head>
         <ChunkRecovery />
+      </head>
+      <body className="min-h-full flex flex-col">
         <AppShell>{children}</AppShell>
         <Toaster theme="light" position="top-center" richColors />
       </body>

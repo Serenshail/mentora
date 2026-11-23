@@ -4,7 +4,9 @@
   <view class="head">
     <view class="head-greet">第二大脑</view>
     <view class="head-title">你的知识网络</view>
-    <view class="head-sub">{{total}} 篇笔记 · {{linkCount}} 条双链</view>
+    <!-- loading（会话恢复在途）时不渲染：初始 total/linkCount 是 0，
+         直接渲染会把「未加载」呈现成「0 篇笔记 · 0 条双链」的空库 -->
+    <view class="head-sub" wx:if="{{!loading}}">{{total}} 篇笔记 · {{linkCount}} 条双链</view>
   </view>
 
   <!-- 到期复习：这是本页唯一带动作的主卡 -->

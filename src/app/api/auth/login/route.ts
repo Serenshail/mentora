@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { dbGet, emailHash } from "@/lib/server/db";
-import { verifyPassword, mintSession } from "@/lib/server/auth";
+import { verifyPasswordAsync, mintSession } from "@/lib/server/auth";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { computeEntitlement, setExpiry, type UserPlanRecord } from "@/lib/server/entitlement";
 import { ensureRefCode, type ReferralRecord } from "@/lib/server/referral";
@@ -11,6 +11,7 @@ import {
   bumpFail,
   clearFail,
 } from "@/lib/server/login-guard";
+import { readJsonBody } from "@/lib/server/body-limit";
 
 export const runtime = "nodejs";
 
@@ -29,7 +30,12 @@ export async function POST(req: NextRequest) {
   if (!(await rateLimitPersistent(`login:${clientIp(req)}`, { capacity: 10, refillPerSec: 10 / 60 }))) {
     return Response.json({ error: "尝试太频繁，请稍后再试" }, { status: 429 });
   }
-  const body = await req.json().catch(() => ({}));
+  /* 体积闸：请求体超 512KB 直接 413，不缓冲不解析（自托管无平台 body 封顶，
+   * GB 级 JSON 的 JSON.parse 内存尖峰可 OOM 单进程 Node；真实登录载荷 ≤1KB） */
+  const body = await readJsonBody(req);
+  if (body === null) {
+    return Response.json({ error: "请求体过大" }, { status: 413 });
+  }
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
 
@@ -48,8 +54,13 @@ export async function POST(req: NextRequest) {
   } catch {
     return Response.json({ error: "用户数据库暂时不可用，稍后再试" }, { status: 503 });
   }
-  if (!record) dummyScryptVerify(password); // 不存在邮箱同样跑 scrypt，抹平枚举时序差
-  if (!record || !verifyPassword(password, record.salt, record.hash)) {
+  /* 密码校验走异步 scrypt（verifyPasswordAsync）：同步版在登录热路径上独占事件
+   * 循环几十毫秒，分布式撞库下会把自托管单进程的全站请求一起拖住。
+   * 不存在邮箱也跑一遍同参数 scrypt（dummyScryptVerify），抹平枚举时序差。 */
+  const verified = record
+    ? await verifyPasswordAsync(password, record.salt, record.hash)
+    : (await dummyScryptVerify(password), false);
+  if (!record || !verified) {
     if (record) await bumpFail(email); // 只给已注册邮箱计数，不给"探测存在性"留差异
     return Response.json({ error: "邮箱或密码不对" }, { status: 401 });
   }

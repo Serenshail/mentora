@@ -63,9 +63,10 @@ try { await ncBtn.click({ timeout: 8000 }); } catch { console.log("新对话点�
 await page.waitForTimeout(600);
 const aState = await page.evaluate(() => {
   const input = [...document.querySelectorAll("input")].find((i) => /提问、搜索/.test(i.placeholder || ""));
+  const modal = document.querySelector("[role=dialog]");
   return { found: !!input, disabled: input ? input.disabled : null,
     btns: [...document.querySelectorAll("button")].filter((b) => /新对话/.test(b.textContent || "")).length,
-    modal: !!document.querySelector("[role=dialog]") };
+    modalText: modal ? (modal.textContent || "").slice(0, 120) : "" };
 });
 console.log("A 复现 composer 状态:", JSON.stringify(aState), "pageerrors:", errors.length);
 

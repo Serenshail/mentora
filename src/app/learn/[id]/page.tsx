@@ -10,35 +10,46 @@ import {
 import { Markdown } from "@/components/markdown";
 import { AgentTrace, type TracePhase } from "@/components/agent-trace";
 import { useAppStore } from "@/lib/store";
-import { useAuth } from "@/lib/auth-client";
+import { useAuth, type AuthUser } from "@/lib/auth-client";
 import Link from "next/link";
 import { useHydrated } from "@/lib/use-chat";
+import { PageBackBar } from "@/components/page-back-bar";
 import { DOMAIN_LABELS } from "@/lib/types";
 import type { DayPlan, Goal, QuizItemResult } from "@/lib/types";
 import { extractJson, normalizeQuizGrade, quizGradeSchema, type QuizGrade } from "@/lib/ai/client";
 import { cn, formatDate, uid, rankResources, KIND_LABEL } from "@/lib/utils";
-import { refineResources } from "@/lib/resource-pipeline";
+import { buildStudyResourceQuery, refineResources } from "@/lib/resource-pipeline";
 import { masteryFromQuiz } from "@/lib/store";
+import { phaseName, planOutlineNoteTitle, planPhaseNoteTitle } from "@/lib/plan";
 import { runGraduation } from "@/lib/graduation";
+import { PLANS, priceLabel } from "@/lib/pricing";
 
-/* 链接体检徽章:复用资源管线的模块级缓存(refine 已体检过的不再重复请求) */
+/* Link checks also protect resources saved by older versions. */
 import type { LinkCheck } from "@/lib/resource-pipeline";
-import { ensureCheck } from "@/lib/resource-pipeline";
-function LinkStatus({ url }: { url?: string }) {
-  const [st, setSt] = useState<LinkCheck | null>(null);
+import { ensureCheck, requiresVideoResources } from "@/lib/resource-pipeline";
+function CheckedResourceLink({ url, title, videoOnly = false }: { url: string; title: string; videoOnly?: boolean }) {
+  const [result, setResult] = useState<{ url: string; check: LinkCheck | null }>();
   useEffect(() => {
-    if (!url) return;
-    let on = true;
-    void ensureCheck(url).then((r) => on && setSt(r));
-    return () => {
-      on = false;
-    };
+    let active = true;
+    void ensureCheck(url).then((check) => { if (active) setResult({ url, check }); });
+    return () => { active = false; };
   }, [url]);
-  if (!st) return null;
-  if (st.dead) return <span className="shrink-0 text-[10px] text-bad" title={st.reason}>✗ 失效</span>;
-  if (st.ad) return <span className="shrink-0 text-[10px] text-warn" title={st.reason}>⚠ 疑似广告</span>;
-  return <span className="shrink-0 text-[10px] text-ok" title="链接可访问">✓</span>;
+  const current = result?.url === url ? result : undefined;
+  const check = current?.check;
+  if (!check?.ok || check.dead || check.ad || (videoOnly && !check.video)) {
+    return (
+      <span className="min-w-0 break-words text-ink-dim">
+        {title} <span className="ml-1 text-xs" title={check?.reason}>{!current ? "检查中" : check?.dead || check?.ad ? "链接不可用" : videoOnly && check?.ok && !check.video ? "未确认是可播放的视频" : "暂未确认可访问"}</span>
+      </span>
+    );
+  }
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 text-accent hover:underline">
+      <span className="break-words">{check.title || title}</span> <ExternalLink className="size-3.5 shrink-0" />
+    </a>
+  );
 }
+
 import { toast } from "sonner";
 import {
   ArrowLeft, BookMarked, BookOpen, Check, ChevronRight, CircleX, ExternalLink, Flag, Globe,
@@ -55,6 +66,17 @@ const ACCEPTANCE_KIND_LABEL: Record<string, string> = {
   transfer: "迁移",
 };
 
+/* 付费墙口径与剩余天数统计：GoalDetailInner（头部闸）与 LearnBody（时间线徽章）共用一份。
+ * 此前 freeTier / FREE_PHASE_LIMIT / remainingDays 在父子组件各抄一份——改 FREE_PHASE_LIMIT
+ * 或到期判定口径时漏改一处，头部 paywall 闸与时间线锁定逻辑就会对同一用户给出不同判定。
+ * 收口成一份，理由同下方 regenPhaseFlow 的注释。 */
+const FREE_PHASE_LIMIT = 2;
+const isFreeTier = (user: AuthUser | null | undefined): boolean => user?.entitlement?.status === "expired";
+const countRemainingDays = (goal: Pick<Goal, "plan"> | null | undefined): number =>
+  goal?.plan
+    ? Object.values(goal.plan.days).filter((d) => d.status === "active" || d.status === "locked").length
+    : 0;
+
 /* ================= 即时答疑：学习中随时问教练 ================= */
 function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
   const appendDayQa = useAppStore((s) => s.appendDayQa);
@@ -65,26 +87,47 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
   const [phases, setPhases] = useState<TracePhase[]>([]);
   const qa = day.qa ?? [];
   const boxRef = useRef<HTMLDivElement>(null);
+  const qaRequestRef = useRef<AbortController | null>(null);
+  useEffect(() => () => qaRequestRef.current?.abort(), [goal.id, day.id]);
   /* 多轮后回答在滚动视口外生长：跟随滚底（容器自身要用 scrollTop，scrollIntoView 只滚外层） */
   useEffect(() => {
     const el = boxRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [qa.length, streamText]);
 
-  const send = async () => {
-    const text = input.trim();
-    if (!text || busy) return;
-    setInput("");
+  const unanswered = qa.at(-1);
+  const send = () => void respond(input.trim());
+  const respond = async (text: string, reuseQuestion = false) => {
+    if (!text || qaRequestRef.current) return;
+    const request = new AbortController();
+    qaRequestRef.current = request;
+    const account = useAppStore.getState()._storeUserId;
+    const sameRequest = () => !request.signal.aborted && useAppStore.getState()._storeUserId === account;
     setBusy(true);
     setStreamText("");
-    const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
-    const newQa = [...qa, userMsg];
-    // 定点追加：答疑等待模型期间，后台讲义/预取可能并发更新 plan——
-    // 旧实现用闭包里的 plan 整体回写会把这些更新冲掉（还会在 BYOK 下重复计费）。
-    appendDayQa(goal.id, day.id, userMsg);
+    const newQa = [...qa];
+    if (!reuseQuestion) {
+      setInput("");
+      const userMsg = { id: uid("m"), role: "user" as const, content: text, at: new Date().toISOString() };
+      newQa.push(userMsg);
+      appendDayQa(goal.id, day.id, userMsg);
+    }
     /* UI 状态规范（R1/R2/R3）：首 token 前必须有可见阶段，不能黑屏等 */
     const t0 = performance.now();
     setPhases([{ label: "检索笔记", state: "running" }]);
+    /* 流式节流：旧实现每个 delta 都 setStreamText——每次增量都重渲染整个 AskCoach
+     * （连带整个 qa 列表），Markdown 对已累积全文重新 parse，成本随文本长度×chunk
+     * 数累乘。80ms 批量刷新把重渲染频率钳到人眼无感的量级；收尾时 flushNow
+     * 兜底最后一个窗口内的增量，出错路径由 finally 清掉未触发的定时器（防幽灵刷新）。 */
+    let buf = "";
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushNow = () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (sameRequest()) setStreamText(buf);
+    };
     try {
       const { streamChat } = await import("@/lib/ai/client");
       const ctx = JSON.stringify({
@@ -107,10 +150,11 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
             id: k.id, title: k.title, body: k.body, domain: k.domain,
             links: k.links, version: k.version, updatedAt: k.updatedAt, tags: k.tags,
           }));
-        const r = await retrieveEnhanced(text, notes, 3, { context: day.title, rewrite: false });
-        console.info("[rag-trace]", { task: "coach-qa", ...r.trace });
+        const r = await retrieveEnhanced(text, notes, 3, { context: day.title, rewrite: false, signal: request.signal });
+        if (process.env.NODE_ENV !== "production") console.info("[rag-trace]", { task: "coach-qa", ...r.trace });
         ragCtx = r.context;
       } catch { ragFailed = true; /* 检索是增强项，失败不阻塞答疑 */ }
+      if (!sameRequest()) return;
       const t1 = performance.now();
       setPhases([
         {
@@ -124,19 +168,63 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
       const full = await streamChat({
         task: "coach-qa",
         args: { ctx, ragCtx },
+        signal: request.signal,
         messages: newQa.slice(-6).map((m) => ({ role: m.role, content: m.content })),
-        onDelta: (d) => setStreamText((p) => p + d),
+        onDelta: (d) => {
+          buf += d;
+          if (!flushTimer) flushTimer = setTimeout(flushNow, 80);
+        },
       });
+      if (!sameRequest()) return;
       const t2 = performance.now();
       setPhases((prev) =>
         prev.map((p) => (p.state === "running" ? { ...p, state: "done", durationMs: t2 - t1 } : p))
       );
-      const finalQa = [...newQa, { id: uid("m"), role: "assistant" as const, content: full || streamText, at: new Date().toISOString() }];
-      appendDayQa(goal.id, day.id, finalQa[finalQa.length - 1]);
+      flushNow(); // 兜底最后一个 80ms 窗口内的增量
+      /* 模型 200 但正文为空（BYOK 自定义端点的现实场景）：旧实现仍向持久化 qa 追加
+       * 一条空 assistant 消息——界面出现空气泡、无任何报错，这条空消息还会占用
+       * 后续 newQa.slice(-6) 的历史窗口稀释上下文。与 use-chat 的空回复守卫
+       * （setError「模型返回了空回复，请重试」）同口径：不落库、显式报错。 */
+      const content = full || buf;
+      if (content) {
+        appendDayQa(goal.id, day.id, {
+          id: uid("m"),
+          role: "assistant" as const,
+          content,
+          at: new Date().toISOString(),
+        });
+      } else {
+        toast.error("模型返回了空回复，请重试");
+      }
     } catch (e) {
-      setPhases((prev) => prev.map((p) => (p.state === "running" ? { ...p, state: "failed" } : p)));
-      toast.error(e instanceof Error ? e.message : "答疑失败");
+      flushNow(); // 中断保留的内容要完整可见（含最后一个窗口内的增量）
+      /* 与讲义生成（genLesson catch）同口径：答疑带 RAG 上下文同样可能长答，断网/点停止
+       * 时已流出的部分不整段丢弃——继续回答=从头重新生成、重新计费。阈值对齐讲义的
+       * 200 字符：太短的残句没有保留价值，走原报错路径。账号已切换时不落库
+       * （不能把上一个账号的回答写进当前账号的库）。 */
+      const accountUnchanged = useAppStore.getState()._storeUserId === account;
+      if (accountUnchanged && buf.trim().length > 200) {
+        appendDayQa(goal.id, day.id, {
+          id: uid("m"),
+          role: "assistant" as const,
+          content: buf,
+          at: new Date().toISOString(),
+        });
+        setPhases((prev) =>
+          prev.map((p) => (p.state === "running" ? { ...p, state: "cancelled", detail: "中断，已保留已生成内容" } : p))
+        );
+        toast.error("回答中断，已保留已生成的部分；想看完整回答请重新提问。");
+      } else {
+        setPhases((prev) => prev.map((p) => (p.state === "running" ? { ...p, state: "failed" } : p)));
+        if (sameRequest()) toast.error(friendlyGenError(e, "答疑失败"));
+      }
     } finally {
+      // 清掉未触发的节流定时器：否则它会在 setStreamText("") 之后 firing，半截回复复活成幽灵气泡
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (qaRequestRef.current === request) qaRequestRef.current = null;
       setStreamText("");
       setBusy(false);
     }
@@ -155,7 +243,10 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
       </button>
       {open && (
         <div id="ask-coach-panel" className="mt-3">
-          <div ref={boxRef} aria-live="polite" aria-label="教练答疑" className="max-h-64 space-y-2.5 overflow-y-auto">
+          {/* 流式正文逐 token 增长：live 区域包住它会让读屏把增长中的半句话反复重播（比不加更糟）。
+              只对阶段变化做礼貌播报——开始/完成由下方独立 status 行承担；
+              aria-label 挂在无 role 的 div 上会被读屏忽略，补 role="region" 名称才生效。 */}
+          <div ref={boxRef} role="region" aria-label="教练答疑" className="max-h-64 space-y-2.5 overflow-y-auto">
             {qa.length === 0 && !streamText && (
               <p className="text-xs text-ink-dim/70">
                 看不懂某个知识点？代码报错不知道为什么？直接问，教练即时解答。
@@ -164,7 +255,8 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
             {qa.map((m) => (
               <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
                 {m.role === "user" ? (
-                  <div className="max-w-[85%] rounded-xl rounded-br-sm bg-[#1d1d1f] px-3 py-2 text-xs text-white">
+                  /* 用户气泡走主题令牌 bg-ink（--color-ink），别写死 #1d1d1f——与 learn/new 的同语义气泡同源 */
+                  <div className="max-w-[85%] rounded-xl rounded-br-sm bg-ink px-3 py-2 text-xs text-white">
                     {m.content}
                   </div>
                 ) : (
@@ -183,15 +275,34 @@ function AskCoach({ goal, day }: { goal: Goal; day: DayPlan }) {
             {/* 思考轨迹：首 token 前也有可见阶段（检索→思考），完成后折叠为耗时摘要 */}
             <AgentTrace phases={phases} className="max-w-[92%]" />
           </div>
-          <div className="mt-3 flex gap-2">
-            <input
-              className="h-9 w-full rounded-[10px] border border-border bg-white px-3 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]"
+          {/* 阶段播报走独立 status 行：开始回答/回答完成各一次，不随流式增量反复触发；失败由 toast 报 */}
+          <p role="status" className="sr-only">
+            {busy
+              ? "教练正在回答…"
+              : qa.length > 0 && qa[qa.length - 1].role === "assistant"
+                ? "教练已回答"
+                : ""}
+          </p>
+          {!busy && unanswered?.role === "user" && (
+            <Button size="sm" variant="outline" className="mt-2" onClick={() => void respond(unanswered.content, true)}>继续回答</Button>
+          )}
+          <div className="mt-3 flex items-center gap-2">
+            <Input
               placeholder="输入你的疑问…（Enter 发送）"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
+              onKeyDown={(e) => {
+                // isComposing：中文输入法选词回车不算发送（与 council / learn/new / agent-home 同守卫）
+                if (e.key === "Enter" && !e.nativeEvent.isComposing) send();
+              }}
               disabled={busy}
             />
+            {busy && (
+              <Button size="sm" variant="outline" onClick={() => {
+                qaRequestRef.current?.abort();
+                setPhases((current) => current.map((phase) => phase.state === "running" ? { ...phase, state: "cancelled" } : phase));
+              }}>停止</Button>
+            )}
             <Button size="sm" onClick={send} loading={busy} className="shrink-0">
               问
             </Button>
@@ -218,20 +329,28 @@ function QuickNotes({ goal, day }: { goal: Goal; day: DayPlan }) {
         <span className="text-[11px] text-ink-dim">想到就记，直接进知识库</span>
       </div>
       <div className="mt-3">
-        <input
-          className="h-9 w-full rounded-[10px] border border-border bg-white px-3 text-sm outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]"
+        <Input
           placeholder="记一条：今天踩的坑 / 顿悟 / 想追问的问题…（Enter 保存）"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== "Enter" || !text.trim()) return;
-            addKnowledge(
+            // isComposing：中文输入法选词回车不算保存，否则半截笔记会落库并清空输入框
+            if (e.key !== "Enter" || e.nativeEvent.isComposing || !text.trim()) return;
+            /* addKnowledge 按标题全库去重（同名整条丢弃），返回实际新增条数：
+             * 旧实现不消费返回值无条件报「已记入」并清空输入——随手记标题取前 40 字符，
+             * 极易与验收通过时按知识点原文写入的标题撞车，笔记实际没存却收到成功确认。 */
+            const added = addKnowledge(
               [{ title: text.trim().slice(0, 40), body: text.trim(), domain: `${goal.topic}/笔记` }],
               "manual",
               `${goal.topic} · ${day.title} · 随手记`
             );
-            setText("");
-            toast.success("已记入第二大脑");
+            if (added > 0) {
+              setText("");
+              toast.success("已记入第二大脑");
+            } else {
+              // 撞名被去重丢弃：如实报错并保留输入，用户换个更具体的说法再记
+              toast.error("第二大脑里已有同名笔记，这条没有重复入库——换个更具体的说法再记");
+            }
           }}
         />
       </div>
@@ -275,11 +394,17 @@ function GoalDetailInner() {
     try { localStorage.setItem(`mentora-deadline-${id}`, v); } catch { /* 忽略 */ }
   };
 
+  /* E2 验收 2：完成 / 跳过 / 掌握分别统计（掌握只认知识点 masteryStatus 证据） */
   const progress = useMemo(() => {
-    if (!goal?.plan) return { ratio: 0, done: 0, total: 0 };
+    if (!goal?.plan) return { ratio: 0, done: 0, total: 0, passed: 0, skipped: 0, mastered: 0 };
     const days = Object.values(goal.plan.days);
-    const done = days.filter((d) => d.status === "passed" || d.status === "skipped").length;
-    return { ratio: days.length ? done / days.length : 0, done, total: days.length };
+    const passed = days.filter((d) => d.status === "passed").length;
+    const skipped = days.filter((d) => d.status === "skipped").length;
+    const mastered = days.filter((d) =>
+      (d.knowledgePoints ?? []).some((k) => k.masteryStatus && k.masteryStatus !== "unknown" && k.masteryStatus !== "exposed")
+    ).length;
+    const done = passed + skipped;
+    return { ratio: days.length ? done / days.length : 0, done, total: days.length, passed, skipped, mastered };
   }, [goal]);
 
   const activeDay =
@@ -293,13 +418,23 @@ function GoalDetailInner() {
   /* 免费版阶段付费墙（PRD §4）：前两个阶段免费，第三个阶段起需会员。
    * 只拦"新内容"，已完成/已通过的阶段和全部数据照常可看。 */
   const { user } = useAuth();
-  const freeTier = user?.entitlement?.status === "expired";
+  const freeTier = isFreeTier(user);
   const phaseIndexOf = (day: DayPlan | null | undefined): number => {
     if (!goal?.plan || !day) return -1;
     return goal.plan.phases.findIndex((p) => p.id === day.phaseId);
   };
-  const FREE_PHASE_LIMIT = 2;
-  const viewDayLocked = freeTier && !!viewDay && phaseIndexOf(viewDay) >= FREE_PHASE_LIMIT;
+  /* 付费墙只拦"新内容"：已完成/已跳过的天豁免回看（契约三处一致：本注释、
+   * PhasePaywall 文案「你已经完成的阶段…随时可以回看」、PlanTimeline 已通过阶段可点）。
+   * 豁免看"天"的 status 而非 phase.status——重排（setPhaseCatalog）不会重置已通过
+   * 阶段的 status，但会引入 locked/active 的新目录天（store.ts:656-667,679）；标题对齐
+   * 沿用旧 id 的天保留 status:"passed"（phase-regen.ts alignPhaseDayIds）。
+   * 按天豁免才能精确放行"已学过的内容"、同时拦住重排进来的新内容。 */
+  const dayViewExempt = (day: DayPlan | null | undefined): boolean => {
+    if (!day) return false;
+    return day.status === "passed" || day.status === "skipped";
+  };
+  const viewDayLocked =
+    freeTier && !!viewDay && phaseIndexOf(viewDay) >= FREE_PHASE_LIMIT && !dayViewExempt(viewDay);
   const activePhaseLocked =
     freeTier && !!activePhase && !!goal?.plan && goal.plan.phases.findIndex((p) => p.id === activePhase.id) >= FREE_PHASE_LIMIT;
 
@@ -342,6 +477,12 @@ function GoalDetailInner() {
 
   /* 学习窗口：只留当天内容，窄栏居中；不再渲染计划侧栏/日程投影等管理信息 */
   if (isFocus) {
+    /* 与普通视图同闸（旧实现完全绕过）：①免费版付费墙——手拼 ?day=<付费阶段目录日>&focus=1
+     * 会让 DayStubPanel 的兜底 effect 无条件生成付费内容（正是 activePhaseLocked 刻意阻止的
+     * 事），计算口径与 viewDayLocked 一致；②推进门——非当前任务天一律 readOnly，
+     * 否则预取出来的 locked 未解锁天也能直接提交验收、setDayStatus 落库。 */
+    const focusLocked =
+      freeTier && !!focusDay && phaseIndexOf(focusDay) >= FREE_PHASE_LIMIT && !dayViewExempt(focusDay);
     return (
       <div className="mx-auto max-w-3xl">
         <div className="mb-4 flex items-center justify-between gap-3">
@@ -357,13 +498,16 @@ function GoalDetailInner() {
           </Button>
         </div>
         {focusDay ? (
-          focusDay.stub ? (
+          focusLocked ? (
+            <PhasePaywall phaseIndex={phaseIndexOf(focusDay)} />
+          ) : focusDay.stub ? (
             <DayStubPanel goal={goal} day={focusDay} />
           ) : (
             <DayPanel
               key={focusDay.id}
               goal={goal}
               day={focusDay}
+              readOnly={focusDay.id !== activeDay?.id}
               tone={settings.coachTone ?? "standard"}
               openWindow={false}
               onGoToDay={(next) => {
@@ -388,9 +532,7 @@ function GoalDetailInner() {
     );
   }
 
-  const remainingDays = goal.plan
-    ? Object.values(goal.plan.days).filter((d) => d.status === "active" || d.status === "locked").length
-    : 0;
+  const remainingDays = countRemainingDays(goal);
   const projection = (() => {
     if (!deadline || !remainingDays) return null;
     // 截止日按"当天结束"算：date-input 语义是当天仍可交付，此前按 UTC 午夜算，东八区当天上午 8 点后就判"已过期"
@@ -407,12 +549,7 @@ function GoalDetailInner() {
 
   return (
     <div>
-      <button
-        onClick={() => router.push("/learn")}
-        className="mb-4 flex items-center gap-1.5 text-sm text-ink-dim hover:text-ink cursor-pointer"
-      >
-        <ArrowLeft className="size-4" /> 学习教练
-      </button>
+      <PageBackBar title={goal.topic} parentLabel="学习教练" parentHref="/learn" />
 
       <PageHeader
         title={goal.topic}
@@ -424,17 +561,24 @@ function GoalDetailInner() {
         }
       />
 
-      {/* 日程投影（可选,视图层）：给有硬 deadline 的用户一个节奏反推,不改变 Day N 计划本身 */}
-      <Card className="mb-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="text-sm font-bold text-ink">日程投影</p>
+      {/* 日程投影（可选,视图层）：E2 降为次要信息——默认折叠，不占首屏（有 deadline 才用） */}
+      <details className="mb-6 rounded-2xl border border-border bg-white px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium text-ink-dim">
+          日程投影（可选）
+          {deadline ? <span className="ml-2 text-xs text-accent">已设截止 {deadline}</span> : null}
+        </summary>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <p className="text-sm font-bold text-ink">按截止日期反推节奏</p>
           <span className="text-[11px] text-ink-dim/70">可选：有硬截止日期才填,计划本身不承诺日期</span>
-          <input
-            type="date"
-            value={deadline}
-            onChange={(e) => setDeadlineDate(e.target.value)}
-            className="ml-auto rounded-[10px] border border-border bg-white px-2.5 py-1.5 text-[13px] text-ink outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]"
-          />
+          {/* ml-auto 包一层宽度自适应的壳：Input 基类是 w-full，直接写 w-auto 覆盖
+              会在无 tailwind-merge 的 cn 里靠样式表发射顺序赌胜负（Skeleton rounded 教训） */}
+          <div className="ml-auto">
+            <Input
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadlineDate(e.target.value)}
+            />
+          </div>
         </div>
         {projection && (
           <p className="mt-2.5 text-[13px] leading-relaxed text-ink-dim">
@@ -446,17 +590,49 @@ function GoalDetailInner() {
             个学习日。{projection.verdict}。
           </p>
         )}
-      </Card>
+      </details>
 
-      <div className="mb-6 flex flex-wrap gap-2">
+      {/* E2 验收 2：完成 / 跳过 / 掌握分别标注，不用一个百分比混为一谈 */}
+      <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone="accent">{DOMAIN_LABELS[goal.domainKind]}</Badge>
         <Badge tone="dim">每周 {goal.weeklyHours} 小时</Badge>
         {goal.deadline && <Badge tone="warn">截止 {formatDate(goal.deadline)}</Badge>}
-        <Badge tone="dim">
-          {progress.done}/{progress.total} 天完成
-        </Badge>
+        <Badge tone="ok">已完成 {progress.passed} 天</Badge>
+        <Badge tone="warn">已跳过 {progress.skipped} 天</Badge>
+        <Badge tone="accent">含掌握证据 {progress.mastered} 天</Badge>
+        <Badge tone="dim">共 {progress.total} 天</Badge>
         {goal.plan && <Badge tone="dim">启动 {formatDate(goal.plan.startDate)}</Badge>}
       </div>
+
+      {/* E2：当前阶段 + 当前任务作为主区域的引导条（进入即知道在哪、下一步做什么） */}
+      {activePhase && (
+        <Card className="mb-4 border-accent/30 bg-accent/[0.04]">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-accent">
+                当前阶段 · {phaseName(activePhase.title)}
+              </p>
+              <p className="mt-1 break-words text-base font-semibold text-ink">
+                {activeDay?.title ?? "下一步：展开本阶段第一个学习日"}
+              </p>
+              {activePhase.outcome && (
+                <p className="mt-1 break-words text-sm text-ink-dim">阶段目标：{activePhase.outcome}</p>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  document.getElementById("plan-timeline")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                完整路线
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {goal.plan && viewDay && viewDayLocked && (
         <PhasePaywall phaseIndex={phaseIndexOf(viewDay)} />
@@ -493,6 +669,10 @@ export default function GoalDetailPage() {
   return (
     <Suspense fallback={<Skeleton className="h-40 rounded-2xl bg-surface/60" />}>
       <GoalDetailInner />
+      {/* 重排确认 Modal 的宿主：挂在根部，计划视图/学习窗口/新标签页都能唤起 */}
+      <PhaseRegenNoteHost />
+      {/* 恢复历史版本确认 Modal 的宿主：同上（window.confirm 的阻塞式原语替代） */}
+      <PlanRestoreConfirmHost />
     </Suspense>
   );
 }
@@ -518,11 +698,8 @@ function LearnBody({
   /* 手机：任务导航默认收起（当前日才是主任务）；桌面始终双栏 */
   const [navOpen, setNavOpen] = useState(false);
   const { user } = useAuth();
-  const freeTier = user?.entitlement?.status === "expired";
-  const FREE_PHASE_LIMIT = 2;
-  const remainingDays = goal.plan
-    ? Object.values(goal.plan.days).filter((d) => d.status === "active" || d.status === "locked").length
-    : 0;
+  const freeTier = isFreeTier(user);
+  const remainingDays = countRemainingDays(goal);
 
   return (
     <>
@@ -675,13 +852,29 @@ async function chatWithRetry(tries: number, run: () => Promise<string>): Promise
   }
 }
 
-/** 弱网/隧道掐断长连接时浏览器抛 TypeError("Failed to fetch"/"network error")，直译给用户是懵的 */
-function friendlyGenError(e: unknown): string {
+/** 弱网/隧道掐断长连接时浏览器抛 TypeError("Failed to fetch"/"network error")，直译给用户是懵的。
+ *  本页全部生成入口（目录/细节/讲义/判分/答疑/重排/重新生成总纲）统一走这里，
+ *  别再写 `toast.error(e instanceof Error ? e.message : …)`——断网/Zod 转储会原样甩给用户。
+ *  networkHint：目录/细节流程拆了小批可以补充说明；单请求流程用默认句。 */
+function friendlyGenError(
+  e: unknown,
+  fallback = "生成失败，请重试",
+  networkHint = "再点一次按钮重试即可。"
+): string {
   const msg = e instanceof Error ? e.message : "";
   if (e instanceof TypeError || /failed to fetch|network error|load failed/i.test(msg)) {
-    return "网络中断了，这次没生成完。天级计划已按「天」拆成小批生成——再点一次按钮重试即可，不会再卡在单个长请求上。";
+    return `网络中断了，这次没生成完。${networkHint}`;
   }
-  return msg || "生成失败，请重试";
+  /* AbortSignal.timeout 触发抛 TimeoutError（本页生成调用现已带客户端总预算，
+   * 上游/网关挂死被掐断时用户看到的应该是「可重试」而不是裸的 "signal timed out"） */
+  if (e instanceof Error && (e.name === "TimeoutError" || /timed? ?out/i.test(msg))) {
+    return `等太久了，这次没生成完。${networkHint}`;
+  }
+  /* ZodError.message 是英文校验字段转储（形状不符=模型偶发跑偏），直译同样让人懵 */
+  if (e instanceof Error && e.name === "ZodError") {
+    return "AI 这次返回的内容格式不对，再点一次重试即可（偶发，不影响已保存的进度）。";
+  }
+  return msg || fallback;
 }
 
 /* ================= 生成流程：目录一次出全，单日按需展开 =================
@@ -753,6 +946,9 @@ type BgEntry = {
 };
 const bgGen = new Map<string, BgEntry>();
 const dayRuns = new Map<string, Promise<void>>();
+/* 阶段重排的在途信号（模块级，与 bgGen 同寿命）：让「正在重排」的等待行能提供
+ * 取消入口——重排是整段 LLM 目录生成（几秒到几十秒），旧实现只能干等。 */
+const phaseRegenAbort = new Map<string, AbortController>();
 const genKey = (kind: "catalog" | "detail", goalId: string, id: string) => `${kind}:${goalId}:${id}`;
 
 /** 订阅某个后台任务的状态（700ms 轮询，字段不变不重渲染） */
@@ -779,7 +975,8 @@ function runDayDetail(goalId: string, dayId: string): Promise<void> {
   const p = (async () => {
     const { streamChat, phasePlanSchema } = await import("@/lib/ai/client");
     const { phaseDraftToDay } = await import("@/lib/plan");
-    const goal = useAppStore.getState().goals.find((g) => g.id === goalId);
+    const initial = useAppStore.getState();
+    const goal = initial.goals.find((g) => g.id === goalId);
     const day = goal?.plan?.days[dayId];
     const phase = goal?.plan?.phases.find((ph) => ph.id === day?.phaseId);
     if (!goal?.plan || !day || !phase || !day.stub) return;
@@ -792,19 +989,35 @@ function runDayDetail(goalId: string, dayId: string): Promise<void> {
         task: "plan",
         args: { mode: "phase-detail", ctx, boundary: phase.boundary ?? "", days: daysJson },
         messages: [{ role: "user", content: "为指定的这一天写出完整细节（只要 JSON）。" }],
+        /* 流中段挂起 → bgGen 的 busy 恒真、占位日永卡「生成中」（重试入口被
+         * `if (bgGen.get(key)?.busy) return` 拒绝），只能整页刷新。graduation.ts:87
+         * 的同款客户端兜底；长任务服务端头部预算 120s，放宽到 180s 只兜死挂。
+         * 信号在 chatWithRetry 的重试回调里创建：每次尝试各自有全新预算。 */
+        signal: AbortSignal.timeout(180_000),
         onDelta: () => {},
       })
     );
     const parsed = phasePlanSchema.parse(extractJson(raw)).days[0];
     if (!parsed) throw new Error("这一天没拿到细节，请重试");
     const built = phaseDraftToDay(parsed, phase.id, dayId);
-    useAppStore.getState().setDayDetail(goalId, phase.id, dayId, {
-      ...built,
-      resources: sanitizeResUrls(built.resources),
-    });
+    const current = useAppStore.getState();
+    const latest = current.goals.find((item) => item.id === goalId)?.plan;
+    if (current._storeUserId !== initial._storeUserId || latest?.days[dayId] !== day) return;
+    const resources = sanitizeResUrls(built.resources);
+    current.setDayDetail(goalId, phase.id, dayId, { ...built, resources });
     /* 链接体检/替换异步补做：绝不挡「今天能不能开始学」，坏链发现后再静默换掉 */
-    void refineResources(built.resources, `${goal.topic}：${phase.title} — ${built.title}`)
-      .then((rs) => useAppStore.getState().updateDayResources(goalId, dayId, rs))
+    const resourceContext = [goal.topic, goal.direction, goal.background, ...(goal.learnerProfile ?? []), ...(goal.intakeTranscript ?? []).filter((turn) => turn.role === "user").map((turn) => turn.content), phase.title, built.title, built.method, ...built.knowledgePoints.map((point) => point.text)].filter(Boolean).join("\n");
+    const resourceQuery = requiresVideoResources(resourceContext)
+      ? buildStudyResourceQuery(goal.topic, built.title, built.knowledgePoints.map((point) => point.text))
+      : undefined;
+    void refineResources(built.resources, resourceContext, resourceQuery)
+      .then((rs) => {
+        const store = useAppStore.getState();
+        const saved = store.goals.find((item) => item.id === goalId)?.plan?.days[dayId];
+        if (store._storeUserId === initial._storeUserId && saved?.resources === resources) {
+          store.updateDayResources(goalId, dayId, rs);
+        }
+      })
       .catch(() => {});
   })();
   dayRuns.set(k, p);
@@ -829,7 +1042,7 @@ function ensureDayDetail(goalId: string, dayId: string): void {
       await runDayDetail(goalId, dayId);
     } catch (e) {
       console.error(e);
-      st.error = friendlyGenError(e);
+      st.error = friendlyGenError(e, "生成失败，请重试", "天级计划已按「天」拆成小批生成——再点一次按钮重试即可，不会再卡在单个长请求上。");
     } finally {
       st.busy = false;
       st.progress = "";
@@ -856,6 +1069,9 @@ function ensurePhaseCatalog(goalId: string, phaseId: string): void {
           task: "plan",
           args: { mode: "phase-list", ctx, maxDays },
           messages: [{ role: "user", content: `先只输出这个阶段的学习日目录（最多 ${maxDays} 天，只要 JSON）。` }],
+          /* 客户端总预算（graduation.ts:87 同款兜底）：流中段挂起时 busy 恒真。
+           * 每次重试各自新建信号，预算互不共享。 */
+          signal: AbortSignal.timeout(180_000),
           onDelta: () => {},
           onThink: () => {
             st.thinking = true;
@@ -905,11 +1121,13 @@ function ensurePhaseCatalog(goalId: string, phaseId: string): void {
         ensureDayDetail(goalId, catalog[1].id);
         await runDayDetail(goalId, catalog[1].id);
       }
-      /* 阶段目录进第二大脑（用目录本身，不依赖细节是否展开） */
-      const masterNote = `${goal.topic} 学习计划 · 学习总纲要`;
+      /* 阶段目录进第二大脑（用目录本身，不依赖细节是否展开）。
+       * 标题契约走 plan.ts 唯一真源：learn/new 纲要笔记的 [[wikilink]] 按同样的
+       * 函数拼标题，失配即链接静默悬空。 */
+      const masterNote = planOutlineNoteTitle(goal.topic);
       useAppStore.getState().addKnowledge(
         [{
-          title: `${goal.topic} 学习计划 · ${phase.title}`,
+          title: planPhaseNoteTitle(goal.topic, phase.title),
           body: `**阶段目标：**${phase.outcome}\n\n**边界：**${boundary || "—"}\n\n## 学习日目录\n\n${catalog
             .map((c) => `- **${dayNo(c.title)}** — ${c.knowledgePoints.join("、")}`)
             .join("\n")}\n\n关联：[[${masterNote}]]`,
@@ -920,7 +1138,7 @@ function ensurePhaseCatalog(goalId: string, phaseId: string): void {
       );
     } catch (e) {
       console.error(e);
-      st.error = friendlyGenError(e);
+      st.error = friendlyGenError(e, "生成失败，请重试", "天级计划已按「天」拆成小批生成——再点一次按钮重试即可，不会再卡在单个长请求上。");
     } finally {
       st.busy = false;
       st.thinking = false;
@@ -973,7 +1191,10 @@ function PhasePaywall({ phaseIndex }: { phaseIndex: number }) {
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Link href="/membership">
-              <Button size="sm">查看会员（¥9.9/月 · ¥99/年）</Button>
+              {/* 价格读 pricing.ts（唯一真源），别写死数字——改价只改 pricing.ts 一个文件 */}
+              <Button size="sm">
+                查看会员（¥{priceLabel(PLANS.month.price)}/月 · ¥{priceLabel(PLANS.year.price)}/年）
+              </Button>
             </Link>
             <Link href="/membership">
               <Button variant="outline" size="sm">已有激活码？去兑换</Button>
@@ -982,6 +1203,206 @@ function PhasePaywall({ phaseIndex }: { phaseIndex: number }) {
         </div>
       </div>
     </Card>
+  );
+}
+
+/* 重排确认对话框（页面根部挂载一份）：window.prompt 的替代。
+ * prompt 单行、阻塞主线程、排不下破坏性警示长文案，且被浏览器策略禁用后返回
+ * null 直接 return——重排功能静默失效、点击无任何响应。Modal 走设计系统
+ * （role=dialog/焦点陷阱/Esc/滚动锁），用户意见经 Promise 桥交回模块级的
+ * regenPhaseFlow（它不是组件，拿不到 state）。 */
+let askPhaseRegenNote: ((label: string, doneDays: number) => Promise<string | null>) | null = null;
+
+function PhaseRegenNoteHost() {
+  const [ask, setAsk] = useState<{
+    label: string;
+    doneDays: number;
+    resolve: (note: string | null) => void;
+  } | null>(null);
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    askPhaseRegenNote = (label, doneDays) =>
+      new Promise<string | null>((resolve) => {
+        setNote("");
+        setAsk({ label, doneDays, resolve });
+      });
+    return () => {
+      askPhaseRegenNote = null;
+    };
+  }, []);
+  const close = (v: string | null) => {
+    ask?.resolve(v);
+    setAsk(null);
+  };
+  return (
+    <Modal open={!!ask} onClose={() => close(null)} title={ask ? `重排「${ask.label}」` : "重排"}>
+      <p className="text-sm text-ink-dim">说说你不满意什么 / 想怎么换（留空 = 换一批角度）。</p>
+      <Textarea
+        className="mt-3 resize-y"
+        rows={3}
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="例：进度太碎、想多练实战、每天负担太重…"
+      />
+      {ask && ask.doneDays > 0 && (
+        <p className="mt-3 rounded-xl border border-warn/40 bg-warn/[0.06] p-3 text-xs leading-relaxed text-warn">
+          ⚠ 该阶段已有 {ask.doneDays} 个完成的学习日。标题相同的天会保留学习记录，其余会被替换（旧目录会存进历史版本，可回看）。
+        </p>
+      )}
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="outline" onClick={() => close(null)}>
+          取消
+        </Button>
+        <Button onClick={() => close(note)}>开始重排</Button>
+      </div>
+    </Modal>
+  );
+}
+
+/* 恢复计划历史版本的确认对话框：window.confirm 的替代（与 PhaseRegenNoteHost 同一模式）。
+ * confirm 是阻塞式原语——被浏览器策略禁用（跨域 iframe 未带 allow-modals、sandbox 容器）后
+ * 返回 false 直接 return，「恢复」按钮表现为点击无任何响应；同文件 1160-1164 行注释记录的
+ * 正是这一失效模式，重排路径已为此专门建了 Modal + Promise 桥，恢复路径同一环境同一问题。
+ * Modal 走设计系统（role=dialog/焦点陷阱/Esc/滚动锁），结果经 Promise 桥交回 PlanTimeline。 */
+let askRestoreConfirm: ((label: string) => Promise<boolean>) | null = null;
+
+function PlanRestoreConfirmHost() {
+  const [ask, setAsk] = useState<{ label: string; resolve: (ok: boolean) => void } | null>(null);
+  useEffect(() => {
+    askRestoreConfirm = (label) =>
+      new Promise<boolean>((resolve) => {
+        setAsk({ label, resolve });
+      });
+    return () => {
+      askRestoreConfirm = null;
+    };
+  }, []);
+  const close = (ok: boolean) => {
+    ask?.resolve(ok);
+    setAsk(null);
+  };
+  return (
+    <Modal open={!!ask} onClose={() => close(false)} title="恢复此历史版本？">
+      <p className="text-sm text-ink-dim">
+        恢复会把该阶段计划结构改回旧目录；之后新增的笔记/成绩保留，只回退这次计划变更。
+      </p>
+      {ask && (
+        <p className="mt-3 rounded-xl border border-warn/40 bg-warn/[0.06] p-3 text-xs leading-relaxed text-warn">
+          ⚠ 即将恢复：{ask.label}
+        </p>
+      )}
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="outline" onClick={() => close(false)}>
+          取消
+        </Button>
+        <Button onClick={() => close(true)}>确认恢复</Button>
+      </div>
+    </Modal>
+  );
+}
+
+/* 重排本阶段的确认与执行（PhasePlanPanel / PlanTimeline 共用）：
+ * 旧实现两处各写一份 window.prompt → toast → regeneratePhase 的异步 handler，
+ * 且文案已漂移——PhasePlanPanel 版缺「同名天保留学习记录/旧目录进历史版本」的
+ * 破坏性操作警示，同一 regeneratePhase 调用从不同入口进入得到的删除风险提示不一致。
+ * 收口成一份：确认文案、执行与结果提示只维护在这一处。 */
+async function regenPhaseFlow(
+  goal: Goal,
+  phase: NonNullable<Goal["plan"]>["phases"][number],
+  label: string
+): Promise<void> {
+  /* 重入守卫 + 进行中状态：regeneratePhase 是几十秒级的 AI 长调用，旧实现唯一反馈是
+   * 一条几秒即消失的 toast（sonner 默认时长），期间无 spinner/禁用态、两个入口按钮均可
+   * 再点——重复点击会并发跑两个 regeneratePhase（双份费用、两次 snapshotPhase、后者
+   * setPhaseCatalog 覆盖前者）。复用 ensurePhaseCatalog 的 bgGen 通道：PhasePlanPanel
+   * 已订阅 catalog 键，busy/progress/error 直接有全套展示。 */
+  const key = genKey("catalog", goal.id, phase.id);
+  if (bgGen.get(key)?.busy) {
+    toast("这个阶段已经在重排/生成中，等它完成。");
+    return;
+  }
+  const ids = phase.catalog?.length ? phase.catalog.map((c) => c.id) : phase.dayIds;
+  const doneDays = ids.filter((id) => {
+    const d = goal.plan!.days[id];
+    return d && (d.status === "passed" || d.status === "skipped");
+  }).length;
+  if (!askPhaseRegenNote) {
+    toast.error("重排确认框没就绪，请刷新页面后重试。");
+    return;
+  }
+  const note = await askPhaseRegenNote(label, doneDays);
+  if (note === null) return; // 用户取消
+  const st: BgEntry = { busy: true, progress: "正在重排这一阶段的学习日…", thinking: false, error: null, doneAt: null };
+  bgGen.set(key, st);
+  toast("正在重排…");
+  /* 取消入口：整段 LLM 目录生成可跑几十秒，用户必须能中止（否则只能等）。
+   * 信号同时充当客户端总预算兜底：流中段挂起时 busy 恒真、无恢复入口。 */
+  const ac = new AbortController();
+  phaseRegenAbort.set(key, ac);
+  try {
+    const { regeneratePhase } = await import("@/lib/agent/phase-regen");
+    /* 等待反馈：整段目录生成可达数十秒，toast 4 秒即消失。onThink 把思考心跳透进
+     * bgGen.thinking，PhasePlanPanel 的进度行才会显示「模型思考中——通常一分钟内返回」。
+     * 重入由上方 bgGen.busy 守卫拦（两个入口按钮点击都会先撞这道闸）。 */
+    const r = await regeneratePhase(goal.id, phase.id, note.trim(), true, ac.signal, {
+      onThink: () => {
+        st.thinking = true;
+      },
+    });
+    if (r.ok) toast.success(r.summary + "——目录已重排，逐天进入时重新展开。");
+    else if (ac.signal.aborted) {
+      /* regeneratePhase 内部把 AbortError 收成 ok:false 返回——用户主动取消不是失败。 */
+      toast("已取消重排，原目录未动");
+    } else {
+      st.error = r.content;
+      toast.error(r.content);
+    }
+  } catch (e) {
+    if (ac.signal.aborted) {
+      /* 用户主动取消：不是失败，不落错误态（原目录未动）。 */
+      toast("已取消重排，原目录未动");
+    } else {
+      /* 部署后旧页面加载不到已不存在的 chunk 时，动态 import 同样会 reject（use-chat.ts
+       * 记载的同款 stale-chunk 场景）——不接住就变成未捕获 rejection，「正在重排…」
+       * 永不收敛、无错误提示无恢复入口，表现为点了没反应。 */
+      st.error = friendlyGenError(e, "重排失败，请重试");
+      toast.error(st.error);
+    }
+  } finally {
+    phaseRegenAbort.delete(key);
+    st.busy = false;
+    st.progress = "";
+    st.thinking = false;
+    st.doneAt = Date.now();
+  }
+}
+
+/** 时间线里的「重排本阶段」入口：订阅 bgGen 的 busy 态，进行中禁用并改文案。
+ *  两个入口（阶段卡/时间线）共用同一 bgGen 键，重入守卫在 regenPhaseFlow 内部；
+ *  这里只负责把「正在跑」如实显示出来，避免用户以为没点上而反复点。 */
+function PhaseRegenEntry({
+  goal,
+  phase,
+  pi,
+  className,
+}: {
+  goal: Goal;
+  phase: NonNullable<Goal["plan"]>["phases"][number];
+  pi: number;
+  className?: string;
+}) {
+  const st = useGenState(genKey("catalog", goal.id, phase.id));
+  const busy = st?.busy ?? false;
+  return (
+    <button
+      type="button"
+      className={className}
+      disabled={busy}
+      aria-busy={busy}
+      onClick={() => void regenPhaseFlow(goal, phase, `阶段${pi + 1} · ${phase.title}`)}
+    >
+      {busy ? "正在重排…" : "重排本阶段"}
+    </button>
   );
 }
 
@@ -996,7 +1417,7 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
   return (
     <Card className="border-accent/25">
       <Badge tone="accent">下一程</Badge>
-      <h2 className="mt-3 text-xl font-bold text-ink">{phase.title}</h2>
+      <h2 className="mt-3 text-xl font-bold text-ink">{phaseName(phase.title)}</h2>
       <p className="mt-1.5 flex items-center gap-1.5 text-sm text-accent">
         <Flag className="size-3.5 shrink-0" />
         {phase.outcome}
@@ -1037,6 +1458,17 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
         <p className="mt-3 flex items-center gap-2 text-xs text-ink-dim" aria-live="polite">
           <Loader2 className="size-3.5 animate-spin text-accent" />
           {progress || (thinking ? "模型思考中——通常一分钟内返回" : "正在生成…")}
+          {/* 重排等待期的取消入口：长生成（几十秒）不得只能干等。只有重排会登记
+              phaseRegenAbort（目录生成没有取消手柄，行为不变）。 */}
+          {phaseRegenAbort.has(genKey("catalog", goal.id, phase.id)) && (
+            <button
+              type="button"
+              className="ml-auto shrink-0 cursor-pointer font-semibold text-ink-dim hover:text-ink"
+              onClick={() => phaseRegenAbort.get(genKey("catalog", goal.id, phase.id))?.abort()}
+            >
+              取消
+            </button>
+          )}
         </p>
       )}
       <Button className="mt-5 w-full" onClick={() => ensurePhaseCatalog(goal.id, phase.id)} loading={busy}>
@@ -1051,24 +1483,12 @@ function PhasePlanPanel({ goal, phase }: { goal: Goal; phase: NonNullable<Goal["
           size="sm"
           variant="ghost"
           className="mt-2 w-full"
-          onClick={async () => {
-            const doneDays = phase.dayIds.filter((id) => {
-              const d = goal.plan!.days[id];
-              return d && (d.status === "passed" || d.status === "skipped");
-            }).length;
-            const note = window.prompt(
-              `重排「${phase.title}」：说说你不满意什么/想怎么换（留空=换一批角度）` +
-                (doneDays > 0 ? `\n\n⚠ 该阶段已有 ${doneDays} 个完成的学习日，重排后学习日结构会变化。` : "")
-            );
-            if (note === null) return;
-            toast("正在重排…");
-            const { regeneratePhase } = await import("@/lib/agent/phase-regen");
-            const r = await regeneratePhase(goal.id, phase.id, note, true);
-            if (r.ok) toast.success(r.summary + "——目录已重排，逐天进入时重新展开。");
-            else toast.error(r.content);
-          }}
+          /* 进行中禁用：regenPhaseFlow 的 bgGen.busy 守卫会拦第二次点击，但按钮保持可点
+           * 会让用户以为没点上而反复点（每次都弹确认框）——视觉上也要给出「正在跑」。 */
+          disabled={busy}
+          onClick={() => void regenPhaseFlow(goal, phase, phase.title)}
         >
-          重排本阶段（换一批学习日）
+          {busy ? "正在重排…" : "重排本阶段（换一批学习日）"}
         </Button>
       )}
     </Card>
@@ -1099,6 +1519,9 @@ function RegeneratePlan({ goal }: { goal: Goal }) {
         task: "plan",
         args: { mode: "master", cardJson: JSON.stringify(card, null, 2) },
         messages: [{ role: "user", content: "请生成总学习纲要（只要 JSON）。" }],
+        /* 客户端总预算（graduation.ts:87 同款兜底）：流中段挂起时 busy 恒真、按钮
+         * loading 永不收敛。长任务服务端头部预算 120s，放宽到 180s 只兜死挂。 */
+        signal: AbortSignal.timeout(180_000),
         onDelta: () => {},
       });
       const draft = masterPlanSchema.parse(extractJson(full));
@@ -1107,7 +1530,7 @@ function RegeneratePlan({ goal }: { goal: Goal }) {
       useAppStore.getState().setPlan(goal.id, plan);
       toast.success("计划已生成，开始第一天！");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "生成失败，请重试（模型偶发超时）");
+      toast.error(friendlyGenError(e, "生成失败，请重试（模型偶发超时）"));
     } finally {
       setBusy(false);
     }
@@ -1145,7 +1568,7 @@ function PlanTimeline({
   const viewDayId = selectedDayId ?? activeDayId;
 
   return (
-    <Card>
+    <Card id="plan-timeline">
       <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-dim">
         路径设计
       </p>
@@ -1167,7 +1590,7 @@ function PlanTimeline({
               <div className="flex items-center gap-2">
                 <StatusDot status={phase.status} />
                 <p className="text-sm font-bold text-ink">
-                  阶段{pi + 1} · {phase.title}
+                  阶段{pi + 1} · {phaseName(phase.title)}
                 </p>
                 {phase.status === "passed" && <Badge tone="ok">已通过</Badge>}
                 {phase.status === "locked" && <Badge tone="dim">未解锁</Badge>}
@@ -1186,25 +1609,12 @@ function PlanTimeline({
                   能重排，已通过/未解锁阶段零入口。重排语义见 phase-regen.ts（快照+成绩保留）。 */}
               {phase.catalog?.length ? (
                 <div className="mb-1.5 pl-4">
-                  <button
-                    className="cursor-pointer rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-surface-2 hover:text-ink"
-                    onClick={async () => {
-                      const note = window.prompt(
-                        `重排「阶段${pi + 1} · ${phase.title}」：说说你不满意什么/想怎么换（留空=换一批角度）` +
-                          (phaseDone > 0
-                            ? `\n\n⚠ 该阶段已有 ${phaseDone} 个完成的学习日。标题相同的天会保留学习记录，其余会被替换（旧目录会存进历史版本，可回看）。`
-                            : "")
-                      );
-                      if (note === null) return;
-                      toast("正在重排…");
-                      const { regeneratePhase } = await import("@/lib/agent/phase-regen");
-                      const r = await regeneratePhase(goal.id, phase.id, note, true);
-                      if (r.ok) toast.success(r.summary + "——目录已重排，逐天进入时重新展开。");
-                      else toast.error(r.content);
-                    }}
-                  >
-                    重排本阶段
-                  </button>
+                  <PhaseRegenEntry
+                    goal={goal}
+                    phase={phase}
+                    pi={pi}
+                    className="cursor-pointer rounded-lg px-2 py-1 text-[11px] text-ink-dim transition hover:bg-surface-2 hover:text-ink disabled:opacity-50 disabled:cursor-default"
+                  />
                 </div>
               ) : null}
               {/* V26.2-H5：重排历史版本（PRD §6.4/D7——可以找到旧版本） */}
@@ -1218,10 +1628,33 @@ function PlanTimeline({
                     .slice()
                     .reverse()
                     .map((h, hi) => (
-                      <p key={hi} className="mt-1 pl-2 leading-relaxed">
-                        {h.at.slice(0, 10)} · {h.reason} · 旧目录 {h.dayIds.length} 天：
-                        {h.days.map((d) => d.title).join("、") || "（无天记录）"}
-                      </p>
+                      <div key={h.id ?? hi} className="mt-1 flex items-start gap-1 pl-2 leading-relaxed">
+                        <p className="min-w-0 flex-1">
+                          {h.at.slice(0, 10)} · {h.reason} · 旧目录 {h.dayIds.length} 天：
+                          {h.days.map((d) => d.title).join("、") || "（无天记录）"}
+                        </p>
+                        {h.id && (
+                          <button
+                            type="button"
+                            className="shrink-0 underline hover:text-accent"
+                            onClick={async () => {
+                              if (!askRestoreConfirm) {
+                                toast.error("恢复确认框没就绪，请刷新页面后重试。");
+                                return;
+                              }
+                              const confirmed = await askRestoreConfirm(
+                                `${h.at.slice(0, 10)} · ${h.reason} · 旧目录 ${h.dayIds.length} 天`
+                              );
+                              if (!confirmed) return; // 用户取消
+                              const ok = useAppStore.getState().restorePlanVersion(goal.id, h.id!);
+                              if (ok) toast.success("已恢复该版本——只回退了这次计划结构，之后的成绩/笔记未被覆盖。");
+                              else toast.error("恢复失败：目标或版本不存在。");
+                            }}
+                          >
+                            恢复
+                          </button>
+                        )}
+                      </div>
                     ))}
                 </details>
               )}
@@ -1242,7 +1675,11 @@ function PlanTimeline({
                 {entries.map((entry) => {
                   const day = plan.days[entry.id];
                   const stub = !day || day.stub;
-                  const locked = (!day || day.status === "locked") || paywalled;
+                  /* 锁定与父层 viewDayLocked 同口径：已完成/已跳过的天豁免付费墙；
+                   * 重排进来的 locked 新天在已通过阶段里也要上墙（dayViewExempt 为 false）。 */
+                  const locked =
+                    (!day || day.status === "locked") ||
+                    (paywalled && day.status !== "passed" && day.status !== "skipped");
                   return (
                     <button
                       key={entry.id}
@@ -1346,6 +1783,35 @@ function DayStubPanel({ goal, day }: { goal: Goal; day: DayPlan }) {
 /* ================= 每日任务面板（含验收门） ================= */
 type PanelMode = "learn" | "quiz" | "result";
 
+function RefreshDayResources({ goal, day }: { goal: Goal; day: DayPlan }) {
+  const [busy, setBusy] = useState(false);
+  const search = async () => {
+    if (busy) return;
+    const account = useAppStore.getState()._storeUserId;
+    const points = day.knowledgePoints.map((point) => point.text);
+    const context = [goal.topic, goal.direction, goal.background, ...(goal.learnerProfile ?? []), ...(goal.intakeTranscript ?? []).filter((turn) => turn.role === "user").map((turn) => turn.content), day.title, day.method, ...points].filter(Boolean).join("\n");
+    const query = buildStudyResourceQuery(goal.topic, day.title, points);
+    setBusy(true);
+    try {
+      const updated = await refineResources(day.resources, context, query);
+      const store = useAppStore.getState();
+      const latest = store.goals.find((item) => item.id === goal.id)?.plan?.days[day.id];
+      if (store._storeUserId !== account || latest?.resources !== day.resources) return;
+      if (updated.every((item) => day.resources.some((old) => old.url === item.url))) {
+        toast("暂未找到新的可用资料，可先用当天讲义练习");
+        return;
+      }
+      store.updateDayResources(goal.id, day.id, updated);
+      toast.success("已更新当天的学习资料");
+    } catch {
+      toast.error("暂时无法更新资料，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <Button size="sm" variant="outline" loading={busy} onClick={() => void search()}>搜索当天资料</Button>;
+}
+
 function DayPanel({
   goal,
   day,
@@ -1368,7 +1834,27 @@ function DayPanel({
   const [mode, setMode] = useState<PanelMode>("learn");
   const [lesson, setLesson] = useState(day.lesson ?? "");
   const [lessonLoading, setLessonLoading] = useState(false);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  /* 同步重入守卫（与 loading state 并存）：setLessonLoading 要到重渲染才生效，
+   * 同一 tick 内的第二次点击（双击 Enter/极速连点）看不到新 state。 */
+  const lessonGenRef = useRef(false);
+  /* 验收答案草稿持久化（与 deadline 的 localStorage 草稿同一模式）：DayPanel 以
+   * key={viewDay.id} 挂载，切日期/刷新即卸载——验收是长文作答（提交校验明确鼓励
+   * 「哪怕写『不知道』」），仅存组件内存时已作答内容会无提示消失。按 goal+day 分键，
+   * 判过（pass）后清除（submitQuiz 里的 clearQuizDraft）。onChange 保持原样，
+   * 持久化由下方 effect 承担（learn-quiz-grading-locked 的回归锁锚定 onChange 形状）。 */
+  const quizDraftKey = `mentora-quiz-draft-${goal.id}-${day.id}`;
+  const [answers, setAnswers] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem(quizDraftKey);
+      return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    } catch { return {}; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(quizDraftKey, JSON.stringify(answers)); } catch { /* 忽略 */ }
+  }, [answers, quizDraftKey]);
+  const clearQuizDraft = () => {
+    try { localStorage.removeItem(quizDraftKey); } catch { /* 忽略 */ }
+  };
   const [grade, setGrade] = useState<QuizGrade | null>(null);
   const [grading, setGrading] = useState(false);
   /* UI 状态规范（§4.5）：最长等待的两处也要有可见阶段 */
@@ -1386,11 +1872,29 @@ function DayPanel({
 
   /* 生成今日学习文档 */
   const genLesson = async () => {
+    /* 重入守卫：讲义是全站最贵的生成且无 AbortController——旧实现流式期间每点一次
+     * 「重新生成」就叠加一条完整 streamChat 流（双倍 BYOK 计费），两条流的 flushNow
+     * 把各自 buf 交替灌进同一个 lesson state（显示内容来回跳变），结束前两次
+     * saveLesson+pushCloud 竞态、后完成者覆盖。 */
+    if (lessonGenRef.current) return;
+    lessonGenRef.current = true;
     setLessonLoading(true);
     const lessonT0 = performance.now();
     setLessonPhases([{ label: "生成讲义", state: "running", detail: "按今日目标与教学模板撰写" }]);
     // 流式增量也留一份：长生成中途被刷新/断网打断时，至少把已生成的部分保住
     let buf = "";
+    /* 流式节流：讲义是产品里最贵最长的生成（数千 token、几百个 chunk）。旧实现每个
+     * delta 都 setLesson——整个 DayPanel 以 delta 频率重渲染，<Markdown> 对已累积的
+     * 全文重新 parse（成本随文本线性增长、按 chunk 次数累乘，弱设备后半段明显卡顿）。
+     * 80ms 批量刷新钳住重渲染频率；收尾 flushNow 兜底最后一个窗口内的增量。 */
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushNow = () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      setLesson(buf);
+    };
     const saveLesson = async (text: string) => {
       // 以**当前** plan 为基线（生成耗时较长，期间目录/细节可能已更新，
       // 用渲染时闭包里的旧 plan 克隆会把那些更新冲掉）
@@ -1414,6 +1918,16 @@ function DayPanel({
         .filter((d) => (d.status === "passed" || d.status === "skipped") && d.id !== day.id)
         .flatMap((d) => d.knowledgePoints.map((k) => k.text));
       const phase = goal.plan?.phases.find((ph) => ph.id === day.phaseId);
+      /* 当日主知识类型（取知识点里出现最多的一种）：服务端 DAILY_LESSON 据此
+       * 优先按类型选教学模板（prompts.ts:397 的 knowledgeType 路由）。旧实现
+       * ctx 只带 knowledgePoints 的纯文本，类型路由在生产链路永不生效——
+       * fact 型日子（如雅思词汇）会落到领域模板而非 FACT_LESSON。 */
+      const kpTypeTally = new Map<string, number>();
+      for (const k of day.knowledgePoints) {
+        if (k.knowledgeType) kpTypeTally.set(k.knowledgeType, (kpTypeTally.get(k.knowledgeType) ?? 0) + 1);
+      }
+      let mainKnowledgeType: string | undefined;
+      for (const [t, n] of kpTypeTally) if (!mainKnowledgeType || n > (kpTypeTally.get(mainKnowledgeType) ?? 0)) mainKnowledgeType = t;
       const ctx = JSON.stringify(
         {
           goal: {
@@ -1425,6 +1939,7 @@ function DayPanel({
           },
           mastered,
           phaseBoundary: phase?.boundary ?? "",
+          knowledgeType: mainKnowledgeType,
           today: {
             title: day.title,
             knowledgePoints: day.knowledgePoints.map((k) => k.text),
@@ -1436,18 +1951,37 @@ function DayPanel({
         1
       );
       const full = await streamChat({
-        args: { ctx },
+        /* tone 必须随 args 上行：设置页的「标准/温和」经三层透传进 DayPanel，
+         * 服务端 route.ts 按 s("tone")==="gentle" 切换讲义语气分支——
+         * 旧实现 args 只带 ctx，全仓无任何调用方传 tone，语气设置在本页静默失效。 */
+        args: { ctx, tone },
         messages: [{ role: "user", content: "生成今天的学习文档。" }],
         temperature: 0.6,
         task: "lesson",
+        /* 流中段连接挂起时 UI 会永久 busy，只能整页刷新恢复（服务端超时只保证服务端
+         * 侧收尾，收尾字节同样到不了客户端）。graduation.ts:87 的同款客户端兜底；
+         * 讲义是长生成任务（服务端头部预算 120s），总预算放宽到 180s 只兜死挂。 */
+        signal: AbortSignal.timeout(180_000),
         onDelta: (d) => {
           buf += d;
-          setLesson((p) => p + d);
+          if (!flushTimer) flushTimer = setTimeout(flushNow, 80);
         },
       });
-      if (full) await saveLesson(full);
-      setLessonPhases([{ label: "生成讲义", state: "done", durationMs: performance.now() - lessonT0 }]);
+      flushNow(); // 兜底最后一个 80ms 窗口内的增量
+      /* 模型 200 但正文为空（BYOK 自定义端点的现实场景）：streamChat 按约定返回 ""。
+       * 旧实现跳过保存后仍把轨迹标成 done——用户等完整个生成周期只看到成功轨迹、
+       * 讲义区空白且无解释，反复重试同样静默。与 AskCoach / use-chat 的空回复守卫
+       * （「模型返回了空回复，请重试」）同口径。 */
+      const content = full || buf;
+      if (content.trim()) {
+        await saveLesson(content);
+        setLessonPhases([{ label: "生成讲义", state: "done", durationMs: performance.now() - lessonT0 }]);
+      } else {
+        setLessonPhases([{ label: "生成讲义", state: "failed", durationMs: performance.now() - lessonT0, detail: "模型返回了空回复" }]);
+        toast.error("模型返回了空回复，请重试");
+      }
     } catch (e) {
+      flushNow(); // 中断保留的内容要完整可见（含最后一个窗口内的增量）
       if (buf.trim().length > 200) {
         await saveLesson(buf);
         setLessonPhases([
@@ -1456,9 +1990,15 @@ function DayPanel({
         toast.error("生成中断，已保留已生成的内容（可点「重新生成」继续）。");
       } else {
         setLessonPhases([{ label: "生成讲义", state: "failed", durationMs: performance.now() - lessonT0 }]);
-        toast.error(e instanceof Error ? e.message : "生成失败");
+        toast.error(friendlyGenError(e, "生成失败"));
       }
     } finally {
+      // 清掉未触发的节流定时器：否则它会在收尾之后 firing，把旧 buf 重灌进 lesson state
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      lessonGenRef.current = false;
       setLessonLoading(false);
     }
   };
@@ -1485,10 +2025,14 @@ function DayPanel({
         answers,
       });
       const full = await streamChat({
-        args: { ctx },
+        /* 判分语气同讲义：服务端 quiz-grade 分支按 tone 切换反馈口吻，必须随 args 上行 */
+        args: { ctx, tone },
         messages: [{ role: "user", content: "开始评分。" }],
         temperature: 0.3,
         task: "quiz-grade",
+        /* 流中段挂起 → grading 恒真，验收 UI（含全部输入框与返回按钮）锁死只能整页刷新。
+         * 客户端总预算 90s：判分是小 JSON 非流式展示，服务端同任务预算 45s+45s。 */
+        signal: AbortSignal.timeout(90_000),
         onDelta: () => {},
       });
       /* v21：证据强制——没有引用讲义原文的正向判定会被降级为 ungradable，
@@ -1498,6 +2042,19 @@ function DayPanel({
       setQuizPhases([{ label: "逐条判分", state: "done", durationMs: performance.now() - gradeT0 }]);
       setMode("result");
       store.getState().incrementAttempts(goal.id, day.id);
+
+      /* 判分明细快照（带用户提交时的回答），pass / fail 两条分支共用 */
+      const gradedItems: QuizItemResult[] = g.items.map((it) => {
+        const q = day.acceptance.find((a) => a.id === it.itemId);
+        return {
+          itemId: it.itemId,
+          question: q?.question ?? "",
+          userAnswer: answers[it.itemId] ?? "",
+          verdict: it.verdict,
+          feedback: it.feedback,
+          hintLevel: it.hintLevel,
+        };
+      });
 
       if (g.overall === "pass") {
         // 真门（v17）：passed 照常记录，但下一天要等迁移题作答才解锁
@@ -1510,17 +2067,7 @@ function DayPanel({
           date: new Date().toISOString().slice(0, 10),
           passed: true,
           forced: false,
-          items: g.items.map((it): QuizItemResult => {
-            const q = day.acceptance.find((a) => a.id === it.itemId);
-            return {
-              itemId: it.itemId,
-              question: q?.question ?? "",
-              userAnswer: answers[it.itemId] ?? "",
-              verdict: it.verdict,
-              feedback: it.feedback,
-              hintLevel: it.hintLevel,
-            };
-          }),
+          items: gradedItems,
         });
         // 知识点进入第二大脑 + 间隔复习队列；掌握状态按本次判分证据推进（Learn Anything）。
         // v17：把每题的验收 kind 一起交给状态机——apply/build 无提示判对 = 迁移证据，可达 transferable
@@ -1545,11 +2092,26 @@ function DayPanel({
         // 必须走 store 的定点 patch：这里如果拿渲染闭包里的 goal.plan 整体回写，
         // 会把上面刚落库的 passed/pendingUnlock/attempts 全部冲掉（下一天永不解锁）。
         store.getState().setDayKnowledgeMastery(goal.id, day.id, mStatus);
+        // 判过即清草稿：本天已 passed，残留的 localStorage 草稿没有任何再读的路径
+        clearQuizDraft();
         toast.success(`验收判过了！回答下方的迁移题即解锁下一天（本天成绩已保存，不怕刷新）。本批掌握状态：${MASTERY_LABELS[mStatus]}`);
+      } else {
+        /* 未通过也必须落库：旧实现只记 pass 与强制跳过，quizLog 里查不到任何失败——
+         * ① genCtx 的 weakPoints 用 goal.quizLog.filter(q => !q.passed) 提取弱项给 AI，
+         *   能落到 !passed 的只有 items 为空的强制跳过记录，弱项特征实际恒空；
+         * ② 回看「验收记录」面板查 quizLog，失败次数恒 0，与头部「验收 N 次」
+         *   徽章（attempts 含失败）互相矛盾。 */
+        store.getState().logQuiz(goal.id, {
+          dayId: day.id,
+          date: new Date().toISOString().slice(0, 10),
+          passed: false,
+          forced: false,
+          items: gradedItems,
+        });
       }
     } catch (e) {
       setQuizPhases([{ label: "逐条判分", state: "failed", durationMs: performance.now() - gradeT0 }]);
-      toast.error(e instanceof Error ? e.message : "评分失败，请重试");
+      toast.error(friendlyGenError(e, "评分失败，请重试"));
     } finally {
       setGrading(false);
     }
@@ -1567,12 +2129,10 @@ function DayPanel({
   };
   const [gateAnswer, setGateAnswer] = useState(day.transferAnswer ?? "");
 
+  /* 只有 Modal 里两击确认的「我确认，跳过」会调用（该按钮仅在 skipText === "跳过" 时渲染）。
+   * 旧「输入框打字确认」的守卫（skipText 校验 + 「请在上面的输入框输入『跳过』」toast）
+   * 已随输入框一起删除——留着会成为不可达死代码，误导后来调整确认交互的人。 */
   const forceSkip = () => {
-    if (skipText !== "跳过") {
-      setSkipText("");
-      toast.error("请在上面的输入框输入「跳过」确认");
-      return;
-    }
     store.getState().setDayStatus(goal.id, day.id, "skipped");
     store.getState().logQuiz(goal.id, {
       dayId: day.id,
@@ -1646,7 +2206,7 @@ function DayPanel({
                   </Button>
                   <button
                     onClick={() => setSkipConfirm(true)}
-                    title="学不会也可以跳过这个阶段（会被记录）"
+                    title="学不会也可以跳过这一天（会被记录）"
                     className="cursor-pointer rounded-full border border-warn/40 bg-white px-3 py-2 text-xs font-medium text-warn transition hover:bg-warn/[0.08]"
                   >
                     跳过 →
@@ -1679,26 +2239,26 @@ function DayPanel({
 
         {/* 资源 */}
         <div className="mt-4 space-y-2">
-          <p className="text-xs font-semibold text-ink-dim">学习资源（选一个顺手的）</p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-ink-dim">当天的学习资料</p>
+            <RefreshDayResources goal={goal} day={day} />
+          </div>
           {(() => {
-            const ranked = rankResources(day.resources);
+            /* 渲染侧与写入侧同口径过闸：sanitizeResUrls 只盖本页两条生成写入路径，
+             * 到达这里 <a href> 的值还可能来自 agent 工具直写、旧版本数据经云端同步回流、
+             * refineResources 失败时的原样返回——原生 <a> 没有 react-markdown 的
+             * urlTransform 防护，非 http(s) 协议（javascript: 等）一律降级为纯文本条目。 */
+            const videoOnly = requiresVideoResources([goal.direction, goal.background, ...(goal.learnerProfile ?? []), ...(goal.intakeTranscript ?? []).filter((turn) => turn.role === "user").map((turn) => turn.content)].join("\n"));
+            const ranked = rankResources(day.resources).filter((r) => !videoOnly || (r.url && /(?:bilibili\.com\/video\/|youtube\.com\/watch\?|youtu\.be\/)/i.test(r.url))).map((r) =>
+              r.url && !/^https?:\/\//i.test(r.url) ? { ...r, url: undefined } : r
+            );
             const online = ranked.filter((r) => r.url);
             const offline = ranked.filter((r) => !r.url);
             const row = (r: (typeof day.resources)[number], i: number) => (
-              <div key={i} className="flex items-start gap-2 rounded-lg border border-border/60 bg-surface px-2.5 py-1.5 text-sm">
-                {r.url ? (
-                  <a
-                    href={r.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex min-w-0 items-center gap-1 text-accent hover:underline"
-                  >
-                    <span className="truncate">{r.title}</span> <ExternalLink className="size-3.5 shrink-0" />
-                  </a>
-                ) : (
-                  <span className="min-w-0 truncate text-ink">{r.title}</span>
+              <div key={i} className="flex flex-wrap items-start gap-2 rounded-lg border border-border/60 bg-surface px-2.5 py-2 text-sm">
+                {r.url ? <CheckedResourceLink url={r.url} title={r.title} videoOnly={videoOnly} /> : (
+                  <span className="min-w-0 break-words text-ink">{r.title}</span>
                 )}
-                <LinkStatus url={r.url} />
                 <span className="ml-auto flex shrink-0 items-center gap-1.5">
                   {r.verified && (
                     <span
@@ -1723,7 +2283,7 @@ function DayPanel({
                 {online.length > 0 && (
                   <div className="space-y-1.5">
                     <p className="flex items-center gap-1 text-[11px] font-medium text-ink-dim">
-                      <Globe className="size-3.5" /> 在线资源（可直接点开）
+                      <Globe className="size-3.5" /> 在线资源
                     </p>
                     {online.map(row)}
                   </div>
@@ -1736,7 +2296,7 @@ function DayPanel({
                     {offline.map(row)}
                   </div>
                 )}
-                {!ranked.length && <p className="text-xs text-ink-dim">本日暂无资源，以讲义正文「① 直接可学的资料」为准。</p>}
+                {!ranked.length && <p className="text-xs text-ink-dim">{videoOnly ? "暂未找到符合要求的视频，可点击搜索当天资料重试。" : "本日暂无资源，以讲义正文「① 直接可学的资料」为准。"}</p>}
               </>
             );
           })()}
@@ -1759,11 +2319,15 @@ function DayPanel({
             </div>
             {lessonText ? (
               <div className="mt-3">
-                <Markdown text={lessonText} />
+                <Markdown text={lessonText} className="prose-reading" />
                 <Button
                   size="sm"
                   variant="ghost"
                   className="mt-2"
+                  /* 流式生成期间必须禁用（与上方「生成今日讲解」的 loading 门控同口径）：
+                   * 生成开始约 80ms 后 lessonText 非空、生成按钮被卸载，整个生成期间
+                   * 页面上唯一可点的就是这颗按钮——不放门控等于邀请用户点出并发生成。 */
+                  loading={lessonLoading}
                   onClick={() => {
                     setLesson("");
                     const cur = store.getState().goals.find((g) => g.id === goal.id)?.plan ?? goal.plan;
@@ -1779,6 +2343,10 @@ function DayPanel({
                     void import("@/lib/auth-client").then(({ useAuthStore, pushCloud }) => {
                       if (useAuthStore.getState().user) void pushCloud();
                     });
+                    /* 清空后立即重新生成：旧实现只删不生成——生成中断的 toast 承诺
+                     * 「可点『重新生成』继续」，用户照点却把刻意保留的中断产物删掉，
+                     * 还得再点一次「生成今日讲解」从头来（两步且自相矛盾）。 */
+                    void genLesson();
                   }}
                 >
                   重新生成
@@ -1803,7 +2371,10 @@ function DayPanel({
               </p>
               <p className="mt-1 text-xs text-ink-dim">{day.example.description}</p>
               {day.example.code && (
-                <pre className="mt-3 overflow-x-auto rounded-xl border border-[#26262b] bg-[#18181b] p-4 text-xs leading-relaxed text-[#d4d4d8]">
+                /* 深底代码块配方统一走 globals.css 的 .code-block-dark（与讲义 Markdown 的
+                   .prose-mentora pre 是同一份规则）——别把 #18181b/#26262b/#d4d4d8 抄进 JSX，
+                   否则代码块配色一调，同屏两种代码块必然漂移 */
+                <pre className="code-block-dark mt-3 text-xs">
                   <code>{day.example.code}</code>
                 </pre>
               )}
@@ -1844,13 +2415,17 @@ function DayPanel({
                   placeholder="写下你的回答…"
                   value={answers[a.id] ?? ""}
                   onChange={(e) => setAnswers({ ...answers, [a.id]: e.target.value })}
+                  /* 判分往返期间锁定编辑：送判的是提交时刻的 answers 快照，结果页展示的
+                   * 也是当前 answers——放行编辑会出现「答非所判」（反馈针对旧答案，
+                   * 展示的却是新答案）。 */
+                  disabled={grading}
                 />
               </div>
             ))}
           </div>
           <AgentTrace phases={quizPhases} className="mt-4" />
           <div className="mt-5 flex items-center justify-between">
-            <Button variant="ghost" size="sm" onClick={() => setMode("learn")}>
+            <Button variant="ghost" size="sm" onClick={() => setMode("learn")} disabled={grading}>
               返回学习
             </Button>
             <Button variant="ok" onClick={submitQuiz} loading={grading}>
@@ -2026,7 +2601,7 @@ function DayPanel({
           setSkipConfirm(false);
           setSkipText("");
         }}
-        title="跳过这一阶段？"
+        title="跳过这一天？"
       >
         <p className="text-sm text-ink-dim">
           本日知识点<b className="text-ink">不会</b>存入第二大脑，也不会进入复习队列。

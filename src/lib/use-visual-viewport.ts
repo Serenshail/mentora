@@ -27,10 +27,14 @@ export function useVisualViewportInset(enabled = true) {
     refCount += 1;
     const root = document.documentElement;
     const update = () => {
+      // Pinch zoom is a reader action, not a keyboard resize.
+      if (vv.scale > 1.01) return;
       /* 键盘弹出 = 布局视口高 - 可视视口高 - 可视视口相对布局视口的顶部偏移。
        * 取 max(0) 防止浏览器回弹时算出负数；桌面无差异，值恒 ≈0。 */
       const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
       root.style.setProperty("--keyboard-inset", `${Math.round(inset)}px`);
+      root.style.setProperty("--visual-viewport-height", `${vv.height}px`);
+      root.style.setProperty("--visual-viewport-top", `${vv.offsetTop}px`);
     };
     update();
     vv.addEventListener("resize", update);
@@ -43,6 +47,8 @@ export function useVisualViewportInset(enabled = true) {
       if (refCount <= 0) {
         refCount = 0;
         root.style.setProperty("--keyboard-inset", "0px");
+        root.style.removeProperty("--visual-viewport-height");
+        root.style.removeProperty("--visual-viewport-top");
       }
     };
   }, [enabled]);

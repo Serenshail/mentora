@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Badge, Button, Card, Input, PageHeader } from "@/components/ui";
 import { useAuth } from "@/lib/auth-client";
-import { PLANS, priceLabel, type PlanId } from "@/lib/pricing";
+import { PLANS, planOf, priceLabel, type PlanId } from "@/lib/pricing";
 import { cn } from "@/lib/utils";
 import { Check, CreditCard, Mail, RefreshCw, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
@@ -36,7 +36,7 @@ export default function MembershipPage() {
 
   const ent = user?.entitlement;
   const status = ent?.status ?? "legacy";
-  const plan = ent?.plan && ent.plan in PLANS ? PLANS[ent.plan as PlanId] : null;
+  const plan = planOf(ent?.plan);
 
   const submit = async () => {
     const c = code.trim();
@@ -101,6 +101,7 @@ export default function MembershipPage() {
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <Input
             className="flex-1 font-mono tracking-wider uppercase"
+            aria-label="兑换激活码"
             placeholder="XXXX-XXXX-XXXX"
             value={code}
             onChange={(e) => setCode(e.target.value)}

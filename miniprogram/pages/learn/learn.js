@@ -3,6 +3,34 @@ var api = require("../../utils/api.js");
 var chat = require("../../utils/chat.js");
 var util = require("../../utils/util.js");
 
+/* 可信书目来源：与 Web src/lib/book-verify.ts 同一份域名白名单。
+ * 不能用标题/URL 关键词匹配——"facebook.com/.../《某书》读书会"、"booking.com"、
+ * "notebook.example.com" 标题常含书名，命中关键词就会被当成书目证据。 */
+var CREDIBLE_HOSTS = [
+  "douban.com",
+  "jd.com",
+  "dangdang.com",
+  "baike.baidu.com",
+  "wikipedia.org",
+  "openlibrary.org",
+  "worldcat.org",
+  "nlc.cn",
+  "books.google.com",
+  "amazon.cn",
+  "amazon.com",
+  "weread.qq.com",
+  "book.qq.com"
+];
+
+function isCredibleSource(url) {
+  var m = /^https?:\/\/([^/?#]+)/i.exec(String(url || "").trim());
+  if (!m) return false;
+  var host = m[1].toLowerCase().replace(/:\d+$/, "").replace(/^www\./, "");
+  return CREDIBLE_HOSTS.some(function (d) {
+    return host === d || host.slice(-(d.length + 1)) === "." + d;
+  });
+}
+
 /* 学习页 = 目标 + 书架。
  * 合并的理由：这两个都是"我在系统学习的东西"，用户心里的模型是"我要学什么"，
  * 不是"技能"和"书"分属两个模块。分成两个 tab 是照抄网页的侧栏结构，
@@ -11,6 +39,8 @@ var util = require("../../utils/util.js");
 Page({
   data: {
     loading: true,
+    // 会话探测失败（弱网/服务不可达）：给可见失败态 + 重试，别停在 loading
+    loadError: false,
     tab: "goals", // goals | books
     goals: [],
     books: [],
@@ -24,6 +54,7 @@ Page({
 
   onShow: function () {
     var that = this;
+    this._hidden = false;
     if (!store.state.userId && !api.hasSession()) {
       wx.reLaunch({ url: "/pages/login/login" });
       return;
@@ -32,36 +63,80 @@ Page({
      * 30 天过期后 userId 恒 null、hasSession() 恒 true → 守卫永不跳登录、pullIfSafe 恒 skip，
      * 五个 tab 全部永久空态且不自愈。这里补一次显式探测，明确失效就清会话回登录页。 */
     if (!store.state.userId) {
-      api
-        .me()
-        .then(function (j) {
-          if (j && j.user) {
-            getApp().globalData.user = j.user;
-            return store.onLogin(j.user.userId).then(function () {
-              that.render();
-            });
-          }
-          api.clearSession();
-          getApp().globalData.user = null;
-          wx.reLaunch({ url: "/pages/login/login" });
-          return null;
-        })
-        .catch(function () {
-          /* 网络失败保留会话（弱网也会 reject），下次 onShow 重试 */
-        });
+      that.probe();
       return;
     }
     that.render();
-    store.pullIfSafe(false).then(function () {
+    /* 拉取失败要可见：与 day.js:62-63 / app.js / overview / brain 同一口径。
+     * 旧实现把返回值扔掉，用户在过期列表上继续编辑后 markDirty→pushNow 会以本机
+     * 旧快照整体覆盖云端，抹掉他端改动。 */
+    store.pullIfSafe(false).then(function (r) {
       that.render();
+      if (r === "error") util.toast("云端对齐失败，请检查网络");
     });
+  },
+
+  /* 会话探测。失败不再静默吞掉：弱网下 me() 会 reject，页面停在 loading
+   * 就既没有列表也没有空态/错误/重试（两处空态卡都被 !loading 守卫挡住）。
+   * 失败时落 loadError，模板给「连接失败 + 重试」，下拉刷新也走这里重新探测。 */
+  probe: function () {
+    var that = this;
+    return api
+      .me()
+      .then(function (j) {
+        if (j && j.user) {
+          getApp().globalData.user = j.user;
+          return store.onLogin(j.user.userId).then(function () {
+            that.render();
+          });
+        }
+        api.clearSession();
+        getApp().globalData.user = null;
+        wx.reLaunch({ url: "/pages/login/login" });
+        return null;
+      })
+      .catch(function () {
+        /* 网络失败保留会话（弱网也会 reject），但必须让失败可见 */
+        that.setData({ loading: false, loadError: true });
+      });
+  },
+
+  /* 切 tab 不卸载页面（learn 是 tab 页），但页面已经不可见：生成完成/失败的 toast
+   * 会弹在用户当前停留的另一个 tab 上，用户看不到「已建好阅读路线」，回来只见表单
+   * 已关，容易再建一本同书名的重复书（createBookFromPlan 没有同名去重）。
+   * 记录可见性，结果只在本页可见时才 toast；书照常建好，onShow 的 render 会把
+   * 它列出来——回到本页就能看见，不再靠一条错位的 toast。 */
+  onHide: function () {
+    this._hidden = true;
+  },
+
+  onUnload: function () {
+    this._unloaded = true;
+    if (this._cancelCreate) this._cancelCreate();
+  },
+
+  retry: function () {
+    this.setData({ loading: true, loadError: false });
+    return this.probe();
   },
 
   onPullDownRefresh: function () {
     var that = this;
-    store.pullIfSafe(true).then(function () {
+    /* 会话未确认时 pullIfSafe 直接 skip，render 会把「还没有学习目标」错误空态
+     * 展示给已登录用户——这里改为重新探测。 */
+    if (!store.state.userId) {
+      that.retry().then(function () {
+        wx.stopPullDownRefresh();
+      });
+      return;
+    }
+    store.pullIfSafe(true).then(function (r) {
       that.render();
       wx.stopPullDownRefresh();
+      /* 拉取失败要可见：overview.js:73 / brain.js:40 的下拉刷新同口径——下拉是
+       * 用户主动动作，静默失败会让用户只看到菊花转完、列表纹丝不动，还可能在
+       * 过期快照上继续编辑（onShow 的注释描述过这种覆盖云端的风险）。 */
+      if (r === "error") util.toast("同步失败，请检查网络后重试");
     });
   },
 
@@ -121,7 +196,7 @@ Page({
       };
     });
 
-    this.setData({ loading: false, goals: goals, books: books });
+    this.setData({ loading: false, loadError: false, goals: goals, books: books });
   },
 
   openGoal: function (e) {
@@ -138,8 +213,18 @@ Page({
     this.render();
   },
 
+  /* 新建目标 → 学习教练引导页（intake → 目标卡 → 总纲要） */
+  startCoach: function () {
+    wx.navigateTo({ url: "/pages/coach/coach" });
+  },
+
   /* ---- 建档 ---- */
   toggleAdd: function () {
+    /* 核查+生成在途（10-30s，creating=true）不允许关弹层：mask 误触会把
+     * title/author/pasted（最多 6000 字的粘贴材料）一并清空，书虽照常建成，
+     * 但页面没有任何在途指示、失败也只剩一条 2.4s toast——材料只能凭记忆重填。
+     * 在途提示就是表单里的「正在解剖这本书…」loading 按钮，所以弹层必须留在这。 */
+    if (this.data.creating) return;
     this.setData({ adding: !this.data.adding, title: "", author: "", pasted: "" });
   },
   onTitle: function (e) {
@@ -180,22 +265,32 @@ Page({
           messages: [{ role: "user", content: "生成阅读计划。" }],
           temperature: 0.5,
           task: "reading-plan",
+          /* 生成 10-30s：页面被销毁（reLaunch/返回登录）时中止，别让流跑满 180s
+           * 并对已销毁页面 setData。切 tab 只触发 onHide，不取消——书要照常建成。 */
+          register: function (cancel) {
+            that._cancelCreate = cancel;
+          },
           onDelta: function () {}
         })
         .then(function (full) {
+          that._cancelCreate = null;
           var plan = chat.extractJson(full);
           if (!plan || !Array.isArray(plan.chapters) || plan.chapters.length < 1) {
             throw new Error("计划不完整，再试一次");
           }
           store.createBookFromPlan(title, author, pasted, plan, verification);
-          util.toast("已建好阅读路线", "success");
+          /* 只在本页可见时提示：否则 toast 弹在别的 tab 上，用户以为没建成而重复建档 */
+          if (!that._hidden && !that._unloaded) util.toast("已建好阅读路线", "success");
           that.setData({ adding: false, title: "", author: "", pasted: "", tab: "books" });
           that.render();
         })
         .catch(function (e) {
-          util.toast(e.message || "建档失败，稍后再试");
+          that._cancelCreate = null;
+          if (that._unloaded) return;
+          if (!that._hidden) util.toast(e.message || "建档失败，稍后再试");
         })
         .then(function () {
+          if (that._unloaded) return;
           that.setData({ creating: false });
         });
     };
@@ -225,8 +320,7 @@ Page({
         var key = title.replace(/[《》\s：:·、！!？?，,。（()）]/g, "").toLowerCase();
         if (!key) key = title.toLowerCase();
         var credible = hits.filter(function (r) {
-          var hay = (r.title || "") + " " + (r.url || "");
-          return /豆瓣|百科|出版社|读书|京东|当当|图书|book|douban|baike|wikipedia|图书馆|书目/i.test(hay) &&
+          return isCredibleSource(r.url) &&
             (r.title || "").toLowerCase().indexOf(key.slice(0, 8)) >= 0;
         });
         if (credible.length === 0) {

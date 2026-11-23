@@ -1,0 +1,11 @@
+=== 演练后服务状态 ===
+active active active active 
+=== 主站 ===
+{"ok":true,"missing":[],"optionalConfigured":10,"build":"local","channel":{"db":"d1","ai":"custom"}}
+=== 备份 ===
+-rw------- 1 root     root     20K 11月 13 12:18 drill-20261113-121823.dump
+-rw------- 1 root     root     20K 11月 13 12:18 drill-20261113-121836.dump
+/dev/vda2        50G   17G   31G  36% /
+=== 内存 ===
+               total        used        free      shared  buff/cache   available
+Mem:            1967         890         622          13         659        1077

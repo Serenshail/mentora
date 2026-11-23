@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@/lib/utils";
+import { cn, skeletonClassName } from "@/lib/utils";
 import { Loader2, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type {
@@ -29,10 +29,10 @@ export function Button({
 }) {
   const variants: Record<BtnVariant, string> = {
     primary:
-      "bg-[#1d1d1f] text-white hover:bg-[#333336] shadow-[0_1px_2px_rgba(0,0,0,0.14)] font-medium",
+      "bg-ink text-white hover:bg-black/80 shadow-[0_1px_2px_rgba(0,0,0,0.14)] font-medium",
     ghost: "text-ink-dim hover:text-ink hover:bg-black/[0.045]",
     outline:
-      "border border-border bg-white text-ink hover:bg-[#fafafa] hover:border-[#d4d4d8] shadow-[0_1px_2px_rgba(0,0,0,0.04)]",
+      "border border-border bg-white text-ink hover:bg-surface-2 hover:border-faint shadow-[0_1px_2px_rgba(0,0,0,0.04)]",
     danger: "bg-bad/[0.07] text-bad border border-bad/25 hover:bg-bad/[0.12] font-medium",
     ok: "bg-ok/[0.08] text-ok border border-ok/25 hover:bg-ok/[0.13] font-medium",
   };
@@ -70,7 +70,7 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-2xl border border-border bg-surface shadow-card p-5",
+        "min-w-0 rounded-2xl border border-border bg-surface shadow-card p-5",
         className
       )}
       {...props}
@@ -101,7 +101,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium whitespace-nowrap",
+        "inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium whitespace-normal [overflow-wrap:anywhere] [&>svg]:shrink-0",
         tones[tone],
         className
       )}
@@ -111,12 +111,31 @@ export function Badge({
   );
 }
 
+/* ---------- UserBubble（聊天用户气泡，跨页同源） ----------
+ * learn/new 引导对话与 learn 方向引导共用同一份度量：此前两页各写一份 className，
+ * 字号/内边距/最大宽度各自漂移（learn/page 的注释自称「与 learn/new 同源」而实际全不同）。
+ * 用户气泡的样式只维护在这一处，别在页面里重抄。 */
+export function UserBubble({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "max-w-[80%] rounded-2xl rounded-br-md bg-ink px-4 py-2.5 text-sm text-white",
+        className
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 /* ---------- Input / Textarea ---------- */
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       className={cn(
-        "h-10 w-full rounded-[10px] border border-border bg-white px-3.5 text-sm text-ink placeholder:text-ink-dim/60 outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12]",
+        /* disabled 必须有视觉态（与 Button 的 disabled:opacity-45 同口径）：council 等页
+         * 在流式/圆桌运行期禁用输入框，无样式时外观与可输入时完全一样，点按无反应无解释 */
+        "h-11 min-w-0 w-full rounded-[10px] border border-border bg-white px-3.5 text-[16px] sm:h-10 sm:text-sm text-ink placeholder:text-ink-dim/60 outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12] disabled:opacity-45 disabled:cursor-not-allowed disabled:bg-surface-2",
         className
       )}
       {...props}
@@ -131,7 +150,7 @@ export function Textarea({
   return (
     <textarea
       className={cn(
-        "w-full rounded-[10px] border border-border bg-white px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-dim/60 outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12] resize-none",
+        "min-w-0 w-full rounded-[10px] border border-border bg-white px-3.5 py-2.5 text-[16px] sm:text-sm text-ink placeholder:text-ink-dim/60 outline-none transition focus:border-accent/50 focus:ring-[3px] focus:ring-accent/[0.12] resize-none",
         className
       )}
       {...props}
@@ -152,19 +171,19 @@ export function PageHeader({
   icon?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 mb-8">
-      <div className="flex items-start gap-3.5">
+    <div className="mb-6 flex min-w-0 flex-col items-start justify-between gap-4 sm:mb-8 sm:flex-row">
+      <div className="flex min-w-0 flex-1 items-start gap-3.5">
         {icon && (
-          <div className="mt-0.5 flex size-11 items-center justify-center rounded-xl border border-border bg-white text-accent shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+          <div className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-white text-accent shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
             {icon}
           </div>
         )}
-        <div>
-          <h1 className="text-[26px] leading-tight font-bold text-ink tracking-[-0.03em]">{title}</h1>
+        <div className="min-w-0 [overflow-wrap:anywhere]">
+          <h1 className="text-2xl leading-tight font-bold text-ink tracking-[-0.03em] sm:text-[26px]">{title}</h1>
           {desc && <p className="mt-1.5 text-[13.5px] leading-relaxed text-ink-dim max-w-2xl">{desc}</p>}
         </div>
       </div>
-      {right}
+      {right && <div className="flex max-w-full flex-wrap items-center gap-2 sm:shrink-0">{right}</div>}
     </div>
   );
 }
@@ -234,7 +253,28 @@ export function Empty({
  * v17 无障碍补齐：role=dialog + aria-modal + 焦点陷阱（Tab 环回）+ Esc 关闭
  * + 打开时锁滚动 + 关闭后焦点归还触发元素。此前只有 backdrop 点击可关，
  * 键盘/读屏用户开了门出不去。 */
-const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
+/* 导出给壳层的移动「更多」抽屉复用：两处对话框必须用同一套可聚焦元素口径，
+ * 否则抽屉的 Tab 环回会漏掉/多算元素（app-shell.tsx 的 drawer 焦点陷阱）。 */
+export const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
+/* ---------- 叠层弹窗的 Esc 归属 ----------
+ * 两个对话框叠开（read-workspace 的核实弹窗叠在添加书籍弹窗上、⌘K z-[80] 叠在
+ * Modal z-50 上）时，两层都在 document 上监听 keydown 且互不隔离，一次 Esc 会把
+ * 两层同时关掉。登记法：后挂载的弹层在最上（弹层只能在上一个弹层仍打开时被新
+ * 交互叠开，登记序与视觉叠放一致），Esc 只归最上层处理——它关闭并注销后，下一
+ * 次 Esc 才轮到下一层。单层弹窗恒在最顶，行为不变。onboarding-modal 用捕获阶段
+ * + stopImmediatePropagation 是另一套优先级机制，与本登记互不干扰。 */
+const overlayStack: HTMLElement[] = [];
+export function registerOverlay(el: HTMLElement): () => void {
+  overlayStack.push(el);
+  return () => {
+    const i = overlayStack.indexOf(el);
+    if (i >= 0) overlayStack.splice(i, 1);
+  };
+}
+export function isTopOverlay(el: HTMLElement | null): boolean {
+  return !!el && overlayStack[overlayStack.length - 1] === el;
+}
 
 export function Modal(props: {
   open: boolean;
@@ -277,6 +317,9 @@ function ModalDialog({
    * setTimeout(0) 又抢到右上角关闭按钮 → 输入框打一个字就丢焦点（2026-10-24 修复） */
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
+    /* 登记进叠层栈：核实弹窗叠在添加书籍弹窗上、⌘K 叠在 Modal 上时，Esc 只关最上层 */
+    const box = boxRef.current;
+    const unregister = box ? registerOverlay(box) : () => {};
     const focusables = () =>
       Array.from(boxRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
     const t = setTimeout(() => {
@@ -285,6 +328,7 @@ function ModalDialog({
     }, 0);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (!isTopOverlay(boxRef.current)) return;
         onCloseRef.current();
         return;
       }
@@ -309,6 +353,7 @@ function ModalDialog({
     document.body.style.overflow = "hidden";
     return () => {
       clearTimeout(t);
+      unregister();
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
       prev?.focus();
@@ -317,7 +362,7 @@ function ModalDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 backdrop-blur-[2px] p-0 sm:items-center sm:p-4"
+      className="viewport-overlay fixed inset-0 z-50 flex items-end justify-center bg-black/30 backdrop-blur-[2px] p-0 sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
@@ -329,8 +374,8 @@ function ModalDialog({
         className={cn(
           /* 手机 = bottom sheet（PRD §5.10）：贴底、圆角只在顶部、高度基于 dvh+安全区；
            * ≥sm 保持居中弹窗不变。max-h 同时考虑键盘（--keyboard-inset 由 JS 写入）。 */
-          "materialize max-h-[100dvh] w-full overflow-y-auto rounded-t-2xl border border-border bg-white p-4 shadow-overlay outline-none",
-          "sm:max-h-[88vh] sm:rounded-2xl md:p-6",
+          "materialize min-w-0 max-h-full w-full overflow-y-auto overscroll-contain rounded-t-2xl border border-border bg-white p-4 shadow-overlay outline-none [overflow-wrap:anywhere]",
+          "sm:rounded-2xl md:p-6",
           shown && "open",
           wide ? "sm:max-w-3xl" : "sm:max-w-lg"
         )}
@@ -339,11 +384,11 @@ function ModalDialog({
       >
         {/* sheet 顶部把手：仅在手机显示，承载"这是可关闭的底部弹层"语义 */}
         <div className="mx-auto mb-2 h-1 w-10 shrink-0 rounded-full bg-faint sm:hidden" />
-        <div className="mb-4 flex items-center justify-between">
-          <h3 id={labelId} className="text-lg font-bold text-ink tracking-[-0.02em]">{title}</h3>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <h3 id={labelId} className="min-w-0 flex-1 text-lg font-bold text-ink tracking-[-0.02em]">{title}</h3>
           <button
             onClick={onClose}
-            className="tap-target -mr-2 -mt-1 grid place-items-center rounded-lg text-ink-dim hover:bg-black/[0.045] hover:text-ink cursor-pointer transition"
+            className="tap-target -mr-2 -mt-1 grid shrink-0 place-items-center rounded-lg text-ink-dim hover:bg-black/[0.045] hover:text-ink cursor-pointer transition"
             aria-label="关闭"
           >
             <X className="size-4" />
@@ -370,7 +415,13 @@ export function StatusDot({ status }: { status: string }) {
 
 /* ---------- Skeleton（占位骨架，参照 shadcn/ui） ----------
  * 规则：形状必须匹配真实内容（头像=圆、标题=短行、正文=多行、媒体=块），
- * 加载完成时布局不得跳动。此前各页面用裸 animate-pulse 大方块，形状失真。 */
+ * 加载完成时布局不得跳动。此前各页面用裸 animate-pulse 大方块，形状失真。
+ * 圆角/底色：cn 只是 clsx（无 tailwind-merge），基类 rounded-lg、
+ * bg-black/[0.06] 会与调用方传入的 rounded-2xl、bg-surface/60 等同族类同时
+ * 保留，胜负取决于构建产物里的样式发射顺序（Tailwind 4 按类名字母序发射，
+ * rounded-lg 恰好排在 rounded-2xl 之后而胜出），17 处调用方传的圆角由此全部
+ * 静默失效。改为经 skeletonClassName（lib/utils.ts）做「默认仅兜底」合并：
+ * 调用方传了同族类则默认类不下发，彻底消除对发射顺序的依赖。 */
 export function Skeleton({ className }: { className?: string }) {
-  return <div aria-hidden className={cn("animate-pulse rounded-lg bg-black/[0.06]", className)} />;
+  return <div aria-hidden className={skeletonClassName(className)} />;
 }

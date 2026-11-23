@@ -1,0 +1,66 @@
+<import src="../../wxml/md.wxml" />
+
+<nav-bar title="学习教练" />
+
+<view class="coach-page">
+  <scroll-view scroll-y class="chat-scroll" scroll-into-view="{{toBottom}}" scroll-with-animation>
+    <view class="chat">
+      <view wx:for="{{messages}}" wx:key="index" class="msg {{item.role === 'user' ? 'msg-out' : 'msg-in'}}">
+        <view wx:if="{{item.role === 'user'}}" class="bubble">{{item.content}}</view>
+        <view wx:else class="card-flat" style="max-width: 100%">
+          <template is="md-blocks" data="{{blocks: item.blocks}}" />
+        </view>
+      </view>
+
+      <view wx:if="{{busy && stage === 'chat'}}" class="msg msg-in">
+        <view class="card-flat" style="max-width: 100%">
+          <template is="md-blocks" data="{{blocks: streamBlocks}}" />
+          <view class="row gap-8" style="margin-top: 10rpx">
+            <view class="caret"></view>
+            <text class="thinking">教练在想</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 目标卡：确认后进入计划生成，不给继续输入（要改就「继续聊」收回卡） -->
+      <view wx:if="{{cardView}}" class="goal-card card-flat">
+        <view class="eyebrow"><view class="eyebrow-mark"></view>目标卡</view>
+        <view class="goal-card-topic">{{cardView.topic}}</view>
+        <view class="sub">{{cardView.direction}}</view>
+        <view class="goal-card-row"><text class="meta">每周投入</text><text class="meta num">约 {{cardView.weeklyHours}} 小时</text></view>
+        <view class="goal-card-sec">
+          <view class="field-label">学成的标准</view>
+          <view wx:for="{{cardView.criteria}}" wx:key="*this" class="goal-card-li">· {{item}}</view>
+        </view>
+        <view wx:if="{{cardView.assumptions.length}}" class="goal-card-sec">
+          <view class="field-label">教练替你做的假设</view>
+          <view wx:for="{{cardView.assumptions}}" wx:key="*this" class="goal-card-li">· {{item}}</view>
+        </view>
+        <view class="row gap-12" style="margin-top: 28rpx">
+          <button class="btn btn-ink flex-1" bindtap="confirmCard">确认，生成总纲要</button>
+          <button class="btn btn-outline" bindtap="dismissCard">继续聊</button>
+        </view>
+      </view>
+      <view id="coach-bottom" style="height: 2rpx"></view>
+    </view>
+  </scroll-view>
+
+  <!-- 计划生成态：总纲要 10-40s，诚实告知并禁止重复点击 -->
+  <view wx:if="{{stage === 'planning' || (busy && stage !== 'chat' && !cardView)}}" class="planning card-flat">
+    <view class="row gap-8"><view class="caret"></view><text class="thinking">正在排总纲要…约半分钟，别关页面</text></view>
+  </view>
+
+  <view class="composer">
+    <input
+      class="composer-field"
+      placeholder="{{cardView ? '先处理上面的目标卡' : '想学什么？例如：三个月考上系统架构师'}}"
+      placeholder-class="ph"
+      value="{{input}}"
+      confirm-hold
+      bindinput="onInput"
+      bindconfirm="send"
+      disabled="{{busy || cardView}}"
+    />
+    <view class="composer-send {{input && !busy && !cardView ? '' : 'disabled'}}" bindtap="{{input && !busy && !cardView ? 'send' : ''}}">↑</view>
+  </view>
+</view>

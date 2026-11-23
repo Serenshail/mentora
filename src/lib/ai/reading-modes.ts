@@ -10,11 +10,11 @@ export interface ReadingModeMeta {
 }
 
 export const READING_MODES: ReadingModeMeta[] = [
-  { id: "socratic", label: "苏格拉底", hint: "只提问不讲解：定义→依据→反例→边界,追到你自己讲通", forType: "概念/原理" },
-  { id: "feynman", label: "费曼讲桌", hint: "你讲,它当聪明外行只听:黑话/断裂/跳跃打回,绝不代讲", forType: "检验真懂" },
-  { id: "collision", label: "思想碰撞", hint: "它站本书观点的对立面逼你辩护,每 3 轮可反转立场", forType: "判断/争议" },
-  { id: "close-read", hint: "一次一段:原文主张→论证位置→一个理解性问题", label: "精读带读", forType: "原文细读" },
-  { id: "recall-check", label: "复盘检验", hint: "先合书回忆再迁移,四级判定并记掌握状态", forType: "读完验收" },
+  { id: "socratic", label: "苏格拉底", hint: "只提问不讲解：定义→依据→反例→边界，追到你自己讲通", forType: "概念/原理" },
+  { id: "feynman", label: "费曼讲桌", hint: "你讲，它当聪明外行只听：黑话/断裂/跳跃打回，绝不代讲", forType: "检验真懂" },
+  { id: "collision", label: "思想碰撞", hint: "它站本书观点的对立面逼你辩护，每 3 轮可反转立场", forType: "判断/争议" },
+  { id: "close-read", hint: "一次一段：原文主张→论证位置→一个理解性问题", label: "精读带读", forType: "原文细读" },
+  { id: "recall-check", label: "复盘检验", hint: "先合书回忆再迁移，四级判定并记掌握状态", forType: "读完验收" },
 ];
 
 /** 按章节知识类型推荐默认模式(不锁死,用户可切) */
@@ -34,4 +34,14 @@ export function defaultReadingMode(knowledgeType?: string): ReadingMode {
     default:
       return "socratic";
   }
+}
+
+const MODE_IDS = new Set<string>(READING_MODES.map((m) => m.id));
+
+/** 客户端传上来的 mode 收窄：只认五个合法 id，其余一律 null。
+ *  不能靠 `MODE_RULES[mode] ?? MODE_RULES.socratic` 兜底——那是普通对象索引，会走原型链，
+ *  mode="constructor"/"toString" 时取到继承的函数对象，把 `function Object() { [native code] }`
+ *  拼进系统提示词（同 ai-config.ts 的 Object.hasOwn 纪律）。 */
+export function normalizeReadingMode(raw: unknown): ReadingMode | null {
+  return typeof raw === "string" && MODE_IDS.has(raw) ? (raw as ReadingMode) : null;
 }

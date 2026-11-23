@@ -4,6 +4,58 @@ import { useEffect, useRef, useState } from "react";
 
 /* PopText 资产按需加载（css + js + emoji base）——来自 D:\zcode\ui 自建 skill */
 const POPTEXT_VERSION = "v12"; // 改这里强制刷新缓存
+/* 复用已有 link 时的收口上限：既无 load 也无 error（失败残留/弱网卡死）也必须 resolve */
+const CSS_TIMEOUT_MS = 8000;
+
+/** 确保 pop-text.css 就绪；resolve false 表示失败，调用方据此走纯文本兜底。
+ *  load / error / 超时三选一先到先收口——复用一条「早先失败、已错过 error」的残留
+ *  link 时也必然有结果，await 不会永久挂起（否则 failed 兜底永不置位）。 */
+export function ensurePopTextCss(doc: Document = document): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const existing = doc.querySelector('link[data-poptext-css]') as HTMLLinkElement | null;
+    /* 本次真正等待的那条 link（复用的或新建的），超时/失败时据它决定是否摘除 */
+    let pending: HTMLLinkElement | null = null;
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => {
+      /* 超时前再确认一次：弱网下 sheet 可能刚好就绪；仍无 sheet 则视为失败，
+       * 并摘掉这条 link，避免它作为失败残留被后续实例反复复用。 */
+      const ok = !!pending?.sheet;
+      if (!ok) pending?.remove();
+      finish(ok);
+    }, CSS_TIMEOUT_MS);
+
+    if (existing) {
+      pending = existing;
+      if (existing.sheet) { finish(true); return; }
+      existing.addEventListener("load", () => finish(true), { once: true });
+      existing.addEventListener("error", () => {
+        /* 复用中的 link 也报错：同样摘除，别让它继续当残留坑下一个实例 */
+        existing.remove();
+        finish(false);
+      }, { once: true });
+      return;
+    }
+    const link = doc.createElement("link");
+    pending = link;
+    link.rel = "stylesheet";
+    link.href = `/poptext/pop-text.css?v=${POPTEXT_VERSION}`;
+    link.setAttribute("data-poptext-css", "1");
+    link.onload = () => finish(true);
+    /* 失败即摘除：否则这条 link 会作为「已错过 error 的残留」被后续实例复用，
+     * 复用方只能干等到超时（下次挂载重新建 link，可再试一次）。 */
+    link.onerror = () => {
+      link.remove();
+      finish(false);
+    };
+    doc.head.appendChild(link);
+  });
+}
 
 export function usePopText(text: string, delay = 0) {
   const elRef = useRef<HTMLHeadingElement>(null);
@@ -16,21 +68,8 @@ export function usePopText(text: string, delay = 0) {
     const load = async () => {
       let loadFailed = false;
       // css：等样式表真正加载完再打字（否则早期变形图层没有绝对定位，会飘）
-      await new Promise<void>((resolve) => {
-        const existing = document.querySelector('link[data-poptext-css]') as HTMLLinkElement | null;
-        if (existing) {
-          if (existing.sheet) resolve();
-          else existing.addEventListener("load", () => resolve(), { once: true });
-          return;
-        }
-        const link = document.createElement("link");
-        link.rel = "stylesheet";
-        link.href = `/poptext/pop-text.css?v=${POPTEXT_VERSION}`;
-        link.setAttribute("data-poptext-css", "1");
-        link.onload = () => resolve();
-        link.onerror = () => { loadFailed = true; resolve(); };
-        document.head.appendChild(link);
-      });
+      const cssOk = await ensurePopTextCss(document);
+      if (!cssOk) loadFailed = true;
       // 品牌字体就绪（避免打字中途字形跳变）
       try {
         await Promise.race([

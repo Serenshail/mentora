@@ -32,10 +32,18 @@ function captureCookie(header) {
   Object.keys(header).forEach(function (k) {
     if (k.toLowerCase() === "set-cookie") {
       var v = header[k];
-      raw += Array.isArray(v) ? v.join("\n") : String(v) + "\n";
+      /* 尾部分隔符对两个分支都要有：数组分支裸 cookie（值后无 ; 属性）不带
+       * 换行时，两个 set-cookie 键的值会直接拼在一起，下面的贪婪匹配把两段
+       * 值合并捕获成一个损坏的 cookie 持久化下去。 */
+      raw += (Array.isArray(v) ? v.join("\n") : String(v)) + "\n";
     }
   });
-  var m = /mentora_session=([^;\s]+)/.exec(raw);
+  /* 服务端 clearSessionCookie 用 jar.set(COOKIE, "", { maxAge: 0 }) 清会话，
+   * 线上格式是裸的 `mentora_session=; Path=/; Max-Age=0`（值后无引号）。
+   * 捕获量词必须允许空值（* 而非 +）：+ 会让这一分支永远匹配不到，本机
+   * cookie 备份不会随服务端清除指令清掉（只有带引号的 `mentora_session=""`
+   * 命中）。 */
+  var m = /mentora_session=([^;\s]*)/.exec(raw);
   if (m) {
     if (m[1] === "" || m[1] === '""') saveCookie("");
     else saveCookie("mentora_session=" + m[1]);
@@ -45,6 +53,24 @@ function captureCookie(header) {
 function authHeader() {
   var ck = savedCookie();
   return ck ? { Cookie: ck } : {};
+}
+
+/* 网络层失败 → 人话（JSON 请求通道与 chat.js 流式通道共用的唯一映射）。
+ * 原始 errMsg 是英文技术串（"request:fail timeout" 等），调用方多数直接把
+ * e.message 展示给用户（登录/注册的错误框就是）。此前 chat.js 流式层与本文件
+ * 各写一份映射，已经漂移（"domain list" 分支只有 JSON 通道有）——同一类域名
+ * 不可达错误在两条通道给用户不同文案。收口到一处后，微信新增 errMsg 形态
+ * 只需要改这里。
+ * 映射只覆盖网络层；服务端校验错误（中文文案）原样透传。
+ * abortCopy：abort 的文案两条通道语义不同——JSON 通道是用户主动取消
+ * （"请求已取消"），流式通道是生成被停止（"生成已停止"，有意为之），
+ * 调用方用这个参数指定。 */
+function netErrMsg(err, abortCopy) {
+  var raw = (err && err.errMsg) || "";
+  if (raw.indexOf("timeout") >= 0) return "请求超时，请检查网络后重试";
+  if (raw.indexOf("abort") >= 0) return abortCopy || "请求已取消";
+  if (raw.indexOf("domain list") >= 0) return "当前网络无法访问服务，请检查网络";
+  return "网络请求失败，请检查网络后重试";
 }
 
 /* 基础请求：resolve {statusCode, data, header}；网络层失败才 reject */
@@ -66,7 +92,7 @@ function request(path, opts) {
         resolve(res);
       },
       fail: function (err) {
-        reject(new Error((err && err.errMsg) || "网络请求失败"));
+        reject(new Error(netErrMsg(err)));
       }
     });
   });
@@ -142,10 +168,6 @@ function pushCloud(data) {
   });
 }
 
-function health() {
-  return requestJson("/api/health", { timeout: 15000 });
-}
-
 /* V26.2-H2：书籍真实性核查（POST /api/search，与 Web 的 /api/search 网关同源） */
 function searchBooks(query) {
   return requestJson("/api/search", {
@@ -166,6 +188,6 @@ module.exports = {
   clearSession: clearSession,
   pullCloud: pullCloud,
   pushCloud: pushCloud,
-  health: health,
+  netErrMsg: netErrMsg,
   searchBooks: searchBooks
 };

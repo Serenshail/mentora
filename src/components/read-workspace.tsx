@@ -3,17 +3,17 @@
 /* 读书伙伴工作台（v23.3 从 /read 列表页抽取）：作为「学习」页的第二个 tab 渲染；
  * /read 列表入口重定向到 /learn?tab=read，书籍详情 /read/[id] 保留原路由。 */
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
-import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Textarea, Skeleton } from "@/components/ui";
+import { useEffect, useRef, useState } from "react";
+import { Button, Empty, Input, Modal, Textarea, Skeleton } from "@/components/ui";
 import { useAppStore } from "@/lib/store";
 import { useHydrated } from "@/lib/use-chat";
 import { extractJson, readingPlanSchema } from "@/lib/ai/client";
-import { READING_GOAL_LABELS } from "@/lib/types";
+import { ReadingShelf } from "@/components/reading-shelf";
 import { trackReading } from "@/lib/track";
 import { verifyBook } from "@/lib/book-verify";
 import { uid } from "@/lib/utils";
 import { toast } from "sonner";
-import { BookOpen, Plus, Trash2 } from "lucide-react";
+import { BookOpen, Plus } from "lucide-react";
 
 export function ReadWorkspace() {
   const hydrated = useHydrated();
@@ -39,6 +39,12 @@ export function ReadWorkspace() {
    * 成功后又 addBook + 强制跳转——用户明明"取消"了却凭空多出一本书（删除还得再点一次）。 */
   const createAbortRef = useRef<AbortController | null>(null);
   const cancelCreate = () => createAbortRef.current?.abort();
+  /* 组件卸载（浏览器 Back/硬件返回离开 /learn）时中止在途生成：verifyBook 与 streamChat
+   * 两条流继续跑到上游完成会白烧 AI token（服务端照常计费），完成后 addBook 仍会把
+   * 用户已放弃的书写进 store 并同步上云，router.push 还会把用户强行拽回书籍详情页。
+   * 与 use-chat.ts / agent-home.tsx 的卸载兜底同款。abort 后走既有 AbortError 分支：
+   * 不建书、不跳转（catch 里只 toast）。 */
+  useEffect(() => () => createAbortRef.current?.abort(), []);
 
   const create = async () => {
     if (!title.trim()) {
@@ -104,13 +110,14 @@ export function ReadWorkspace() {
       const { streamChat } = await import("@/lib/ai/client");
       let plan: ReturnType<typeof readingPlanSchema.parse> | null = null;
       const full = await streamChat({
-        args: { desc },
+        args: { desc, materialOnly: verification === "user_material" },
         messages: [{ role: "user", content: "生成阅读计划。" }],
         temperature: 0.5,
         task: "reading-plan",
         signal: ctrl.signal,
         onDelta: () => {},
       });
+      if (ctrl.signal.aborted) return;
       plan = readingPlanSchema.parse(extractJson(full));
       /* v25：新链路给 map（认知地图），旧输出只有 bookProfile——转换兼容，两代数据都接 */
       const map = plan.map
@@ -157,15 +164,29 @@ export function ReadWorkspace() {
       setAuthor("");
       setPasted("");
       /* v26.1 G1：路线生成事件（建书即路线）；第二问题识别——已有"有效学习"记录（迁移/掌握）
-       * 且新书目标意图与所有旧书都不同，才算启动第二个真实问题（PRD 约束 5：同目标多会话不算） */
+       * 且新书目标意图与所有旧书都不同，才算启动第二个真实问题（PRD 约束 5：同目标多会话不算）。
+       * 去重判据修正：建书这一刻新书还没有 goal（addBook 载荷不含 goal，goal 是之后在详情页
+       * 由用户/AI 写入的），拿书名去和旧书 goal.intent 全等比较几乎恒为 false——护栏形同虚设，
+       * 每本新书都会触发一次，后台「第二个真实问题」指标被系统性高估。改用两条可达成判据：
+       * 归一化后同书名（同一个问题重复建书），或旧书已记录的 goal.intent 与新书书名归一化相等
+       * （用户把同一意图直接写成了书名）。 */
       trackReading("roadmap_generated", { bookId: id, source: "create", nodes: plan.chapters.length });
       const books = useAppStore.getState().books;
       const hasEffectiveLearning = books.some(
         (b) => b.id !== id && ((b.transfers ?? []).length > 0 || b.chapters.some((c) => c.masteredAt))
       );
-      const intent = bTitle;
-      if (hasEffectiveLearning && intent && !books.some((b) => b.id !== id && b.goal?.intent === intent)) {
-        trackReading("second_problem_started", { bookId: id, goal: intent.slice(0, 60) });
+      const normIntent = (s: string) => s.replace(/[\s《》「」"'“”]/g, "").toLowerCase();
+      const intent = normIntent(bTitle);
+      if (
+        hasEffectiveLearning &&
+        intent &&
+        !books.some(
+          (b) =>
+            b.id !== id &&
+            (normIntent(b.title) === intent || (!!b.goal?.intent && normIntent(b.goal.intent) === intent))
+        )
+      ) {
+        trackReading("second_problem_started", { bookId: id, goal: bTitle.slice(0, 60) });
       }
       toast.success("阅读计划已生成，开读！");
       router.push(`/read/${id}`);
@@ -182,16 +203,11 @@ export function ReadWorkspace() {
 
   return (
     <div>
-      <PageHeader
-        icon={<BookOpen className="size-5" />}
-        title="读书伙伴"
-        desc="带着问题读，读完聊。聊出来的想法自动进你的知识库。"
-        right={
-          <Button onClick={() => setOpen(true)}>
-            <Plus className="size-4" /> 添加书籍
-          </Button>
-        }
-      />
+      <div className="mb-4 flex justify-end">
+        <Button className="min-h-11 shrink-0" onClick={() => setOpen(true)}>
+          <Plus className="size-4" /> 添加书籍
+        </Button>
+      </div>
 
       {!hydrated ? (
         <Skeleton className="h-40 rounded-2xl bg-surface/60" />
@@ -207,74 +223,7 @@ export function ReadWorkspace() {
           }
         />
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
-          {books.map((b) => {
-            const doneCh = b.chapters.filter((c) => c.status === "done").length;
-            const masteredCh = b.chapters.filter((c) => c.masteredAt).length;
-            const readStatus = b.readStatus ?? (b.status === "done" ? "finished" : b.status === "reading" ? "reading" : "unread");
-            const statusMeta: Record<string, { label: string; tone: "ok" | "accent" | "warn" | "default" }> = {
-              unread: { label: "未开始", tone: "default" },
-              reading: { label: "在读", tone: "accent" },
-              finished: { label: "已读完", tone: "warn" },
-              assessing: { label: "验收中", tone: "warn" },
-              mastered: { label: "已掌握", tone: "ok" },
-            };
-            const sm = statusMeta[readStatus] ?? statusMeta.reading;
-            return (
-              <Card
-                key={b.id}
-                className="group card-lift cursor-pointer transition hover:border-accent/50 hover:bg-surface-2/70"
-                onClick={() => router.push(`/read/${b.id}`)}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="min-w-0">
-                    <h3 className="truncate font-bold text-ink">《{b.title}》</h3>
-                    {b.author && <p className="mt-0.5 text-xs text-ink-dim">{b.author}</p>}
-                    {/* V26.2-H2：核查状态如实展示（旧数据无该字段不标记） */}
-                    {b.verification === "user_material" && (
-                      <p className="mt-0.5 text-[11px] text-warn">基于你的材料 · 未经搜索核实</p>
-                    )}
-                    {b.verification === "unverified" && (
-                      <p className="mt-0.5 text-[11px] text-warn">未经核实</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleting({ id: b.id, title: b.title });
-                      }}
-                      className="rounded-lg p-1.5 text-ink-dim/60 transition hover:bg-bad/10 hover:text-bad cursor-pointer"
-                      aria-label="删除这本书"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                    {/* 已读完 ≠ 已掌握：两态分开显示（PRD 4.5） */}
-                    <Badge tone={sm.tone === "default" ? "default" : sm.tone}>{sm.label}</Badge>
-                  </div>
-                </div>
-                {b.goal && (
-                  <p className="mt-2 text-[11.5px] text-ink-dim">
-                    目标：<span className="font-semibold text-accent">{READING_GOAL_LABELS[b.goal.primary].label}</span>
-                    {b.goal.secondary?.length ? ` + ${b.goal.secondary.map((g) => READING_GOAL_LABELS[g].label).join("、")}` : ""}
-                    {b.goal.intent ? <span className="ml-1.5">· {b.goal.intent.slice(0, 30)}</span> : null}
-                  </p>
-                )}
-                {b.planSummary && (
-                  <p className="mt-2 line-clamp-2 text-xs text-ink-dim">{b.planSummary}</p>
-                )}
-                <div className="mt-3 flex items-center gap-3 text-xs text-ink-dim">
-                  <span>
-                    节点 {doneCh}/{b.chapters.length}
-                  </span>
-                  {masteredCh > 0 && <span className="text-ok">已掌握 {masteredCh}</span>}
-                  <span>洞见 {b.insights.length} 条</span>
-                  {b.chat.length > 0 && <span>对话 {b.chat.length} 轮</span>}
-                </div>
-              </Card>
-            );
-          })}
-        </div>
+        <ReadingShelf books={books} onDelete={(book) => setDeleting({ id: book.id, title: book.title })} />
       )}
 
       <Modal
@@ -347,7 +296,7 @@ export function ReadWorkspace() {
             </p>
           ) : (
             <p>
-              我们搜索了「<b>{verifyState?.title}</b>」，没有找到可信的图书来源（豆瓣/百科/出版社记录等）
+              我们搜索了「<b>{verifyState?.title}</b>」，没有找到可信的图书来源（图书平台、馆藏或出版记录）
               {verifyState?.author ? <>，或来源信息与作者「{verifyState?.author}」不符</> : null}。
               为避免虚构作者、目录和章节，生成已暂停。
             </p>

@@ -5,12 +5,12 @@
 <view wx:if="{{book}}" class="book-page" style="--nav-h: {{navH || '64px'}}">
   <!-- 当前章节 + 带读问题：一行上下文，不是一整块页头 -->
   <view class="book-head">
-    <view class="between" bindtap="toggleChapters">
+    <view class="between" bindtap="toggleChapters" aria-role="button" aria-label="切换到目录">
       <view class="flex-1 min-w-0">
         <view class="row gap-8">
           <text class="meta num">{{chapter ? "第 " + chapter.index + " 章" : "全部读完"}}</text>
           <text class="meta">·</text>
-          <text class="meta num">{{doneCount}}/{{chapters.length}}</text>
+          <text class="meta num">掌握 {{masteredCount}}/{{chapters.length}}</text>
         </view>
         <view class="chap-cur ellipsis">{{chapter ? chapter.title : book.title}}</view>
       </view>
@@ -20,7 +20,73 @@
       <text class="tiny">带着这个问题读</text>
       <view class="focus-q-text">{{chapter.focusQuestion}}</view>
     </view>
+    <view class="row gap-12" style="margin-top: 14rpx" bindtap="toggleOverview" aria-role="button" aria-label="{{showOverview ? '收起' : '展开'}}认知地图与目标">
+      <view class="badge badge-{{readStatusTone}}">{{readStatusLabel}}</view>
+      <view wx:if="{{verifyLabel}}" class="badge badge-dim">{{verifyLabel}}</view>
+      <text class="tiny flex-1" style="text-align: right">认知地图与目标</text>
+      <view class="chev {{showOverview ? 'chev-open' : 'chev-down'}}">›</view>
+    </view>
   </view>
+
+  <!-- ============ 认知概览：地图四区域 + 阅读目标 + 整本状态机 ============ -->
+  <scroll-view wx:if="{{showOverview}}" scroll-y class="overview">
+    <view wx:if="{{map}}" class="ov-sec">
+      <view class="label" style="margin-bottom: 12rpx">这本书的地图</view>
+      <view wx:for="{{map}}" wx:key="k" class="ov-item">
+        <view class="tiny">{{item.k}}</view>
+        <view class="sub" style="margin-top: 4rpx; line-height: 1.6">{{item.v}}</view>
+      </view>
+    </view>
+    <view wx:if="{{!map}}" class="ov-sec">
+      <view class="sub">这本书记录建立时还没有认知地图（旧数据），不影响阅读与验收。</view>
+    </view>
+
+    <view class="ov-sec">
+      <view class="between" style="margin-bottom: 12rpx">
+        <view class="label">为什么读这本书</view>
+        <text wx:if="{{goalView.set && goalView.inferred}}" class="tiny">AI 推断 · 可改</text>
+      </view>
+      <view wx:if="{{!goalView.set}}" class="sub" style="margin-bottom: 12rpx">设了目标，验收的出题与判定才有侧重。</view>
+      <view class="row wrap gap-8">
+        <view
+          wx:for="{{goalView.chips}}"
+          wx:key="id"
+          class="chip {{item.primary ? 'chip-on' : item.on ? 'chip-sec' : ''}}"
+          data-id="{{item.id}}"
+          bindtap="pickGoalChip"
+          aria-role="button"
+          aria-label="设{{item.label}}为主目标{{item.primary ? '，当前主目标' : item.on ? '，也在目标里' : ''}}"
+        >{{item.label}}</view>
+      </view>
+      <button wx:if="{{!goalView.set}}" class="btn btn-outline btn-sm" style="margin-top: 18rpx" bindtap="recommendGoal" loading="{{goalBusy}}">
+        让 AI 推荐一个
+      </button>
+    </view>
+
+    <view class="ov-sec">
+      <view class="label" style="margin-bottom: 12rpx">整本进度：{{doneCount}}/{{chapters.length}} 章读完</view>
+      <view class="progress"><view class="progress-fill" style="width: {{chapters.length ? (doneCount / chapters.length) * 100 : 0}}%"></view></view>
+      <view class="row wrap gap-12" style="margin-top: 18rpx">
+        <button wx:if="{{readStatus === 'reading' || readStatus === 'unread'}}" class="btn btn-outline btn-sm" data-action="finish" bindtap="bookAction">标记读完</button>
+        <button wx:if="{{readStatus === 'finished'}}" class="btn btn-ink btn-sm" data-action="whole-assess" bindtap="bookAction">整本验收（复盘检验）</button>
+        <button wx:if="{{readStatus === 'assessing'}}" class="btn btn-ink btn-sm" data-action="confirm-mastered" bindtap="bookAction">确认已掌握</button>
+        <view wx:if="{{readStatus === 'mastered'}}" class="badge badge-ok">已掌握这本书</view>
+      </view>
+      <view wx:if="{{readStatus === 'reading' || readStatus === 'unread'}}" class="tiny" style="margin-top: 12rpx">「读完」只是状态；「掌握」要靠验收挣来。</view>
+    </view>
+
+    <view class="ov-sec" style="border-bottom: none">
+      <view class="between" style="margin-bottom: 12rpx">
+        <view class="label">沉淀（{{deposits.length}}）</view>
+        <text class="link" bindtap="toggleDeposits">写一条</text>
+      </view>
+      <view wx:if="{{!deposits.length}}" class="tiny">读到一个想法就记一句：我的解释、反对、疑问、想试的实践。这些话最后比划线值钱。</view>
+      <view wx:for="{{deposits}}" wx:key="id" class="ov-item">
+        <view class="row gap-8"><view class="badge badge-dim">{{item.typeLabel}}</view></view>
+        <view class="sub" style="margin-top: 6rpx">{{item.text}}</view>
+      </view>
+    </view>
+  </scroll-view>
 
   <!-- 目录弹层 -->
   <block wx:if="{{showChapters}}">
@@ -33,13 +99,22 @@
           wx:for="{{chapters}}"
           wx:key="id"
           class="sheet-item {{item.status === 'done' ? 'chap-done' : ''}}"
-          data-id="{{item.id}}"
-          bindtap="pickChapter"
+          aria-role="button"
+          aria-label="第 {{item.index}} 章 {{item.title}}{{item.mastered ? '，已掌握' : item.status === 'done' ? '，已读' : ''}}"
         >
           <text class="chap-idx num">{{item.index}}</text>
-          <text class="flex-1 chap-title">{{item.title}}</text>
-          <view wx:if="{{item.status === 'done'}}" class="badge badge-ok">已读</view>
-          <view wx:elif="{{chapter && chapter.id === item.id}}" class="badge badge-accent">在读</view>
+          <view class="flex-1" data-id="{{item.id}}" bindtap="pickChapter">
+            <view class="chap-title">{{item.title}}</view>
+            <view class="row gap-8" style="margin-top: 6rpx">
+              <view wx:if="{{item.mastered}}" class="badge badge-ok">已掌握</view>
+              <view wx:elif="{{item.status === 'done'}}" class="badge badge-dim">已读</view>
+              <view wx:elif="{{chapter && chapter.id === item.id}}" class="badge badge-accent">在读</view>
+            </view>
+          </view>
+          <view class="col gap-6" style="flex-shrink: 0">
+            <text class="tiny link" data-id="{{item.id}}" bindtap="openAssess" aria-role="button" aria-label="对{{item.title}}发起验收">验收</text>
+            <text wx:if="{{item.status !== 'done'}}" class="tiny link" data-id="{{item.id}}" data-status="done" bindtap="markChapterStatus" aria-role="button" aria-label="标记{{item.title}}为已读">读完</text>
+          </view>
         </view>
       </scroll-view>
     </view>
@@ -61,15 +136,23 @@
       <view wx:if="{{busy}}" class="msg msg-in">
         <view class="card-flat" style="max-width: 100%">
           <template is="md-blocks" data="{{blocks: streamBlocks}}" />
-          <view class="row gap-8" style="margin-top: 10rpx">
+          <view class="row gap-12" style="margin-top: 10rpx">
             <view class="caret"></view>
             <text class="thinking">{{mode.label}}</text>
+            <text class="link" bindtap="stopChat" aria-role="button" aria-label="停止生成">停止</text>
           </view>
         </view>
       </view>
       <view id="chat-bottom" style="height: 2rpx"></view>
     </view>
   </scroll-view>
+
+  <!-- 本章快捷操作：读法 / 小结 / 沉淀 -->
+  <view class="row gap-12 chapter-actions">
+    <view class="mode-btn" bindtap="toggleModes" aria-role="button" aria-label="切换读法，当前{{mode.label}}">{{mode.label}}</view>
+    <view class="mode-btn" bindtap="nodeRecap" aria-role="button" aria-label="生成本章小结">本章小结</view>
+    <view class="mode-btn" bindtap="toggleDeposits" aria-role="button" aria-label="写一条沉淀">沉淀</view>
+  </view>
 
   <!-- 读法选择 -->
   <block wx:if="{{showModes}}">
@@ -78,7 +161,15 @@
       <view class="sheet-grip"></view>
       <view class="sheet-title">怎么读</view>
       <scroll-view scroll-y class="sheet-scroll">
-        <view wx:for="{{modes}}" wx:key="id" class="sheet-item" data-id="{{item.id}}" bindtap="pickMode">
+        <view
+          wx:for="{{modes}}"
+          wx:key="id"
+          class="sheet-item"
+          data-id="{{item.id}}"
+          bindtap="pickMode"
+          aria-role="button"
+          aria-label="{{mode.id === item.id ? '当前读法：' : ''}}{{item.label}}，{{item.hint}}"
+        >
           <view class="flex-1">
             <view class="row gap-12">
               <text class="mode-name {{mode.id === item.id ? 'accent-text' : ''}}">{{item.label}}</text>
@@ -91,8 +182,131 @@
     </view>
   </block>
 
+  <!-- ============ 三重验收层 ============ -->
+  <view wx:if="{{assessOpen}}" class="layer">
+    <view class="layer-panel">
+      <view class="between">
+        <view class="sheet-title" style="margin: 0">验收 · {{assessChapterTitle}}</view>
+        <text class="link" bindtap="closeAssess">关闭</text>
+      </view>
+      <view class="tiny" style="margin-top: 6rpx">理解 / 结构 / 迁移三题。全部判过，这一章才算「掌握」。</view>
+      <scroll-view scroll-y class="layer-scroll">
+        <!-- 判分结果 -->
+        <block wx:if="{{assessResult}}">
+          <view wx:for="{{assessResult.rows}}" wx:key="index" class="card" style="margin-top: 16rpx">
+            <view class="row gap-8">
+              <view class="badge badge-ink">{{item.kindLabel}}</view>
+              <view class="badge {{item.levelCls}}">{{item.levelLabel}}</view>
+            </view>
+            <view class="sub" style="margin-top: 12rpx; line-height: 1.65">{{item.feedback}}</view>
+            <view wx:if="{{item.evidence}}" class="evidence">依据 · {{item.evidence}}</view>
+          </view>
+          <view wx:if="{{assessResult.suggestion}}" class="card" style="margin-top: 16rpx">
+            <view class="row gap-8"><view class="badge badge-accent">就薄弱点补课</view></view>
+            <view class="sub" style="margin-top: 10rpx; line-height: 1.65">{{assessResult.suggestion}}</view>
+          </view>
+          <view class="row gap-12" style="margin-top: 20rpx; padding-bottom: 24rpx">
+            <button class="btn btn-ink flex-1" bindtap="closeAssess">{{assessResult.allMastered ? "完成，回到阅读" : "知道了，回头补"}}</button>
+          </view>
+        </block>
+
+        <!-- 答题中 -->
+        <block wx:else>
+          <!-- 出题等待期：题目清空后必须给一句「正在出题」，否则是一块空白面板 -->
+          <view wx:if="{{assessBusy && !assessQuestions.length}}" class="card empty" style="margin-top: 16rpx">
+            <view class="empty-title">正在按这一章出题…</view>
+            <view class="empty-sub">理解 / 结构 / 迁移三题，稍等几秒。</view>
+          </view>
+          <view wx:for="{{assessQuestions}}" wx:key="index" class="card" style="margin-top: 16rpx">
+            <view class="between">
+              <view class="badge badge-ink">{{item.kind === 'explain' ? '理解验收' : item.kind === 'connect' ? '结构验收' : '迁移验收'}}</view>
+              <text class="tiny num">第 {{index + 1}}/{{assessQuestions.length}} 题</text>
+            </view>
+            <view class="acc-q" style="margin-top: 12rpx">{{item.question}}</view>
+            <textarea
+              class="area"
+              placeholder="凭理解作答，判分看证据"
+              placeholder-class="ph"
+              value="{{assessAnswers[index]}}"
+              data-i="{{index}}"
+              bindinput="onAssessInput"
+              maxlength="4000"
+            />
+          </view>
+          <button wx:if="{{assessQuestions.length}}" class="btn btn-accent btn-block" style="margin-top: 20rpx; margin-bottom: 24rpx" bindtap="submitAssess" loading="{{assessBusy}}">
+            {{assessBusy ? "判分中…" : "提交验收"}}
+          </button>
+        </block>
+      </scroll-view>
+    </view>
+  </view>
+
+  <!-- ============ 沉淀层 ============ -->
+  <block wx:if="{{showDeposits}}">
+    <view class="mask" bindtap="toggleDeposits"></view>
+    <view class="sheet">
+      <view class="sheet-grip"></view>
+      <view class="sheet-title">记一条沉淀</view>
+      <scroll-view scroll-y class="sheet-scroll">
+        <view style="padding: 0 32rpx 24rpx">
+          <view class="row wrap gap-8">
+            <view
+              wx:for="{{depositTypes}}"
+              wx:key="id"
+              class="chip {{depositType === item.id ? 'chip-on' : ''}}"
+              data-id="{{item.id}}"
+              bindtap="pickDepositType"
+              aria-role="button"
+              aria-label="{{item.label}}{{depositType === item.id ? '，已选中' : ''}}"
+            >{{item.label}}</view>
+          </view>
+          <textarea
+            class="area"
+            style="margin-top: 20rpx"
+            placeholder="一句话，用你自己的话"
+            placeholder-class="ph"
+            value="{{depositText}}"
+            bindinput="onDepositInput"
+            maxlength="500"
+          />
+          <button class="btn btn-ink btn-block" style="margin-top: 20rpx" bindtap="saveDeposit">存</button>
+          <view wx:if="{{deposits.length}}" class="label" style="margin: 28rpx 0 12rpx">已存 {{deposits.length}} 条</view>
+          <view wx:for="{{deposits}}" wx:key="id" class="ov-item">
+            <view class="row gap-8"><view class="badge badge-dim">{{item.typeLabel}}</view></view>
+            <view class="sub" style="margin-top: 6rpx">{{item.text}}</view>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+  </block>
+
+  <!-- ============ 本章小结层 ============ -->
+  <view wx:if="{{recap || recapBusy}}" class="layer">
+    <view class="layer-panel">
+      <view class="between">
+        <view class="sheet-title" style="margin: 0">小结 · {{recap ? recap.title : ""}}</view>
+        <text class="link" bindtap="closeRecap">关闭</text>
+      </view>
+      <scroll-view scroll-y class="layer-scroll">
+        <view class="card" style="margin-top: 16rpx">
+          <template is="md-blocks" data="{{blocks: recap ? recap.blocks : []}}" />
+          <view wx:if="{{recapBusy}}" class="row gap-8" style="margin-top: 10rpx">
+            <view class="caret"></view>
+            <text class="thinking">正在收拢这一章</text>
+          </view>
+        </view>
+        <button
+          wx:if="{{recap && recap.blocks.length && !recapBusy}}"
+          class="btn btn-ink btn-block"
+          style="margin: 20rpx 0 24rpx"
+          bindtap="saveRecap"
+          loading="{{recapSaving}}"
+        >存入第二大脑</button>
+      </scroll-view>
+    </view>
+  </view>
+
   <view class="composer">
-    <view class="mode-btn" bindtap="toggleModes">{{mode.label}}</view>
     <input
       class="composer-field"
       placeholder="说说你的理解，或反驳"
@@ -103,7 +317,15 @@
       bindconfirm="send"
       disabled="{{busy}}"
     />
-    <view class="composer-send {{input && !busy ? '' : 'disabled'}}" bindtap="{{input && !busy ? 'send' : ''}}">↑</view>
+    <view class="composer-send {{input && !busy ? '' : 'disabled'}}" bindtap="{{input && !busy ? 'send' : ''}}" aria-role="button" aria-label="发送">↑</view>
+  </view>
+</view>
+
+<!-- 会话恢复中（直达页 me()+全量快照在途）：不能先渲染「书不存在」假空态，
+     否则弱网下用户会以为书被删了（council/brain/profile 的守卫口径）。 -->
+<view wx:elif="{{booting}}" class="page">
+  <view class="empty">
+    <view class="empty-title">会话恢复中…</view>
   </view>
 </view>
 

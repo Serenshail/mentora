@@ -23,6 +23,16 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/no-this-alias": "off",
     },
   },
+  // 测试文件里为模拟小程序 Page/Store 等外部对象需要宽松夹具类型，
+  // any 是测试脚手架的既定做法（同 miniprogram 组），不在生产代码范围内。
+  // 生产代码的 any 仍然报错。
+  {
+    files: ["src/lib/__tests__/**/*.ts", "src/**/*.test.ts", "src/**/*.test.tsx"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unused-expressions": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

@@ -6,7 +6,10 @@
    内置名单永远有效；ADMIN_EMAILS / NEXT_PUBLIC_ADMIN_EMAILS 只能往里加人，
    不能把内置账号挤掉——环境变量配错也不会把自己锁在门外。
    ⚠️ 内置名单只放真实持有、邮箱前缀不可被他人抢注的账号；泛化前缀（如 text@qq.com）
-   一旦被他人注册即获得后台全权（看全量用户数据/删用户），一律走 env 添加，不进源码。 */
+   一旦被他人注册即获得后台全权（看全量用户数据/删用户），一律走 env 添加，不进源码。
+   防抢注的强制点：注册流程（app/api/auth/register/route.ts）直接拒绝注册内置地址，
+   除非操作者把该地址显式写进 ADMIN_EMAILS——源码公开的字符串因此不再等于
+   「谁先注册谁拿后台」（此前注册只做 MX 取证、不验证邮箱所有权）。 */
 
 export const DEFAULT_ADMIN_EMAILS = "haow9508@gmail.com,laiyif68@gmail.com";
 

@@ -1,0 +1,144 @@
+{
+  "ranAt": "2026-11-13T04:32:18.219Z",
+  "mockedChatCalls": 11,
+  "realModelRequests": 0,
+  "pass": 15,
+  "failed": 0,
+  "blocked": 1,
+  "steps": [
+    {
+      "seq": 1,
+      "label": "fixture-ready",
+      "at": "2026-11-13T04:31:29.501Z",
+      "shot": "01-fixture-ready.png"
+    },
+    {
+      "seq": 2,
+      "label": "a03-approval-card",
+      "at": "2026-11-13T04:31:38.552Z",
+      "shot": "02-a03-approval-card.png"
+    },
+    {
+      "seq": 3,
+      "label": "a03-rejected",
+      "at": "2026-11-13T04:31:41.797Z",
+      "shot": "03-a03-rejected.png"
+    },
+    {
+      "seq": 4,
+      "label": "a04-approval-card",
+      "at": "2026-11-13T04:31:45.921Z",
+      "shot": "04-a04-approval-card.png"
+    },
+    {
+      "seq": 5,
+      "label": "a04-applied",
+      "at": "2026-11-13T04:31:55.212Z",
+      "shot": "05-a04-applied.png"
+    },
+    {
+      "seq": 6,
+      "label": "a04-pro-page",
+      "at": "2026-11-13T04:31:56.433Z",
+      "shot": "06-a04-pro-page.png"
+    }
+  ],
+  "results": [
+    {
+      "id": "A03M-a",
+      "name": "结构性修改先出审批卡（不静默写入）",
+      "ok": true,
+      "detail": "审批卡=1"
+    },
+    {
+      "id": "A03M-b",
+      "name": "审批卡出现时对象尚未改变",
+      "ok": true,
+      "detail": "阶段数=2"
+    },
+    {
+      "id": "A03M-c",
+      "name": "拒绝后业务对象完全不变",
+      "ok": true,
+      "detail": "阶段=第一阶段 语法基础/第二阶段 文件读写"
+    },
+    {
+      "id": "A04M-a",
+      "name": "出现审批卡",
+      "ok": true,
+      "detail": "卡数=1"
+    },
+    {
+      "id": "A04M-b",
+      "name": "批准前零写入",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "id": "A04M-a2",
+      "name": "审批卡出现并已批准",
+      "ok": true,
+      "detail": "state=approved"
+    },
+    {
+      "id": "A04M-c",
+      "name": "批准后第二阶段变成 7 天",
+      "ok": true,
+      "detail": "天数=7"
+    },
+    {
+      "id": "A04M-d",
+      "name": "已完成天保留（标题相同沿用原 id）",
+      "ok": true,
+      "detail": "含 done-day=true"
+    },
+    {
+      "id": "A04M-e",
+      "name": "成绩记录保留（必须非空且内容一致）",
+      "ok": true,
+      "detail": "before=1 after=1"
+    },
+    {
+      "id": "A04M-f",
+      "name": "笔记未被改动（必须存在且正文一致）",
+      "ok": true,
+      "detail": "before=true after=true title=open() 用法笔记"
+    },
+    {
+      "id": "A04M-g",
+      "name": "留下可恢复的历史版本",
+      "ok": true,
+      "detail": "history=1"
+    },
+    {
+      "id": "A04M-h",
+      "name": "Rust 干扰目标未被误改（必须存在）",
+      "ok": true,
+      "detail": "before=true after=true Rust=所有权"
+    },
+    {
+      "id": "A04M-i",
+      "name": "专业页能看到 7 天新目录",
+      "ok": true,
+      "detail": "含新天=true"
+    },
+    {
+      "id": "A04M-j",
+      "name": "刷新后修改仍保留",
+      "ok": true,
+      "detail": "阶段=第一阶段 语法基础/第二阶段 文件读写"
+    },
+    {
+      "id": "A04M-k",
+      "name": "刷新后成绩与笔记仍在（非空且内容一致）",
+      "ok": true,
+      "detail": "成绩=1 笔记存在=true"
+    },
+    {
+      "id": "A04M-l",
+      "name": "本地 baseSignature 不感知云端并发变更（跨设备保护在服务端，见 cross-device-conflict.json）",
+      "ok": null,
+      "detail": "实际标题=\"并发前的标题\"——本地批准生效；服务端条件写已另行验证 11/11"
+    }
+  ]
+}

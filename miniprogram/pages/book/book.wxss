@@ -86,3 +86,89 @@
   flex-shrink: 0;
   max-width: 220rpx;
 }
+
+/* ============ 阅读系统 V1.0：概览 / 验收 / 沉淀 ============ */
+
+/* 认知概览：收起时只有一行状态条，展开是地图+目标+状态机 */
+.overview {
+  flex-shrink: 0;
+  max-height: 46vh;
+  border-bottom: 1rpx solid var(--border);
+  background: var(--bg);
+}
+.ov-sec {
+  padding: 22rpx 32rpx;
+  border-bottom: 1rpx solid var(--border);
+}
+.ov-item { margin-top: 14rpx; }
+
+/* 目标 chips：主目标实底、次目标描边、未选中灰 */
+.chip {
+  padding: 8rpx 22rpx;
+  border-radius: 999rpx;
+  border: 1rpx solid var(--border);
+  font-size: 24rpx;
+  color: var(--ink-3);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.chip-on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+  font-weight: 600;
+}
+.chip-sec {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+/* 本章快捷操作条：三个等权入口，输入条上方 */
+.chapter-actions {
+  flex-shrink: 0;
+  padding: 10rpx 24rpx 4rpx;
+  background: var(--bg);
+}
+
+/* 全屏层（验收/小结）：比 sheet 更大的一块工作面，题目和长文需要空间 */
+.layer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 60;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--nav-h, 64px) + 12rpx) 0 0;
+}
+.layer-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 32rpx;
+}
+.layer-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 验收题干 / 证据（与 day 页同款，本页此前没有） */
+.acc-q {
+  font-size: 29rpx;
+  font-weight: 600;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.evidence {
+  margin-top: 14rpx;
+  padding: 14rpx 18rpx;
+  border-radius: 12rpx;
+  background: var(--surface-2);
+  font-size: 24rpx;
+  line-height: 1.55;
+  color: var(--ink-3);
+}

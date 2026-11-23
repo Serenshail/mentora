@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
 import { dbGet, dbList, dbDelete, dbDeleteDir, emailHash } from "@/lib/server/db";
-import { authorizeAdmin } from "@/lib/server/admin-auth";
+import { authorizeAdminDetailed } from "@/lib/server/admin-auth";
 import { rateLimitPersistent, clientIp } from "@/lib/server/rate-limit";
 import { dropRefCode } from "@/lib/server/referral";
+import { purgePersonalData } from "@/lib/server/personal";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -14,8 +15,19 @@ async function requireAdmin(req: NextRequest): Promise<{ error: string; status: 
   if (!(await rateLimitPersistent(`admin:users:${clientIp(req)}`, { capacity: 10, refillPerSec: 10 / 60 }))) {
     return { error: "请求过于频繁", status: 429 };
   }
-  const admin = await authorizeAdmin(req);
-  if (!admin) return { error: "未授权", status: 401 };
+  /* 用 detailed 版区分四类失败（与 reading-metrics、members/leads 同口径）：
+   * 输错后台密码 / 会话被吊销 / 非管理员账号的处置完全不同，压成单一
+   * 「未授权」会让操作员在用户管理页无法自助定位。 */
+  const auth = await authorizeAdminDetailed(req);
+  if (!auth.ok) {
+    const error =
+      auth.reason === "bad-password"
+        ? "后台密码错误"
+        : auth.reason === "no-session"
+          ? "请先登录或提供管理员密码"
+          : "当前账号无管理员权限";
+    return { error, status: 401 };
+  }
   return null;
 }
 
@@ -34,18 +46,28 @@ export async function DELETE(req: NextRequest) {
   const email = String(body.email ?? "").trim().toLowerCase();
   if (!email) return Response.json({ error: "缺少 email" }, { status: 400 });
 
-  const rec = await dbGet<{ userId: string }>(`users/${emailHash(email)}.json`, { encrypted: true });
+  /* 主档案读取同样要包：存储通道故障抛裸 500（无 JSON 错误体），
+   * 与下面的删除包裹及 auth/account、register 的同读取口径对齐 */
+  let rec: ({ userId: string; refCode?: string } & { _sha?: string }) | null = null;
+  try {
+    rec = await dbGet<{ userId: string; refCode?: string }>(`users/${emailHash(email)}.json`, { encrypted: true });
+  } catch {
+    return Response.json({ error: "用户数据库暂时不可用，稍后再试" }, { status: 503 });
+  }
   if (!rec) return Response.json({ error: "用户不存在" }, { status: 404 });
 
   /* 主档案删除此前未包 try/catch：存储通道故障抛裸 500（无 JSON 错误体），
    * 与同函数次级删除及 account 路由的包裹口径不一致 */
+  /* 邀请码索引：refCode 必须用删档案前读到的 rec.refCode——档案删掉后再按 email
+   * 读 users/ 只会得到 null，索引将永远残留（死码）。 */
+  const refCode = rec.refCode ?? null;
   try {
     await dbDelete(`users/${emailHash(email)}.json`, rec._sha ?? null);
   } catch {
     return Response.json({ error: "删除失败，稍后再试" }, { status: 502 });
   }
   // 邀请码索引指向已删账号会变成死码，一并清掉
-  await dropRefCode(email);
+  await dropRefCode(refCode);
   try {
     const dataFile = await dbGet(`data/${rec.userId}.json`, { encrypted: true });
     if (dataFile) await dbDelete(`data/${rec.userId}.json`, dataFile._sha ?? null);
@@ -54,6 +76,9 @@ export async function DELETE(req: NextRequest) {
   try {
     await dbDeleteDir(`versions/${rec.userId}`);
   } catch { /* 列目录失败不阻断 */ }
+  /* memory/（长期记忆）与 automations/（提醒 + 派发索引）一并清掉：
+   * 不清索引的话 cron/tick 会按 automations/_index.json 对已删账号照常到期发提醒邮件。 */
+  await purgePersonalData(rec.userId);
   return Response.json({ ok: true });
 }
 
@@ -61,7 +86,15 @@ export async function POST(req: NextRequest) {
   const denied = await requireAdmin(req);
   if (denied) return Response.json({ error: denied.error }, { status: denied.status });
 
-  const userFiles = await dbList("users");
+  /* dbList 在通道故障时 throw（db.ts 列目录各分支），不包就是 Next 兜底的非 JSON 500。
+   * members GET 的注释声称「与 admin/users 同口径落 503」——POST 这两处此前漏包，
+   * 与 DELETE 的包裹口径对齐补上。 */
+  let userFiles: { name: string; sha: string }[];
+  try {
+    userFiles = await dbList("users");
+  } catch {
+    return Response.json({ error: "用户数据库暂时不可用，稍后再试" }, { status: 503 });
+  }
   const users: Record<string, { userId: string; email: string; name: string; createdAt: string }> = {};
   /* 读取/解密失败此前静默跳过：损坏用户从列表整体消失，管理端分不清
    * 「加载失败」和「不存在/从未同步」。计数要回给 UI。 */
@@ -88,7 +121,12 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const dataFiles = await dbList("data");
+  let dataFiles: { name: string; sha: string }[];
+  try {
+    dataFiles = await dbList("data");
+  } catch {
+    return Response.json({ error: "用户数据库暂时不可用，稍后再试" }, { status: 503 });
+  }
   const rows: {
     email: string; name: string; createdAt: string; updatedAt: string;
     goals: { topic?: string; direction?: string }[]; knowledgeCount: number; booksCount: number; sessionsCount: number;

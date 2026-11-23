@@ -5,16 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, Card, Input } from "@/components/ui";
 import { useAuth, syncAfterLogin } from "@/lib/auth-client";
+import { safeNext } from "@/lib/safe-next";
 import { usePopText } from "@/lib/use-poptext";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 export type LoginMode = "login" | "register" | "reset";
-
-/* 登录后回跳目标：只认站内路径。反斜杠变体也要拦——WHATWG 把 /\evil.com 解析成 //evil.com */
-function safeNext(raw: string | null): string {
-  return raw && /^\/[^/\\]/.test(raw) ? raw : "/";
-}
 
 /* 条件字段展开/收起：grid 0fr→1fr 过渡高度，避免切模式时卡片突然长高/塌陷 */
 function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
@@ -51,6 +47,9 @@ function BrandPanel() {
           ref={elRef}
           className="pop-text font-brand min-h-[1.4em] leading-none"
           style={{ fontSize: "clamp(56px, 5vw, 76px)" }}
+          /* 与落地页同款（landing.tsx）：PopText 成功路径注入的是装饰性 span、
+           * 完成前 h1 无文本子节点——不加 aria-label，读屏听到的是空标题 */
+          aria-label="Mentora"
         >
           {/* PopText 加载失败时的纯文本兜底（成功路径无此节点，视觉不变） */}
           {failed && "Mentora"}
@@ -144,10 +143,12 @@ export function LoginForm({
     try {
       if (mode === "reset") {
         // 忘记密码：邮箱 + 管理员发放的一次性重置码 + 新密码；成功后回登录态，不自动签发会话
+        // 30s 硬超时：与 login/register 同族兜底，请求悬置时 busy 不能锁死整张表单
         const res = await fetch("/api/auth/reset-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: email.trim(), resetCode: invite.trim(), newPassword: password }),
+          signal: AbortSignal.timeout(30_000),
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(j.error || "重置失败");
@@ -207,6 +208,7 @@ export function LoginForm({
               <Collapse open={mode === "register"}>
                 <Input
                   className="mb-3"
+                  aria-label="怎么称呼你（可选）"
                   placeholder="怎么称呼你（可选）"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -215,30 +217,33 @@ export function LoginForm({
               </Collapse>
               <Input
                 type="email"
+                aria-label="邮箱"
                 placeholder="邮箱"
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
+                onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && submit()}
                 disabled={busy}
               />
               <Input
                 type="password"
                 className="mt-3"
+                aria-label={mode === "login" ? "密码" : "新密码"}
                 placeholder={mode === "login" ? "密码（至少 6 位）" : "新密码（至少 6 位）"}
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
+                onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && submit()}
                 disabled={busy}
               />
               <Collapse open={mode !== "login"}>
                 <div className="mt-3">
                   <Input
+                    aria-label={mode === "register" ? "激活码（必填）" : "重置码（必填）"}
                     placeholder={mode === "register" ? "激活码（必填）" : "重置码（必填）"}
                     value={invite}
                     onChange={(e) => setInvite(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && submit()}
+                    onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && submit()}
                     disabled={busy}
                   />
                   <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim/70">
@@ -251,10 +256,11 @@ export function LoginForm({
               <Collapse open={mode === "register"}>
                 <div className="mt-3">
                   <Input
+                    aria-label="邀请人码（可选）"
                     placeholder="邀请人码（可选）"
                     value={refCode}
                     onChange={(e) => setRefCode(e.target.value.toUpperCase())}
-                    onKeyDown={(e) => e.key === "Enter" && submit()}
+                    onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && submit()}
                     disabled={busy}
                   />
                   <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim/70">

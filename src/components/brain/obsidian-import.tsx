@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { collectMarkdownFiles, parseVault, type ParsedNote } from "@/lib/obsidian-import";
 import { useAppStore } from "@/lib/store";
@@ -24,15 +24,11 @@ export function ObsidianImport({
   const inputRef = useRef<HTMLInputElement>(null);
   const importKnowledge = useAppStore((s) => s.importKnowledge);
   /* safeStorage 把 QuotaExceededError 吞掉并派发 mentora:quota（这是有意的：写满不崩）。
-   * 所以导入的 catch 根本等不到配额异常——必须监听这个事件，否则「已导入 N 篇」是假成功。 */
-  const quotaHitRef = useRef(false);
-  useEffect(() => {
-    const onQuota = () => {
-      quotaHitRef.current = true;
-    };
-    window.addEventListener("mentora:quota", onQuota);
-    return () => window.removeEventListener("mentora:quota", onQuota);
-  }, []);
+   * 所以导入的 catch 根本等不到配额异常——必须在 importKnowledge 调用期间监听该事件，
+   * 否则「已导入 N 篇」是假成功。但事件是全 store 共用的：任何无关的 zustand persist
+   * 写失败都会派发它（store.ts safeStorage.setItem 不区分来源）。因此监听窗口只覆盖
+   * 本次 confirm 的同步写入，不能长期挂在组件挂载期——否则此前别处的一次配额失败
+   * 会让随后成功的小导入被误报「存储已满」。通用告警由 app-shell 的 onQuota 负责。 */
   const [parsing, setParsing] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [parsed, setParsed] = useState<ParsedNote[] | null>(null);
@@ -52,7 +48,11 @@ export function ObsidianImport({
     setParsing(true);
     setProgress({ done: 0, total: files.length });
     try {
-      const notes = await parseVault(files, (done, total) => setProgress({ done, total }));
+      /* parseVault 自带篇数/总字节预算（obsidian-import.ts PARSE_MAX_*）：超大库在这里
+       * 就会被截断而不是全量读进内存，truncated>0 时提示分批导入。 */
+      const { notes, truncated } = await parseVault(files, (done, total) =>
+        setProgress({ done, total })
+      );
       setParsed(notes);
       /* 默认勾选：体积小的目录全选；超大目录（如书籍 3.4MB）留给用户决定 */
       const agg = new Map<string, number>();
@@ -60,6 +60,11 @@ export function ObsidianImport({
       const picked = new Set<string>();
       for (const [d, chars] of agg) if ((chars * 2) / 1024 <= SOFT_LIMIT_KB / 4) picked.add(d);
       setPickedDomains(picked);
+      if (truncated > 0) {
+        toast.warning(
+          `库太大，本次只解析了 ${notes.length} 篇，还有 ${truncated} 篇未读取——先导入这批，再分批选子目录导入。`
+        );
+      }
     } catch {
       toast.error("解析失败，请重试。");
     } finally {
@@ -96,6 +101,14 @@ export function ObsidianImport({
     /* importKnowledge 是同步重活：先让一帧把 loading 画出来，否则 true/false
      * 同批合并、importing 永不渲染，按钮 loading 与 Modal 守卫都是死状态 */
     await new Promise((r) => setTimeout(r, 30));
+    /* 配额事件是全局通用的（store.ts 对所有 persist 写失败统一派发），不能长期挂监听。
+     * 只把本次导入的同步写盘窗口包起来：进入 confirm 时局部标记清零，写入期间命中才置位，
+     * 退出（含异常）一律摘掉监听。set() 同步触发 setItem → dispatchEvent，故窗口能捕获。 */
+    let quotaHit = false;
+    const onQuota = () => {
+      quotaHit = true;
+    };
+    window.addEventListener("mentora:quota", onQuota);
     try {
       const { added, skipped } = importKnowledge(
         selected.map((n) => ({
@@ -107,8 +120,7 @@ export function ObsidianImport({
           tags: n.tags,
         }))
       );
-      if (quotaHitRef.current) {
-        quotaHitRef.current = false;
+      if (quotaHit) {
         toast.error(
           `已导入 ${added} 篇，但本机存储已满——本地快照没写全，请先「导出备份」或改用「仅结构」再试。`
         );
@@ -122,6 +134,7 @@ export function ObsidianImport({
     } catch {
       toast.error("导入失败——笔记超出本地存储上限，取消勾选大目录或改用「仅结构」再试。");
     } finally {
+      window.removeEventListener("mentora:quota", onQuota);
       setImporting(false);
     }
   };
@@ -154,7 +167,8 @@ export function ObsidianImport({
           <div className="space-y-4">
             <p className="text-sm text-ink-dim">
               解析 <b className="text-ink">{parsed.length}</b> 篇，可导入{" "}
-              <b className="text-ink">{valid.length}</b> 篇（{parsed.length - valid.length} 篇因重名跳过）。
+              <b className="text-ink">{valid.length}</b> 篇（{parsed.length - valid.length} 篇跳过
+              ，原因见下方明细）。
               按目录勾选要带正文的部分；[[双链]] 会自动连成网。
             </p>
 

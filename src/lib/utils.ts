@@ -5,6 +5,25 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
+/* 「默认类仅兜底」合并，供 Skeleton 等需要可覆盖默认形状的组件使用。
+ * 背景：cn 只是 clsx（无 tailwind-merge），基类与调用方传入的同族类
+ * （如 rounded-lg 与 rounded-2xl）会同时保留在 class 里，胜负由 Tailwind 4
+ * 构建产物中样式的发射顺序（按类名字母序）决定而非调用意图——17 处
+ * Skeleton 调用方传的 rounded-2xl 就这样被基类 rounded-lg 静默覆盖
+ * （产物 CSS 里 .rounded-lg 排在 .rounded-2xl 之后）。
+ * 规则：调用方传了同族类（词元以前缀开头）时默认类整个不下发（彻底消除
+ * 同族冲突，且不再依赖发射顺序的运气）；没传才补默认类。带变体前缀
+ * （md:/hover: 等）的词元不算同族覆盖——它们与无条件默认类作用在不同条件下。 */
+export function skeletonClassName(className?: string): string {
+  const tokens = (className ?? "").trim().split(/\s+/).filter(Boolean);
+  return cn(
+    "animate-pulse",
+    tokens.some((t) => t.startsWith("rounded")) ? "" : "rounded-lg",
+    tokens.some((t) => t.startsWith("bg-")) ? "" : "bg-black/[0.06]",
+    ...tokens,
+  );
+}
+
 /* 资料"新近+实用优先、经典降权"的确定性排序(工程层,不 trusting 模型单独输出)。
  * kind 权重:官方/官方文档最高;年份越新分越高;evergreen 经典旧著排到最后作"经典补充"。 */
 const KIND_SCORE: Record<string, number> = {
@@ -65,6 +84,19 @@ function randomChars(n: number): string {
 
 export function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/* 本地日历日 key（YYYY-MM-DD）。
+ * ⚠️ 与 todayISO() 的 UTC 日**不是**同一个概念，别互换：学习日期（todayISO/
+ * addDays/掌握记录）全站按 UTC 日对齐，那是数据口径；本函数只用于「按本地
+ * 一天」的体验键（如提醒横幅当天已关闭 rem-banner-<日期>）。
+ * 不能用 toISOString()：UTC+8 的本地 0:00–8:00 期间 UTC 仍是前一天，关闭时
+ * 写入的是昨天的 key，本地 8 点后再加载就按「新的一天」重新弹出横幅。 */
+export function localDayKey(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 /* 纯 UTC 日历运算：学习日期（todayISO/masteredAt/quizLog.date）全部是 UTC 日，

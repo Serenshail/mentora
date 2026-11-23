@@ -3,6 +3,9 @@ import crypto from "node:crypto";
 import zlib from "node:zlib";
 import type Redis from "ioredis";
 import { logEvent } from "./config";
+import { remoteResponse, RemoteResponseBodyError } from "./remote-response";
+import { DbUnavailableError, type ConcurrentWriteDetails } from "./snapshot-types";
+import { joinChunks, parseChunkHeader, versionToken } from "./version-token";
 
 /* ============================================================
  * 存储层（已收口：上层只见 dbGet/dbPut/dbList/dbDelete）
@@ -88,11 +91,16 @@ export function hasHealthyRemoteDb(): boolean {
 /** 给 best-effort 的远端调用设硬预算：超时/失败立刻取降级值，不拖死请求。
  *  远端 KV 偶发变慢时（实测单次 D1 可撞满 5s×3 重试），限流/配额/吊销校验这类
  *  "失效也不该阻断功能"的检查绝不能让首字节等上十几秒——公网网关 15s 就会掐断长请求。 */
-export function withBudget<T>(p: Promise<T>, fallback: T, ms = 1200): Promise<T> {
-  return Promise.race([
+export async function withBudget<T>(p: Promise<T>, fallback: T, ms = 1200): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+  return await Promise.race([
     p.catch(() => fallback),
-    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+    new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); }),
   ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 async function withRetry(fn: () => Promise<Response>): Promise<Response> {
@@ -111,6 +119,7 @@ async function withRetry(fn: () => Promise<Response>): Promise<Response> {
       await res.text().catch(() => {});
     } catch (e) {
       recordNetResult(false); // 连接失败/超时：网络层问题，计入熔断
+      if (e instanceof RemoteResponseBodyError) throw e;
       lastErr = e;
     }
     if (attempt < RETRY_DELAYS.length) {
@@ -119,13 +128,6 @@ async function withRetry(fn: () => Promise<Response>): Promise<Response> {
   }
   if (statusFail) recordNetResult(false); // 持续 429/5xx 也要能开熔断，不能每个请求都陪跑满 4 尝试
   throw lastErr instanceof Error ? lastErr : new Error("网络错误");
-}
-
-/** 给 fetch 加硬超时（serverless 里连接挂起会吃满 maxDuration，用户端看到的是"卡死"） */
-function timed(): { signal: AbortSignal; done: () => void } {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REMOTE_FETCH_TIMEOUT_MS);
-  return { signal: ctrl.signal, done: () => clearTimeout(timer) };
 }
 
 /* ---------------- 主通道：Upstash Redis REST ---------------- */
@@ -138,14 +140,12 @@ async function upstash<T = unknown>(
   command: (string | number)[]
 ): Promise<{ result: T }> {
   const res = await withRetry(() => {
-    const { signal, done } = timed();
-    return fetch(UPSTASH_URL, {
+    return remoteResponse(UPSTASH_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
       body: JSON.stringify(command),
       cache: "no-store",
-      signal,
-    }).finally(done);
+    }, REMOTE_FETCH_TIMEOUT_MS);
   });
   if (!res.ok) {
     recordNetResult(false); // 服务逻辑失败同样计入熔断（如凭据错误时次次 4xx，不该每个请求都撞一遍）
@@ -183,7 +183,8 @@ async function upstashList(dir: string): Promise<string[]> {
     cursor = next;
     if (cursor === "0") break;
   }
-  return out;
+  if (cursor !== "0") throw new Error("目录扫描未完成，请稍后重试");
+  return [...new Set(out)];
 }
 
 async function upstashDelete(path: string): Promise<void> {
@@ -197,25 +198,29 @@ const CF_DB_ID = process.env.CLOUDFLARE_D1_DATABASE_ID || "";
 const CF_TOKEN = process.env.CLOUDFLARE_D1_API_TOKEN || "";
 const hasD1 = () => Boolean(CF_ACCOUNT && CF_DB_ID && CF_TOKEN);
 
-/** 冷启动懒建表：每个 isolate 只跑一次 */
+/** 冷启动懒建表：成功才缓存，失败即清空让下次调用重试（与 ensureAuxTable 同纪律）。
+ *  否则冷启动首触的一次网络抖动会把 rejected Promise 永久钉在本 isolate，
+ *  此后每次读写都撞同一个错误，直到进程回收。 */
 let d1Ready: Promise<void> | null = null;
 function d1Init(): Promise<void> {
-  d1Ready ??= (async () => {
+  if (d1Ready) return d1Ready;
+  const p: Promise<void> = (async () => {
     await d1Raw("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)", []);
   })();
-  return d1Ready;
+  d1Ready = p;
+  p.catch(() => { if (d1Ready === p) d1Ready = null; });
+  return p;
 }
 
-async function d1Raw<T = { k?: string; v?: string }>(sql: string, params: (string | number | null)[]): Promise<T[]> {
+type D1Query = { sql: string; params: (string | number | null)[] };
+async function d1Query<T>(query: D1Query | { batch: D1Query[] }): Promise<T[][]> {
   const res = await withRetry(() => {
-    const { signal, done } = timed();
-    return fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/d1/database/${CF_DB_ID}/query`, {
+    return remoteResponse(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/d1/database/${CF_DB_ID}/query`, {
       method: "POST",
       headers: { Authorization: `Bearer ${CF_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ sql, params }),
+      body: JSON.stringify(query),
       cache: "no-store",
-      signal,
-    }).finally(done);
+    }, REMOTE_FETCH_TIMEOUT_MS);
   });
   const j = (await res.json().catch(() => null)) as
     | { success?: boolean; errors?: { code?: number; message?: string }[]; result?: { results?: T[] }[] }
@@ -224,9 +229,14 @@ async function d1Raw<T = { k?: string; v?: string }>(sql: string, params: (strin
     recordNetResult(false); // 连上的 400（凭据/库 ID 错/语句拒绝）与断网同等对待：累计 2 次开熔断
     const why = j?.errors?.[0]?.message ?? `status ${res.status}`;
     // 带语句头部（我们自己的固定 SQL 文本）；绝不带参数——参数含邮箱等键路径，不该进日志
+    const sql = "sql" in query ? query.sql : query.batch[0].sql;
     throw new Error(`D1 请求失败（${res.status}）：${why.slice(0, 180)} [${sql.slice(0, 70)}]`);
   }
-  return j.result?.[0]?.results ?? [];
+  return j.result?.map((item) => item.results ?? []) ?? [];
+}
+
+async function d1Raw<T = { k?: string; v?: string }>(sql: string, params: D1Query["params"]): Promise<T[]> {
+  return (await d1Query<T>({ sql, params }))[0] ?? [];
 }
 
 /* D1 单条 SQL 有 1MB 上限，大值按块拆存：主行存 {"__chunks__":N}，块存 <path>#p0..#p(N-1) */
@@ -240,6 +250,59 @@ const PREFIX_LIKE = "SELECT k, v FROM kv WHERE substr(k, 1, ?) = ? ORDER BY k";
 const PREFIX_DELETE = "DELETE FROM kv WHERE k = ? OR substr(k, 1, ?) = ?";
 const PREFIX_DELETE_ONLY = "DELETE FROM kv WHERE substr(k, 1, ?) = ?";
 const prefixOf = (dir: string): [number, string] => [dir.length, dir];
+
+async function d1ReadSnapshot(path: string) {
+  await d1Init();
+  const [current] = await d1Raw("SELECT v FROM kv WHERE k = ?", [path]);
+  if (current?.v == null) return null;
+  if (!/^\{"__chunks__":\d+\}$/.test(current.v)) {
+    return { raw: current.v, token: JSON.stringify([current.v, null]) };
+  }
+  // Read the header and its chunks in the same SQLite statement.
+  const rows = await d1Raw("SELECT k, v FROM kv WHERE k = ? OR substr(k, 1, ?) = ?", [path, ...prefixOf(`${path}#p`)]);
+  const values = new Map(rows.map(({ k, v }) => [k, v]));
+  const header = values.get(path);
+  if (header == null) return null;
+  const count = Number(/^\{"__chunks__":(\d+)\}$/.exec(header)?.[1] ?? 0);
+  const parts = Array.from({ length: count }, (_, i) => values.get(`${path}#p${i}`));
+  if (parts.includes(undefined)) throw new Error("云端快照不完整");
+  return { raw: count ? parts.join("") : header, token: JSON.stringify([header, parts[0] ?? null]) };
+}
+
+async function d1WriteSnapshot(path: string, content: string, token: string | null) {
+  await d1Init();
+  const [header, first] = token ? JSON.parse(token) as [string, string | null] : [null, null];
+  if (content.length <= D1_CHUNK_SIZE && first === null) {
+    const rows = header === null
+      ? await d1Raw("INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO NOTHING RETURNING k", [path, content])
+      : await d1Raw("UPDATE kv SET v = ? WHERE k = ? AND v = ? RETURNING k", [content, path, header]);
+    if (!rows.length) throw new ConcurrentWriteError(path);
+    return;
+  }
+
+  // The transient marker gates every statement in the same D1 transaction.
+  // Keep the existing chunk layout so an earlier release can still read new snapshots.
+  const gate = `${path}#p-gate-${crypto.randomUUID()}`;
+  const parts: string[] = [];
+  if (content.length > D1_CHUNK_SIZE) {
+    for (let i = 0; i < content.length; i += D1_CHUNK_SIZE) parts.push(content.slice(i, i + D1_CHUNK_SIZE));
+  }
+  const queries: D1Query[] = [{
+    sql: "INSERT INTO kv(k, v) SELECT ?, '' WHERE (SELECT v FROM kv WHERE k = ?) IS ? AND (SELECT v FROM kv WHERE k = ?) IS ? RETURNING k",
+    params: [gate, path, header, `${path}#p0`, first],
+  }, {
+    sql: "DELETE FROM kv WHERE substr(k, 1, ?) = ? AND k <> ? AND EXISTS (SELECT 1 FROM kv WHERE k = ?)",
+    params: [...prefixOf(`${path}#p`), gate, gate],
+  }, ...parts.map((part, i) => ({
+    sql: "INSERT INTO kv(k, v) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM kv WHERE k = ?)",
+    params: [`${path}#p${i}`, part, gate],
+  })), {
+    sql: "INSERT INTO kv(k, v) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM kv WHERE k = ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+    params: [path, parts.length ? JSON.stringify({ __chunks__: parts.length }) : content, gate],
+  }, { sql: "DELETE FROM kv WHERE k = ?", params: [gate] }];
+  const results = await d1Query<{ k: string }>({ batch: queries });
+  if (!results[0]?.length) throw new ConcurrentWriteError(path);
+}
 
 async function d1Get(path: string): Promise<string | null> {
   await d1Init();
@@ -323,6 +386,17 @@ async function d1PutIfAbsent(path: string, content: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/** 乐观并发控制失败：写入被拒，调用方必须提示冲突并让用户重新预览/合并。 */
+export class ConcurrentWriteError extends Error {
+  constructor(
+    public readonly path: string,
+    public readonly details?: ConcurrentWriteDetails
+  ) {
+    super(`并发写冲突：${path} 已被其他会话/设备修改`);
+    this.name = "ConcurrentWriteError";
+  }
+}
+
 /* ---------------- 通道 3：华为云 RDS PostgreSQL（huawei 主数据真源，HW-T-01/02） ----------------
  * 免分块：PG TEXT 无 1MB 限制，大库单行直存；加密语义与 D1/Upstash 完全一致（密文透传）。
  * 懒加载：未配置 DATABASE_URL 时不加载 pg 驱动，旧通道零感知。 */
@@ -330,7 +404,15 @@ async function d1PutIfAbsent(path: string, content: string): Promise<boolean> {
 const DATABASE_URL = process.env.DATABASE_URL || "";
 const hasRds = () => Boolean(DATABASE_URL);
 
-type PgPool = { query: (sql: string, params?: (string | number | null)[]) => Promise<{ rows: Record<string, unknown>[] }> };
+type PgQueryResult = { rows: Record<string, unknown>[] };
+type PgClient = {
+  query: (sql: string, params?: (string | number | null)[]) => Promise<PgQueryResult>;
+  release: (destroy?: boolean) => void;
+};
+type PgPool = {
+  query: (sql: string, params?: (string | number | null)[]) => Promise<PgQueryResult>;
+  connect: () => Promise<PgClient>;
+};
 let rdsPoolInst: PgPool | null = null;
 async function rdsPool(): Promise<PgPool> {
   if (!rdsPoolInst) {
@@ -345,14 +427,17 @@ async function rdsPool(): Promise<PgPool> {
   return rdsPoolInst;
 }
 
-/** 冷启动懒建表：每个进程只跑一次 */
+/** 冷启动懒建表：成功才缓存，失败即清空让下次调用重试（同 d1Init/ensureAuxTable） */
 let rdsReady: Promise<void> | null = null;
 function rdsInit(): Promise<void> {
-  rdsReady ??= (async () => {
+  if (rdsReady) return rdsReady;
+  const p: Promise<void> = (async () => {
     const pool = await rdsPool();
     await pool.query("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
   })();
-  return rdsReady;
+  rdsReady = p;
+  p.catch(() => { if (rdsReady === p) rdsReady = null; });
+  return p;
 }
 
 async function rdsQuery<T = { k?: string; v?: string }>(sql: string, params: (string | number | null)[] = []): Promise<T[]> {
@@ -368,6 +453,71 @@ async function rdsQuery<T = { k?: string; v?: string }>(sql: string, params: (st
   }
 }
 
+/* ============ RDS 事务外壳（T-ICT-006 / 007a） ============
+ * 快照写入必须在**同一专用连接**上完成：pool.query 每次另取连接，
+ * 「BEGIN」与后续语句可能落在不同连接上，事务形同虚设。
+ * 事务内禁止调用 rdsQuery（它会再次向池取连接），测试用 pg_stat_activity 断言。 */
+
+export type RdsTxClient = PgClient;
+
+function txTimeout(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+function sqlStateOf(e: unknown): string {
+  const code = e && typeof e === "object" ? (e as { code?: unknown }).code : undefined;
+  return typeof code === "string" ? code : "";
+}
+
+async function txOnce<T>(path: string, fn: (c: RdsTxClient) => Promise<T>): Promise<T> {
+  await rdsInit();
+  const pool = await rdsPool();
+  const client = await pool.connect();
+  let destroy = false;
+  try {
+    await client.query("BEGIN");
+    // SET LOCAL 必须在事务内；时间参数来自环境变量并强制为整数，不接受拼接任意文本
+    await client.query(`SET LOCAL lock_timeout = ${txTimeout("RDS_LOCK_TIMEOUT_MS", 2000)}`);
+    await client.query(`SET LOCAL statement_timeout = ${txTimeout("RDS_STATEMENT_TIMEOUT_MS", 8000)}`);
+    // 路径级互斥：事务结束自动释放；不同 path 互不阻塞
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [path]);
+    const out = await fn(client);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      destroy = true;
+    }
+    throw e;
+  } finally {
+    client.release(destroy);
+  }
+}
+
+/** 在专用连接上执行一次事务；序列化失败重试 1 次，其余错误映射为业务错误。 */
+export async function rdsTx<T>(path: string, fn: (c: RdsTxClient) => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await txOnce(path, fn);
+    } catch (e) {
+      if (e instanceof ConcurrentWriteError || e instanceof DbUnavailableError) throw e;
+      if (e instanceof Error && e.name === "SnapshotIncompleteError") throw e;
+      const code = sqlStateOf(e);
+      if (attempt === 0 && (code === "40001" || code === "40P01")) continue;
+      if (code === "55P03") {
+        throw new ConcurrentWriteError(path, { reason: "lock-timeout", currentVersion: null });
+      }
+      if (!code || code.startsWith("08") || ["57P01", "57P02", "57P03", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"].includes(code)) {
+        throw new DbUnavailableError(`RDS 事务不可用：${code || "connection"}`);
+      }
+      throw e;
+    }
+  }
+}
+
 async function rdsGet(path: string): Promise<string | null> {
   await rdsInit();
   const rows = await rdsQuery<{ v?: string }>("SELECT v FROM kv WHERE k = $1", [path]);
@@ -375,14 +525,84 @@ async function rdsGet(path: string): Promise<string | null> {
   return v == null ? null : v;
 }
 
-async function rdsPut(path: string, content: string): Promise<void> {
+/** RDS 快照读取：识别历史分块形态（`{"__chunks__":N}` + `#p0..`），返回逻辑密文。
+ *  一条查询取齐主行与块行；缺块抛 SnapshotIncompleteError（接口 503），不返回部分内容。 */
+async function rdsGetLogical(path: string): Promise<string | null> {
+  await rdsInit();
+  const safe = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rows = await rdsQuery<{ k?: string; v?: string }>(
+    "SELECT k, v FROM kv WHERE k = $1 OR (k LIKE $2 AND k ~ $3)",
+    [path, `${path}#p%`, `^${safe}#p[0-9]+$`]
+  );
+  let header: string | null = null;
+  const parts = new Map<number, string>();
+  const prefix = `${path}#p`;
+  for (const row of rows) {
+    if (typeof row.k !== "string" || typeof row.v !== "string") continue;
+    if (row.k === path) {
+      header = row.v;
+      continue;
+    }
+    if (!row.k.startsWith(prefix)) continue;
+    const idx = row.k.slice(prefix.length);
+    if (/^[0-9]+$/.test(idx)) parts.set(Number(idx), row.v);
+  }
+  if (header === null) return null;
+  const declared = parseChunkHeader(header);
+  if (declared === null) return header;
+  return joinChunks(path, declared, [...Array(declared).keys()].map((i) => parts.get(i)));
+}
+
+/** 读一行的**逻辑内容令牌**（md5 of 逻辑密文），供乐观并发控制使用。
+ *  分块形态先拼接再计算，保证与 commitSnapshot 的令牌口径一致。 */
+export async function rdsGetSha(path: string): Promise<string | null> {
+  const raw = await rdsGetLogical(path);
+  return raw === null ? null : versionToken(raw);
+}
+
+/**
+ * 写入一行 KV。
+ *
+ * `expectSha`（可选）：乐观并发控制。给出时要求库里的**当前值哈希**与它一致才写入，
+ * 否则抛 `ConcurrentWriteError`。
+ *
+ * 为什么必须做在服务端（复核 REVIEW-TENCENT §3）：/api/sync 是整份快照覆盖，
+ * 客户端「GET 后比对再写」在跨设备场景没有原子性——两个设备都读到同一版本、
+ * 都认为自己是基于最新版，后写的那个静默覆盖前者。原实现完全忽略 sha 参数，
+ * 等于 PG 通道上**没有任何并发控制**。
+ *
+ * 实现：用 `WHERE kv.v = $expected` 做条件 UPDATE（PG 单语句原子），
+ * 影响 0 行即说明被别人改过。
+ */
+async function rdsPut(path: string, content: string, expectSha?: string | null): Promise<void> {
   await rdsInit();
   // RDS 无 1MB 语句限制（PG TEXT 上限 1GB），单行直存；若从 D1 迁入的块行遗留，写入主行后清理
-  await rdsQuery("DELETE FROM kv WHERE substr(k, 1, $1) = $2", [`${path}#p`.length, `${path}#p`]);
-  await rdsQuery(
-    "INSERT INTO kv (k, v) VALUES ($1, $2) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
-    [path, content]
+  if (expectSha === undefined) {
+    /* 无条件写（内部路径：迁移/初始化/归档，调用方明确知道自己在覆盖） */
+    await rdsQuery(
+      "INSERT INTO kv (k, v) VALUES ($1, $2) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+      [path, content]
+    );
+    await rdsQuery("DELETE FROM kv WHERE substr(k, 1, $1) = $2", [`${path}#p`.length, `${path}#p`]);
+    return;
+  }
+  if (expectSha === null) {
+    /* 期望「不存在」：只有空表时才插入（ON CONFLICT DO NOTHING + 检查影响行数） */
+    const rows = await rdsQuery<{ k?: string }>(
+      "INSERT INTO kv (k, v) VALUES ($1, $2) ON CONFLICT(k) DO NOTHING RETURNING k",
+      [path, content]
+    );
+    if (rows.length === 0) throw new ConcurrentWriteError(path);
+    await rdsQuery("DELETE FROM kv WHERE substr(k, 1, $1) = $2", [`${path}#p`.length, `${path}#p`]);
+    return;
+  }
+  /* 期望「当前值是 expectSha」：条件更新，影响 0 行 = 被并发改过 */
+  const updated = await rdsQuery<{ k?: string }>(
+    "UPDATE kv SET v = $2 WHERE k = $1 AND md5(v) = $3 RETURNING k",
+    [path, content, expectSha]
   );
+  if (updated.length === 0) throw new ConcurrentWriteError(path);
+  await rdsQuery("DELETE FROM kv WHERE substr(k, 1, $1) = $2", [`${path}#p`.length, `${path}#p`]);
 }
 
 async function rdsList(dir: string): Promise<string[]> {
@@ -480,12 +700,17 @@ async function dcsList(dir: string): Promise<string[]> {
   return dcsCmd(async (r) => {
     let out: string[] = [];
     let cursor = "0";
-    do {
+    /* 最多 60 轮兜底（与 upstashList 同口径）：代理层/实例故障时游标可能永不为 "0"，
+     * 无界 do/while 会让本调用每轮一次网络往返无限循环，直到函数级超时——cron/tick
+     * 与 rl/ 限流路径都会被拖满 maxDuration。 */
+    for (let guard = 0; guard < 60; guard++) {
       const [c, keys] = await r.scan(cursor, "MATCH", `${dir}/*.json`, "COUNT", 200);
       cursor = c;
       out = out.concat(keys);
-    } while (cursor !== "0");
-    return out.map((k) => k.slice(dir.length + 1));
+      if (cursor === "0") break;
+    }
+    if (cursor !== "0") throw new Error("目录扫描未完成，请稍后重试");
+    return [...new Set(out)].map((k) => k.slice(dir.length + 1));
   }, "列目录");
 }
 
@@ -500,8 +725,7 @@ const TOKEN = process.env.GITHUB_DB_TOKEN || "";
 
 async function ghApi(path: string, method: string, body?: unknown): Promise<{ status: number; json: unknown }> {
   const res = await withRetry(() => {
-    const { signal, done } = timed();
-    return fetch(`https://api.github.com/repos/${REPO}/contents/${path}`, {
+    return remoteResponse(`https://api.github.com/repos/${REPO}/contents/${path}`, {
       method,
       headers: {
         Authorization: `token ${TOKEN}`,
@@ -511,8 +735,7 @@ async function ghApi(path: string, method: string, body?: unknown): Promise<{ st
       },
       body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
-      signal,
-    }).finally(done);
+    }, REMOTE_FETCH_TIMEOUT_MS);
   });
   let json: unknown = null;
   try {
@@ -567,6 +790,12 @@ function routeOf(path: string): RoutedChannel {
   }
   if (hasUpstash()) return "upstash";
   if (hasD1()) return "d1";
+  /* auto 兜底 GitHub：凭据缺失必须 fail-fast，绝不静默当成"文件不存在"。
+   * 空 REPO 会让 ghApi 去打 repos//contents/... 恒 404，而 dbGet/dbList 把 404
+   * 当"没有这个文件/目录"返回 null/[]：verifySession 把在线用户判成"账号已注销"、
+   * 登录判"账号不存在"、register 的重复邮箱检测失效——读全是静默假象，写却大声抛错，
+   * 故障不对称且极难定位。与显式 github 模式同纪律。 */
+  if (!REPO || !TOKEN) throw new Error("无可用数据通道：未配置 Upstash/D1，且 GITHUB_DB_REPO/GITHUB_DB_TOKEN 缺失");
   return "github";
 }
 
@@ -583,7 +812,7 @@ export function dbChannel(): string {
 /* ---------------- 统一接口（上层只用这四个） ---------------- */
 
 /** 读（404/null 返回 null）；加密内容自动解密 */
-export async function dbGet<T>(path: string, opts: { encrypted?: boolean } = {}): Promise<(T & { _sha?: string }) | null> {
+export async function dbGet<T>(path: string, opts: { encrypted?: boolean; forSnapshotWrite?: boolean } = {}): Promise<(T & { _sha?: string }) | null> {
   const ch = routeOf(path);
 
   if (ch === "upstash") {
@@ -594,6 +823,12 @@ export async function dbGet<T>(path: string, opts: { encrypted?: boolean } = {})
   }
 
   if (ch === "d1") {
+    if (path.startsWith("data/")) {
+      const snapshot = await d1ReadSnapshot(path);
+      if (!snapshot) return null;
+      const value = opts.encrypted ? decrypt<T>(snapshot.raw) : (JSON.parse(snapshot.raw) as T);
+      return opts.forSnapshotWrite ? { ...value, _sha: snapshot.token } : value as T & { _sha?: string };
+    }
     const raw = await d1Get(path);
     if (raw == null) return null;
     const value = opts.encrypted ? decrypt<T>(raw) : (JSON.parse(raw) as T);
@@ -601,10 +836,12 @@ export async function dbGet<T>(path: string, opts: { encrypted?: boolean } = {})
   }
 
   if (ch === "rds") {
-    const raw = await rdsGet(path);
+    const raw = await rdsGetLogical(path);
     if (raw == null) return null;
     const value = opts.encrypted ? decrypt<T>(raw) : (JSON.parse(raw) as T);
-    return value as T & { _sha?: string };
+    return opts.forSnapshotWrite
+      ? { ...value, _sha: versionToken(raw) }
+      : value as T & { _sha?: string };
   }
 
   if (ch === "dcs") {
@@ -627,7 +864,7 @@ export async function dbGet<T>(path: string, opts: { encrypted?: boolean } = {})
 export async function dbPut<T>(
   path: string,
   value: T,
-  opts: { encrypted?: boolean; sha?: string | null; overwriteOnConflict?: boolean } = {}
+  opts: { encrypted?: boolean; sha?: string | null; overwriteOnConflict?: boolean; compareSnapshot?: boolean } = {}
 ): Promise<{ sha: string }> {
   const content = opts.encrypted ? encrypt(value) : JSON.stringify(value, null, 1);
   const ch = routeOf(path);
@@ -638,12 +875,15 @@ export async function dbPut<T>(
   }
 
   if (ch === "d1") {
-    await d1Put(path, content);
+    if (opts.compareSnapshot) await d1WriteSnapshot(path, content, opts.sha ?? null);
+    else await d1Put(path, content);
     return { sha: "d1" };
   }
 
   if (ch === "rds") {
-    await rdsPut(path, content);
+    /* 只有调用方显式给了 overwriteOnConflict 才无条件写；否则按 sha 做乐观并发控制 */
+    const expect = opts.compareSnapshot ? (opts.sha ?? null) : opts.overwriteOnConflict ? undefined : opts.sha;
+    await rdsPut(path, content, expect);
     return { sha: "rds" };
   }
 
@@ -795,6 +1035,13 @@ export function hasRemoteDb(): boolean {
   return hasUpstash() || hasD1();
 }
 
+/* events 表 DDL 收口（原先在 dbEventSave / dbEventStats / dbReadingEvents 各复制一份，
+ * D1 3 份、RDS 3 份，且其中一份列序还不同）。ensureAuxTable 按 key 记忆化后，新进程里
+ * 先跑到哪个函数就用哪份建表、其余份 CREATE IF NOT EXISTS 静默 no-op——任何一处列序改动
+ * 都会让表结构随冷启动路径随机分叉。收成单一常量；INSERT 本就显式列名，统一列序安全。 */
+const EVENTS_DDL_D1 = "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT DEFAULT (datetime('now')))";
+const EVENTS_DDL_RDS = "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))";
+
 /* events/feedback 惰性建表 memo（kv 表 d1Ready/rdsReady 同款纪律）：每进程只跑一次 DDL。
  * 埋点/反馈是高频路径，每次 INSERT 前都跑一遍 CREATE TABLE 是双倍往返与目录锁竞争；
  * 失败不缓存，下次调用重试。 */
@@ -861,7 +1108,7 @@ export async function dbEventSave(rec: {
       if (!hasRds()) return;
       await ensureAuxTable("rds:events", () =>
         rdsQuery(
-          "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+          EVENTS_DDL_RDS,
           []
         )
       );
@@ -875,7 +1122,7 @@ export async function dbEventSave(rec: {
     await ensureAuxTable("d1:events", async () => {
       await d1Init();
       await d1Raw(
-        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT DEFAULT (datetime('now')))",
+        EVENTS_DDL_D1,
         []
       );
     });
@@ -936,7 +1183,7 @@ export async function dbEventStats(): Promise<{
       if (!hasRds()) return null;
       await ensureAuxTable("rds:events", () =>
         rdsQuery(
-          "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+          EVENTS_DDL_RDS,
           []
         )
       );
@@ -955,7 +1202,7 @@ export async function dbEventStats(): Promise<{
       await ensureAuxTable("d1:events", async () => {
         await d1Init();
         await d1Raw(
-          "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT DEFAULT (datetime('now')))",
+          EVENTS_DDL_D1,
           []
         );
       });
@@ -976,9 +1223,22 @@ export async function dbEventStats(): Promise<{
     for (const r of funnelRows) if (r.name in funnel) funnel[r.name] = Number(r.n) || 0;
 
     return { funnel, chatUsage: aggregateChatUsage(propsList) };
-  } catch {
+  } catch (e) {
+    /* 折成 null 前先留痕：否则远端库瞬时故障与「未配置通道」在调用方无法区分，
+     * 事后也无法从日志归因（错误信息只进服务端日志，不含查询参数/PII）。 */
+    logEvent({
+      route: "db",
+      ev: "event-stats-failed",
+      msg: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+    });
     return null;
   }
+}
+
+/** events 通道是否已配置（不探测连通性）：dbEventStats 返回 null 时，调用方用它区分
+ * 「未配置任何事件存储通道」与「配置了但远端库故障」——两种失败的处置完全不同。 */
+export function eventStatsChannelReady(): boolean {
+  return dbChannelEnv() === "huawei" ? hasRds() : hasD1();
 }
 
 /** v26.1 G5：拉取阅读实验原始事件（reading-metrics 专用）——通道分派同 dbEventStats。
@@ -991,7 +1251,7 @@ export async function dbReadingEvents(days: number): Promise<
       if (!hasRds()) return null;
       await ensureAuxTable("rds:events", () =>
         rdsQuery(
-          "CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, name TEXT, account TEXT, path TEXT, props TEXT, created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')))",
+          EVENTS_DDL_RDS,
           []
         )
       );
@@ -1004,7 +1264,7 @@ export async function dbReadingEvents(days: number): Promise<
     await ensureAuxTable("d1:events", async () => {
       await d1Init();
       await d1Raw(
-        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, account TEXT, props TEXT, path TEXT, created_at TEXT DEFAULT (datetime('now')))",
+        EVENTS_DDL_D1,
         []
       );
     });

@@ -11,7 +11,7 @@
     </view>
 
     <!-- 开新对话：主卡 -->
-    <view class="hero card-tap" bindtap="openPick" hover-class="none">
+    <view class="hero card-tap" bindtap="openPick" hover-class="none" aria-role="button" aria-label="开新对话">
       <view class="hero-glow"></view>
       <view class="hero-kicker">
         <view class="dot dot-accent"></view>
@@ -28,7 +28,7 @@
       </view>
     </view>
 
-    <view wx:if="{{sessions.length === 0}}" class="card empty" style="margin-top: 24rpx">
+    <view wx:if="{{sessions.length === 0 && !booting}}" class="card empty" style="margin-top: 24rpx">
       <view class="empty-title">还没有对话</view>
       <view class="empty-sub">问具体的、有代价的问题。泛泛而谈拿不到有用的判断。</view>
     </view>
@@ -36,7 +36,15 @@
     <block wx:if="{{sessions.length}}">
       <view class="label" style="margin: 40rpx 0 16rpx">最近</view>
       <view class="list">
-        <view wx:for="{{sessions}}" wx:key="id" class="item" data-id="{{item.id}}" bindtap="openSession">
+        <view
+          wx:for="{{sessions}}"
+          wx:key="id"
+          class="item"
+          data-id="{{item.id}}"
+          bindtap="openSession"
+          aria-role="button"
+          aria-label="打开会话 {{item.title}}，{{item.count}} 条"
+        >
           <view wx:if="{{item.roundtable}}" class="item-icon">◍</view>
           <view wx:else class="avatar" style="width: 76rpx; height: 76rpx">
             <view class="avatar-fallback" style="width: 100%; height: 100%; font-size: 30rpx">{{item.initial}}</view>
@@ -59,13 +67,25 @@
 
 <!-- ==================== 选人 ==================== -->
 <block wx:if="{{view === 'pick'}}">
-  <nav-bar title="找谁" />
+  <nav-bar title="找谁" bind:back="back" host-nav="{{true}}" />
   <view class="page">
     <view class="segmented" style="margin-top: 8rpx">
-      <view class="segmented-item {{pickMode === 'single' ? 'segmented-item-on' : ''}}" data-mode="single" bindtap="switchPickMode">
+      <view
+        class="segmented-item {{pickMode === 'single' ? 'segmented-item-on' : ''}}"
+        data-mode="single"
+        bindtap="switchPickMode"
+        aria-role="button"
+        aria-label="{{pickMode === 'single' ? '当前：单独聊' : '单独聊'}}"
+      >
         单独聊
       </view>
-      <view class="segmented-item {{pickMode === 'roundtable' ? 'segmented-item-on' : ''}}" data-mode="roundtable" bindtap="switchPickMode">
+      <view
+        class="segmented-item {{pickMode === 'roundtable' ? 'segmented-item-on' : ''}}"
+        data-mode="roundtable"
+        bindtap="switchPickMode"
+        aria-role="button"
+        aria-label="{{pickMode === 'roundtable' ? '当前：圆桌' : '圆桌'}}"
+      >
         圆桌
       </view>
     </view>
@@ -81,6 +101,8 @@
           class="seat {{picked[item.id] ? 'seat-on' : ''}}"
           data-id="{{item.id}}"
           bindtap="toggleSeat"
+          aria-role="button"
+          aria-label="{{item.name}}，{{item.tag}}{{picked[item.id] ? '，已选' : ''}}"
         >
           <image class="seat-img" src="/images/personas/{{item.id}}.jpg" mode="aspectFill" wx:if="{{item.hasPhoto}}" />
           <view wx:else class="seat-img avatar-fallback">{{item.initial}}</view>
@@ -99,6 +121,8 @@
           class="seat {{picked[item.id] ? 'seat-on' : ''}}"
           data-id="{{item.id}}"
           bindtap="toggleSeat"
+          aria-role="button"
+          aria-label="{{item.name}}，{{item.tag}}{{picked[item.id] ? '，已选' : ''}}"
         >
           <view class="seat-img avatar-fallback">{{item.initial}}</view>
           <view class="seat-name ellipsis">{{item.name}}</view>
@@ -126,9 +150,9 @@
 
 <!-- ==================== 对话 ==================== -->
 <block wx:if="{{view === 'chat'}}">
-  <nav-bar title="{{session.title}}" />
+  <nav-bar title="{{session.title}}" bind:back="onNavBack" host-nav="{{true}}" />
   <view class="chat-wrap" style="--nav-h: {{navH || '64px'}}">
-    <scroll-view scroll-y class="chat-scroll">
+    <scroll-view scroll-y class="chat-scroll" scroll-into-view="{{toBottom}}" scroll-with-animation>
       <view class="chat">
         <view wx:if="{{chatView.length === 0 && !busy}}" class="empty">
           <view class="empty-title">把问题放桌上</view>
@@ -162,14 +186,23 @@
               <view wx:if="{{item.take}}" class="rt-take">{{item.take}}</view>
             </view>
           </view>
+          <!-- 页面内停止入口：圆桌整链是真实计费的串行调用，离开页面不应是唯一的中止手势 -->
+          <view class="row gap-8" style="margin-top: 14rpx">
+            <text class="link" bindtap="stopChat" aria-role="button" aria-label="停止本轮圆桌">停止本轮</text>
+          </view>
         </view>
 
         <view wx:if="{{busy && (!rtSeats.length || rtPhase === 'host')}}" class="msg msg-in">
           <view class="card-flat" style="max-width: 100%">
             <template is="md-blocks" data="{{blocks: rtPhase === 'host' ? rtHostBlocks : streamBlocks}}" />
-            <view class="row" style="margin-top: 10rpx"><view class="caret"></view></view>
+            <view class="row gap-8" style="margin-top: 10rpx">
+              <view class="caret"></view>
+              <text class="link" bindtap="stopChat" aria-role="button" aria-label="停止生成">停止</text>
+            </view>
           </view>
         </view>
+
+        <view id="chat-bottom" style="height: 2rpx"></view>
       </view>
     </scroll-view>
 
@@ -184,7 +217,7 @@
         bindconfirm="send"
         disabled="{{busy}}"
       />
-      <view class="composer-send {{input && !busy ? '' : 'disabled'}}" bindtap="{{input && !busy ? 'send' : ''}}">↑</view>
+      <view class="composer-send {{input && !busy ? '' : 'disabled'}}" bindtap="{{input && !busy ? 'send' : ''}}" aria-role="button" aria-label="发送">↑</view>
     </view>
   </view>
 </block>

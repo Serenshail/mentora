@@ -19,8 +19,18 @@
     </view>
   </view>
 
+  <!-- ===== 目录占位：先展开今天的细节，再谈学习 ===== -->
+  <view wx:if="{{day.stub}}" class="card" style="margin-top: 24rpx">
+    <view class="empty-title">今天的细节还没展开</view>
+    <view class="empty-sub">目录只排了标题与知识点。展开后会有：资料、方法、讲义与验收题（约半分钟）。</view>
+    <button class="btn btn-ink" style="margin: 32rpx auto 0; width: 70%" bindtap="expandDetail" loading="{{detailBusy}}">
+      {{detailBusy ? "正在展开…" : "展开今天的计划"}}
+    </button>
+  </view>
+
   <!-- ===== 迁移题真门：这才是现在唯一该做的事 ===== -->
-  <view wx:if="{{day.pendingUnlock}}" class="hero" style="background: #047857">
+  <!-- 绿底走 ok 色令牌（app.wxss 中定义）：主题/深色模式改造时不再留下孤岛色 -->
+  <view wx:if="{{day.pendingUnlock}}" class="hero" style="background: var(--ok)">
     <view class="hero-kicker" style="color: rgba(255,255,255,.7)">
       <view class="dot" style="background: #fff"></view>
       还差最后一步
@@ -37,26 +47,52 @@
         bindinput="onGateInput"
         maxlength="2000"
       />
-      <button class="btn btn-ink btn-block" style="margin-top: 20rpx" bindtap="commitTransfer">提交，完成过关</button>
+      <!-- 空答案的提交此前静默 return（无反馈无禁用态）：对齐同页提交评分按钮的
+           disabled 视觉态 + bindtap 门控；纯空白输入由 commitTransfer 的 toast 兜住 -->
+      <button
+        class="btn btn-ink btn-block {{gateAnswer ? '' : 'disabled'}}"
+        style="margin-top: 20rpx"
+        bindtap="{{gateAnswer ? 'commitTransfer' : ''}}"
+        aria-role="button"
+        aria-label="{{gateAnswer ? '提交，完成过关' : '先写下你的回答再提交'}}"
+      >提交，完成过关</button>
     </view>
   </view>
 
   <!-- ===== 三段：讲义 / 答疑 / 验收 ===== -->
   <view wx:if="{{!day.stub}}" class="segmented sticky-seg">
-    <view class="segmented-item {{tab === 'lesson' ? 'segmented-item-on' : ''}}" data-tab="lesson" bindtap="setTab">讲义</view>
-    <view class="segmented-item {{tab === 'qa' ? 'segmented-item-on' : ''}}" data-tab="qa" bindtap="setTab">答疑</view>
-    <view class="segmented-item {{tab === 'quiz' ? 'segmented-item-on' : ''}}" data-tab="quiz" bindtap="setTab">验收</view>
+    <view
+      class="segmented-item {{tab === 'lesson' ? 'segmented-item-on' : ''}}"
+      data-tab="lesson"
+      bindtap="setTab"
+      aria-role="button"
+      aria-label="{{tab === 'lesson' ? '当前：讲义' : '讲义'}}"
+    >讲义</view>
+    <view
+      class="segmented-item {{tab === 'qa' ? 'segmented-item-on' : ''}}"
+      data-tab="qa"
+      bindtap="setTab"
+      aria-role="button"
+      aria-label="{{tab === 'qa' ? '当前：答疑' : '答疑'}}"
+    >答疑</view>
+    <view
+      class="segmented-item {{tab === 'quiz' ? 'segmented-item-on' : ''}}"
+      data-tab="quiz"
+      bindtap="setTab"
+      aria-role="button"
+      aria-label="{{tab === 'quiz' ? '当前：验收' : '验收'}}"
+    >验收</view>
   </view>
 
   <!-- ---------- 讲义 ---------- -->
   <block wx:if="{{!day.stub && tab === 'lesson'}}">
     <view wx:if="{{lessonBlocks.length}}" class="card">
       <template is="md-blocks" data="{{blocks: lessonBlocks}}" />
-      <view wx:if="{{links.length}}" class="lesson-links" bindtap="copyAllLinks">
+      <view wx:if="{{links.length}}" class="lesson-links" bindtap="copyAllLinks" aria-role="button" aria-label="复制讲义里的全部链接">
         <text class="tiny flex-1">讲义里有 {{links.length}} 条链接</text>
         <text class="link">复制全部</text>
       </view>
-      <view wx:if="{{!readOnly}}" class="less-regen" bindtap="genLesson">重新生成讲义</view>
+      <view wx:if="{{!readOnly}}" class="less-regen" bindtap="genLesson" aria-role="button" aria-label="重新生成讲义，现有讲义会被覆盖">重新生成讲义</view>
     </view>
 
     <view wx:elif="{{lessonBusy}}" class="card">
@@ -64,6 +100,8 @@
       <view class="row gap-12" style="margin-top: 18rpx">
         <view class="caret"></view>
         <text class="thinking">正在写，长文约 40-90 秒</text>
+        <!-- 页面内停止入口：真实计费的 BYOK 调用，离开页面不应是唯一的中止手势 -->
+        <text class="link" bindtap="stopLesson" aria-role="button" aria-label="停止生成讲义">停止</text>
       </view>
     </view>
 
@@ -76,7 +114,7 @@
     <view wx:if="{{resources.length}}" class="sec-sm">
       <view class="label" style="margin: 0 0 14rpx">资料</view>
       <view class="list">
-        <view wx:for="{{resources}}" wx:key="_i" class="item" data-url="{{item.url}}" bindtap="copyLink">
+        <view wx:for="{{resources}}" wx:key="_i" class="item" data-url="{{item.url}}" bindtap="copyLink" aria-role="button" aria-label="复制资料链接：{{item.title}}">
           <view class="flex-1">
             <view class="row gap-8">
               <view class="badge badge-dim">{{item.kindLabel}}</view>
@@ -106,9 +144,14 @@
       <view wx:if="{{qaBusy}}" class="msg msg-in">
         <view class="card-flat" style="max-width: 100%">
           <template is="md-blocks" data="{{blocks: qaStreamBlocks}}" />
-          <view class="row gap-8" style="margin-top: 8rpx"><view class="caret"></view></view>
+          <view class="row gap-12" style="margin-top: 8rpx">
+            <view class="caret"></view>
+            <text class="link" bindtap="stopQa" aria-role="button" aria-label="停止生成回答">停止</text>
+          </view>
         </view>
       </view>
+      <!-- 答疑自动滚底锚点（book/council 同诉求；此区在页面流里，走 pageScrollTo） -->
+      <view id="qa-bottom" style="height: 2rpx"></view>
     </view>
   </block>
 
@@ -163,9 +206,15 @@
         class="btn btn-accent btn-block {{canSubmitQuiz && !grading ? '' : 'disabled'}}"
         style="margin-top: 24rpx"
         bindtap="{{canSubmitQuiz && !grading ? 'submitQuiz' : ''}}"
+        aria-role="button"
+        aria-label="{{grading ? '判分中' : '提交评分'}}"
       >
         {{grading ? "判分中…" : "提交评分"}}
       </button>
+      <!-- 判分是 10-60s 的真实计费调用：给出页面内停止入口 -->
+      <view wx:if="{{grading}}" class="row" style="margin-top: 14rpx; justify-content: center">
+        <text class="link" bindtap="stopGrade" aria-role="button" aria-label="停止判分">停止判分</text>
+      </view>
       <view class="tiny" style="margin-top: 14rpx; text-align: center">全部答对才算过；判分以今天的讲义为参照</view>
     </block>
 
@@ -186,7 +235,7 @@
           <view class="hero-sub">用自己的话讲清，别背书。答错的题不会羞辱你，会安排回炉。</view>
           <view class="hero-cta">
             <text class="on-ink-dim" style="font-size: 24rpx">验收不计时</text>
-            <view class="hero-btn" bindtap="startQuiz">
+            <view class="hero-btn" bindtap="startQuiz" aria-role="button" aria-label="开始验收">
               开始验收
               <view class="hero-btn-chev"></view>
             </view>
@@ -229,5 +278,5 @@
     bindconfirm="sendQa"
     disabled="{{qaBusy}}"
   />
-  <view class="composer-send {{qaInput && !qaBusy ? '' : 'disabled'}}" bindtap="{{qaInput && !qaBusy ? 'sendQa' : ''}}">↑</view>
+  <view class="composer-send {{qaInput && !qaBusy ? '' : 'disabled'}}" bindtap="{{qaInput && !qaBusy ? 'sendQa' : ''}}" aria-role="button" aria-label="发送">↑</view>
 </view>

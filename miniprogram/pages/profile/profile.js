@@ -2,6 +2,7 @@ var api = require("../../utils/api.js");
 var store = require("../../utils/store.js");
 var config = require("../../config.js");
 var util = require("../../utils/util.js");
+var sessionGuard = require("../../utils/session.js");
 
 var BASE_META = {
   prod: { label: "官方部署", desc: "Vercel，开发者工具里走代理可达" },
@@ -12,6 +13,8 @@ var BASE_META = {
 Page({
   data: {
     user: null,
+    /* 会话恢复中：头部不能先显示「未登录」、计数也不该先报 0 */
+    booting: true,
     sync: "",
     syncTone: "idle",
     counts: { goals: 0, notes: 0, books: 0, sessions: 0 },
@@ -22,10 +25,6 @@ Page({
 
   onShow: function () {
     var that = this;
-    if (!store.state.userId && !api.hasSession()) {
-      wx.reLaunch({ url: "/pages/login/login" });
-      return;
-    }
     that._offSync = store.onSyncStatus(function (s) {
       that.setData({
         sync:
@@ -35,11 +34,18 @@ Page({
               ? "已同步"
               : s === "error"
                 ? "同步失败，稍后自动重试"
-                : "",
-        syncTone: s === "saved" ? "ok" : s === "error" ? "bad" : s === "saving" ? "accent" : "idle"
+                : s === "conflict"
+                  ? "数据分叉，请在上方选择恢复或推送"
+                  : "",
+        syncTone: s === "saved" ? "ok" : s === "error" || s === "conflict" ? "bad" : s === "saving" ? "accent" : "idle"
       });
     });
-    that.render();
+    /* 旧守卫只判「有没有 cookie」：冷启动时 userId 未恢复就 render，头部显示
+     * 「未登录」、计数全 0；store 又不会自己 loadLocal。统一走 session.ensure，
+     * 会话恢复后再渲染。 */
+    sessionGuard.ensure(function () {
+      that.render();
+    });
   },
 
   onHide: function () {
@@ -68,6 +74,7 @@ Page({
       return { id: id, label: meta.label, desc: meta.desc };
     });
     this.setData({
+      booting: false,
       user: getApp().globalData.user,
       counts: {
         goals: st.goals.length,
@@ -85,16 +92,21 @@ Page({
     if (that.data.busy) return;
     that.setData({ busy: true });
     store
-      .pullIfSafe(true)
+      /* 这一项的字面语义就是「以云端快照为准，覆盖本机」：用户显式点了它，
+       * 分叉时（云端有他端更新 + 本机有未推送改动）必须真的采用云端，
+       * 不能被脏标记守卫挡回来。 */
+      .pullIfSafe(true, { restore: true })
       .then(function (r) {
         util.toast(
           r === "pulled"
             ? "已采用云端数据"
             : r === "pushed"
               ? "本机数据已推上云"
-              : r === "error"
-                ? "同步失败，请检查网络后重试"
-                : "云端与本机已一致"
+              : r === "conflict"
+                ? "云端已有他端更新，本机还有未推送改动：请确认后再选「从云端恢复」或「推送到云端」"
+                : r === "error"
+                  ? "同步失败，请检查网络后重试"
+                  : "云端与本机已一致"
         );
         that.render();
       })

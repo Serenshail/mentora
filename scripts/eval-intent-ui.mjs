@@ -5,10 +5,17 @@
  *   handoff → 出现 create_goal/add_book/create_session 工具卡（或强文本信号）+ 自动批准
  *   resume  → 出现 resume_workflow 工具卡（或恢复文本信号）且不重建
  * 30 案例一次跑完（新鲜账号约 50 次上游调用 < 60 配额），跑完自删。
+ *
+ * EVAL-01 v2（2026-11-10）：判据改由 eval-scoring-v2.mjs 提供——
+ *   direct 取消统一字数下限（旧 CJKOK >60 把正确短翻译判负）；
+ *   handoff 读取真实对象（目标/书/会话是否真创建、background 是否保存），
+ *   不只看工具标签；每条保存检查项明细与脚本哈希。
+ *   旧口径结果保留在旧归档，本脚本输出新文件名（-v2）。
  * ============================================================ */
 import fs from "node:fs";
 import { execSync } from "node:child_process";
 import { chromium } from "playwright-core";
+import { score, SCORING_VERSION } from "./eval-scoring-v2.mjs";
 
 const BASE = process.env.BASE || "http://localhost:3000";
 const EXE = "C:/Users/haozhe/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe";
@@ -66,6 +73,17 @@ const newChat = async () => {
 
 const runCase = async (c) => {
   await newChat();
+  /* 案例前基线：记录对象数量，判定时用增量证明「本案例」真的创建了对象，
+   *  避免把上一案例残留的对象误当成本案例的成果（v2 首版弱点）。 */
+  const baseline = await page.evaluate(() => {
+    try {
+      const st = window.__mentoraStore?.getState?.();
+      if (!st) return null;
+      return { goals: (st.goals ?? []).length, books: (st.books ?? []).length, sessions: (st.sessions ?? []).length };
+    } catch {
+      return null;
+    }
+  });
   await page.getByPlaceholder(/提问、搜索/).fill(c.question);
   await page.getByRole("button", { name: "发送" }).click();
   /* 停止按钮 visible→hidden = 一轮完成；期间持续批准审批卡（交接类必须批准才走完） */
@@ -91,22 +109,46 @@ const runCase = async (c) => {
   const rej = page.getByRole("button", { name: "拒绝" }).first();
   if (await rej.isVisible().catch(() => false)) await rej.click().catch(() => {});
   await page.waitForTimeout(2500);
-  return page.evaluate(() => {
+  const observed = await page.evaluate(() => {
     const toolRows = [...document.querySelectorAll("div")]
       .filter((d) => TOOL_LABELS_TEST(d) && d.className.includes("border"))
       .map((d) => d.querySelector("span.font-medium")?.textContent || "");
     const mds = [...document.querySelectorAll(".prose-mentora")];
     const body = document.body.innerText;
+    /* EVAL-01 v2：读真实业务对象（dev 钩子），不只看工具标签与文案 */
+    let created;
+    try {
+      const st = window.__mentoraStore?.getState?.();
+      if (st) {
+        const goals = st.goals ?? [];
+        const books = st.books ?? [];
+        const sessions = st.sessions ?? [];
+        /* 最近创建的目标背景（用于验证 AQ-02 背景是否真的保存） */
+        const latestGoal = goals[0];
+        created = {
+          goals: goals.length,
+          books: books.length,
+          sessions: sessions.length,
+          background: latestGoal ? (latestGoal.background ?? "") : null,
+          latestGoalTopic: latestGoal ? latestGoal.topic : null,
+        };
+      }
+    } catch {
+      created = undefined;
+    }
     return {
       text: mds[mds.length - 1]?.innerText || "",
       toolRows: [...new Set(toolRows)],
       tool429: body.includes("已达上限"),
+      created,
     };
     function TOOL_LABELS_TEST(d) {
       const label = d.querySelector("span.font-medium")?.textContent || "";
       return /检索笔记|查看我的状态|读笔记全文|列出学习目标|看目标详情|看书架|列出会话|查看设置|出题检验|联网搜索|读网页正文|存为新笔记|修改笔记|删除笔记|新建学习目标|加书上架|新建会话|修改设置|恢复工作流|长期记忆|定时提醒/.test(label);
     }
   });
+  /* 把本案例前基线并入返回，判定用增量 */
+  return { ...observed, baseline };
 };
 
 const results = [];
@@ -122,58 +164,114 @@ for (const c of cases) {
     err = e.message.slice(0, 80);
   }
   const tools = out?.toolRows ?? [];
-  const hasHandoffTool = tools.some((t) => HANDOFF_TOOLS.has(t));
-  const hasResumeTool = tools.includes(RESUME_TOOL);
   const text = out?.text ?? "";
-  let routeOk;
-  if (c.route === "direct") {
-    routeOk = !hasHandoffTool && !hasResumeTool && CJKOK(text);
-  } else if (c.route === "handoff") {
-    routeOk = hasHandoffTool || /帮你.{0,16}(建|创建|立|拆|安排|加入)|学习页|引导对话|加入书架|圆桌/.test(text);
-  } else {
-    routeOk = hasResumeTool || (/进度|继续|恢复|已有|之前|接着|上次|还在/.test(text) && !/重新立|新建一个.{0,8}目标/.test(text));
-  }
   const quota = out?.tool429;
-  results.push({ id: c.id, route: c.route, ok: routeOk && !quota, err, tools, quota, text: text.slice(0, 600) });
-  console.log(quota ? "QUOTA" : routeOk ? "PASS" : "FAIL", err, `tools=[${tools.join(",")}]`);
-}
-function CJKOK(t) {
-  return /[\u4e00-\u9fff]/.test(t) && t.length > 60;
+  /* 上游瞬时故障：这一轮既没有回答正文、也没有任何工具卡、也没配额提示
+   * （dev 日志可见 "fetch failed…已重试 3 次"）。不属于产品行为失败，单独归类，
+   *  不计入真实失败分母。 */
+  const upstreamFailed = !quota && !err && !out?.text && (out?.toolRows?.length ?? 0) === 0;
+  /* EVAL-01 v2：判据来自 eval-scoring-v2，并读取真实对象状态。
+   * 用「本案例前基线 → 本案例后」的增量证明对象是本案例创建的，
+   *  避免把上一案例残留对象误判为本案例成果。 */
+  const absCreated = out?.created ?? undefined;
+  const base = out?.baseline ?? undefined;
+  const created = absCreated
+    ? {
+        goals: base ? Math.max(0, (absCreated.goals ?? 0) - (base.goals ?? 0)) : absCreated.goals,
+        books: base ? Math.max(0, (absCreated.books ?? 0) - (base.books ?? 0)) : absCreated.books,
+        sessions: base ? Math.max(0, (absCreated.sessions ?? 0) - (base.sessions ?? 0)) : absCreated.sessions,
+        background: absCreated.background,
+        latestGoalTopic: absCreated.latestGoalTopic,
+        absolute: { goals: absCreated.goals, books: absCreated.books, sessions: absCreated.sessions },
+      }
+    : undefined;
+  const scored = score(c.route, {
+    text,
+    handoffTools: tools.filter((t) => HANDOFF_TOOLS.has(t)),
+    resumeTools: tools.filter((t) => t === RESUME_TOOL),
+    created,
+  });
+  const routeOk = scored.pass;
+  /* 上游故障的样本：ok 记 null（既非通过也非产品失败），单列 */
+  const ok = upstreamFailed ? null : routeOk && !quota;
+  results.push({
+    id: c.id, route: c.route, ok, err, tools, quota, upstreamFailed,
+    /* 复核要求：归档必须能独立复核判据。存全文 + 长度 + 哈希，
+     *  避免「只存 600 字导致无法判断是否真被截断」的问题（复核报告 §4）。 */
+    textFull: text,
+    textLen: text.length,
+    textHash: (() => {
+      let h = 0;
+      for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0;
+      return `h${(h >>> 0).toString(16)}`;
+    })(),
+    textPreview: text.slice(0, 600),
+    scoring: { version: scored.version, pass: scored.pass, checks: scored.checks },
+    created: created ?? null,
+  });
+  console.log(
+    quota ? "QUOTA" : upstreamFailed ? "UPSTREAM" : routeOk ? "PASS" : "FAIL",
+    err,
+    `tools=[${tools.join(",")}]`
+  );
+  if (!routeOk && !quota && !upstreamFailed) {
+    const failedChecks = Object.entries(scored.checks || {}).filter(([, v]) => v === false).map(([k]) => k);
+    if (failedChecks.length) console.log(`        未过检查项: ${failedChecks.join(", ")}`);
+  }
 }
 
-const pass = results.filter((r) => r.ok).length;
+const pass = results.filter((r) => r.ok === true).length;
+const upstreamCount = results.filter((r) => r.upstreamFailed).length;
 const sha = (() => {
   try { return execSync("git rev-parse --short HEAD").toString().trim(); } catch { return "unknown"; }
 })();
+/* EVAL-01 v2：脚本与判据哈希，便于复核运行时版本 */
+const scriptHash = (() => {
+  try {
+    const c = execSync("git hash-object scripts/eval-intent-ui.mjs scripts/eval-scoring-v2.mjs").toString().trim();
+    return c.split("\n").map((x) => x.slice(0, 12));
+  } catch { return []; }
+})();
 const outDir = "docs/evidence";
 fs.mkdirSync(outDir, { recursive: true });
-const outFile = `${outDir}/eval-intent-ui-${new Date().toISOString().slice(0, 10)}-${sha}.json`;
-let archive = {
+/* v2 独立文件：不与旧口径结果合并、不覆盖历史（复核报告 §4 要求保留首轮原始归档） */
+const outFile = `${outDir}/eval-intent-ui-${new Date().toISOString().slice(0, 10)}-${sha}-${SCORING_VERSION}.json`;
+const archive = {
   promptVersion: sha,
-  task: "agent-intent-ui", scenario: fixtures.scenario, base: BASE,
-  date: new Date().toISOString(), summary: { total: results.length, pass, fail: results.length - pass },
-  results,
-};
-if (fs.existsSync(outFile)) {
-  const prev = JSON.parse(fs.readFileSync(outFile, "utf8"));
-  const byId = new Map(prev.results.map((r) => [r.id, r]));
-  for (const r of results) byId.set(r.id, r);
-  const merged = [...byId.values()];
-  archive = { ...archive, results: merged, summary: { total: merged.length, pass: merged.filter((r) => r.ok).length, fail: merged.filter((r) => !r.ok).length }, mergedRuns: [...new Set([...(prev.mergedRuns ?? [prev.date]), archive.date])] };
-}
-fs.writeFileSync(outFile, JSON.stringify({
-  promptVersion: sha,
+  scoringVersion: SCORING_VERSION,
+  scriptHashes: scriptHash,
   task: "agent-intent-ui",
   scenario: fixtures.scenario,
   base: BASE,
+  runId: `run-${Date.now().toString(36)}`,
   date: new Date().toISOString(),
-  summary: { total: results.length, pass, fail: results.length - pass },
+  summary: {
+    total: results.length,
+    pass,
+    fail: results.filter((r) => r.ok === false && !r.quota).length,
+    quota: results.filter((r) => r.quota).length,
+    upstreamError: upstreamCount,
+    /* 产品口径成功率：分母排除配额中断与上游故障 */
+    productPassRate: (() => {
+      const denom = results.length - results.filter((r) => r.quota || r.upstreamFailed).length;
+      return denom > 0 ? Number((pass / denom).toFixed(3)) : null;
+    })(),
+  },
   results,
-}, null, 1));
+};
+fs.writeFileSync(outFile, JSON.stringify(archive, null, 2));
 console.log(`\n归档：${outFile}`);
-console.log(`结果：${pass}/${results.length} PASS`);
-const failing = results.filter((r) => !r.ok).map((r) => r.id);
+console.log(`口径版本：${SCORING_VERSION}`);
+console.log(
+  `结果：${pass}/${results.length} PASS（配额中断 ${archive.summary.quota}，上游故障 ${upstreamCount}，真实失败 ${archive.summary.fail}）`
+);
+console.log(`产品口径成功率：${archive.summary.productPassRate === null ? "n/a" : `${(archive.summary.productPassRate * 100).toFixed(1)}%`}（分母排除配额与上游故障）`);
+const failing = results.filter((r) => r.ok === false && !r.quota).map((r) => r.id);
 if (failing.length) console.log(`未过：${failing.join(" ")}`);
+const quotaIds = results.filter((r) => r.quota).map((r) => r.id);
+if (quotaIds.length) console.log(`配额中断（非失败）：${quotaIds.join(" ")}`);
+const upIds = results.filter((r) => r.upstreamFailed).map((r) => r.id);
+if (upIds.length) console.log(`上游故障（非产品失败）：${upIds.join(" ")}`);
 
 await fetch(`${BASE}/api/auth/account`, {
   method: "DELETE",

@@ -1,0 +1,81 @@
+/* 引导页：全屏对话 + 目标卡。布局与 book 页同构（flex column + 内滚对话区）。 */
+.coach-page {
+  height: calc(100vh - var(--nav-h, 64px));
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 0 32rpx;
+}
+
+/* 目标卡：唯一的"形"，确认前它是页面的主角 */
+.goal-card {
+  margin-top: 24rpx;
+  padding: 28rpx 28rpx 24rpx;
+  border: 1rpx solid var(--border);
+}
+.goal-card-topic {
+  margin-top: 14rpx;
+  font-size: 36rpx;
+  font-weight: 700;
+  letter-spacing: -0.3rpx;
+  color: var(--ink);
+}
+.goal-card-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 18rpx;
+}
+.goal-card-sec { margin-top: 22rpx; }
+.goal-card-li {
+  margin-top: 8rpx;
+  font-size: 26rpx;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+/* 总纲要生成态：诚实告知时长，与消息流同级展示 */
+.planning {
+  flex-shrink: 0;
+  margin: 0 32rpx 12rpx;
+  padding: 18rpx 24rpx;
+}
+
+/* 输入条：与 book 页 composer 同款布局（全局 .composer 只管外观，定位各页自理） */
+.composer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 16rpx 24rpx calc(16rpx + env(safe-area-inset-bottom));
+  border-top: 1rpx solid var(--border);
+  background: var(--bg);
+}
+.composer-field {
+  flex: 1;
+  min-width: 0;
+  height: 76rpx;
+  padding: 0 26rpx;
+  border-radius: 38rpx;
+  background: var(--surface-2);
+  font-size: 28rpx;
+  color: var(--ink);
+}
+.composer-send {
+  width: 76rpx;
+  height: 76rpx;
+  border-radius: 50%;
+  background: var(--ink);
+  color: #fff;
+  font-size: 34rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.composer-send.disabled { opacity: 0.24; }
